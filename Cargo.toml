@@ -1,0 +1,12 @@
+[package]
+name = "drmod-rs"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hudhook = "0.9.0"
+imgui = "0.12.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+name = "drmod_rs_lib"
