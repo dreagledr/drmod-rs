@@ -3,7 +3,7 @@ use std::env;
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 use windows::core::*;
 
-const DEFAULT_TITLE: &str = "METAL GEAR RISING: REVENGEANCE";
+const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
 
 fn main() {
     let title = match parse_name_args(env::args()) {
@@ -25,7 +25,18 @@ fn main() {
         }
     };
 
-    if let Err(e) = process.inject("drmod_rs_lib.dll".into()) {
+    let exe_path = env::current_exe().expect("Failed to get current exe path");
+    let exe_dir = exe_path.parent().expect("Failed to get parent directory");
+    let dll_path = exe_dir.join("drmod_rs_lib.dll");
+    if !dll_path.exists() {
+        show_msgbox(&format!(
+            "Не смогли найти библиотеку с модом в {:?}",
+            dll_path
+        ));
+        return;
+    }
+
+    if let Err(e) = process.inject(dll_path) {
         show_msgbox(&format!("Не смогли внедрить мод в MGR.\n{}", e));
     }
 }
