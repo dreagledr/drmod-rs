@@ -6,6 +6,10 @@ edition = "2024"
 [dependencies]
 hudhook = "0.9.0"
 imgui = "0.12.0"
+windows = {
+    version = "0.62.2",
+    features = ["Win32_UI_WindowsAndMessaging"]
+}
 
 [lib]
 crate-type = ["cdylib", "rlib"]

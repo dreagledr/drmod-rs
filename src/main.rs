@@ -1,8 +1,62 @@
 use hudhook::inject::Process;
+use std::env;
+use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
+use windows::core::*;
+
+const DEFAULT_TITLE: &str = "METAL GEAR RISING: REVENGEANCE";
 
 fn main() {
-    Process::by_title("METAL GEAR RISING: REVENGEANCE")
-        .unwrap()
-        .inject("drmod_rs_lib.dll".into())
-        .unwrap();
+    let title = match parse_name_args(env::args()) {
+        Ok(t) => t,
+        Err(e) => {
+            show_msgbox(&e);
+            return;
+        }
+    };
+
+    let process = match Process::by_name(&title) {
+        Ok(p) => p,
+        Err(e) => {
+            show_msgbox(&format!(
+                "Не смогли найти {}. Убедитесь что игра запущена.\n{}",
+                &title, e
+            ));
+            return;
+        }
+    };
+
+    if let Err(e) = process.inject("drmod_rs_lib.dll".into()) {
+        show_msgbox(&format!("Не смогли внедрить мод в MGR.\n{}", e));
+    }
+}
+
+fn parse_name_args(mut args: env::Args) -> std::result::Result<String, String> {
+    args.next();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-n" | "--name" => {
+                if let Some(val) = args.next() {
+                    return Ok(val);
+                } else {
+                    return Err("После -n должно идти название окна.".into());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    return Ok(DEFAULT_TITLE.to_string());
+}
+
+fn show_msgbox(text: &str) {
+    let msg: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        MessageBoxW(
+            None,
+            PCWSTR(msg.as_ptr()),
+            h!("Ошибка при старте drmod"),
+            MB_OK | MB_ICONERROR,
+        );
+    }
 }

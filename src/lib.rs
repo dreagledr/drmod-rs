@@ -26,3 +26,4 @@ impl ImguiRenderLoop for HelloHud {
 }
 
 hudhook::hudhook!(hudhook::hooks::dx9::ImguiDx9Hooks, HelloHud::new());
+// hudhook::hudhook!(hudhook::hooks::dx11::ImguiDx11Hooks, HelloHud::new());
