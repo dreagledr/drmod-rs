@@ -1,9 +1,8 @@
+use drmod_rs_lib::DEFAULT_TITLE;
 use hudhook::inject::Process;
 use std::env;
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 use windows::core::*;
-
-const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
 
 fn main() {
     let title = match parse_name_args(env::args()) {

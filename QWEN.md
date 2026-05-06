@@ -1,69 +1,86 @@
-# QWEN.md — drmod-rs
+# drmod-rs
 
 ## Project Overview
 
-**drmod-rs** is a Rust-based mod injector for the PC game **Metal Gear Rising: Revengeance**. It works by:
+A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**. The project consists of two components:
 
-1. Finding the game process by window title (default: `"METAL GEAR RISING: REVENGEANCE"`).
-2. Injecting a compiled DLL (`drmod_rs_lib.dll`) into the process using `hudhook`.
-3. Rendering an ImGui overlay inside the game via DirectX 9 (or DX11, commented out) hooks.
+- **Binary (`drmod`)**: Injects a DLL into the running game process
+- **Library (`drmod_rs_lib`)**: Hooks into DirectX 9 to render an ImGui overlay that reads game memory in real-time
 
-The project produces two artifacts:
-- **`drmod`** (binary) — the injector CLI that locates the game process and performs DLL injection.
-- **`drmod_rs_lib`** (cdylib) — the DLL that gets injected; contains the ImGui overlay logic.
+The overlay currently displays:
+- Player coordinates (X, Y, Z) read from memory offsets
+- Player HP
+- Static pointer address for debugging
 
-### Key dependencies
-- **hudhook** (`0.9.0`) — DirectX hooking / ImGui overlay infrastructure for games.
-- **imgui** (`0.12.0`) — Dear ImGui Rust bindings.
-- **windows** (`0.62.2`) — Windows API bindings (used in the injector for `MessageBoxW` and process interaction).
+Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and [imgui-rs](https://github.com/imgui-rs/imgui-rs) for the UI.
 
-### Edition
-The project uses **Rust edition 2024**.
+## Architecture
+
+```
+src/
+├── main.rs    # Injector binary — finds game process, injects DLL
+└── lib.rs     # HUD library — hooks DX9, renders ImGui overlay, reads game memory
+```
+
+**Key memory offsets** (from `lib.rs`):
+- Static pointer to player object: `base + 0x177B4A4`
+- Position X/Y/Z: offsets `0x50`, `0x54`, `0x58` from player object pointer
+- HP: offset `0x870` from player object pointer
 
 ## Building and Running
 
 ### Prerequisites
-- Rust toolchain (stable or nightly, depending on edition 2024 support).
-- A running instance of *Metal Gear Rising: Revengeance* (or any game with a custom window name).
 
-### Commands
+- Rust toolchain with `i686-pc-windows-msvc` target (32-bit MSVC)
+- MSVC C++ build tools
+
+### Build
+
 ```bash
-# Build both the injector binary and the library (DLL)
 cargo build --release
-
-# The DLL will be at: target/debug/drmod_rs_lib.dll (or target/release/)
-# The injector binary will be at: target/debug/drmod.exe
 ```
 
-### Usage
+The project is configured to compile for `i686-pc-windows-msvc` (32-bit), as specified in `.cargo/config.toml`. This is required because MGR:R is a 32-bit application.
+
+### Run
+
 ```bash
-# Default: inject into "METAL GEAR RISING: REVENGEANCE"
-cargo run --release --bin drmod
-
-# Custom window name
-cargo run --release --bin drmod -- -n "My Game Window"
-cargo run --release --bin drmod -- --name "My Game Window"
+cargo run --release
 ```
 
-## Project Structure
+Or with a custom window name:
 
-```
-drmod-rs/
-├── Cargo.toml          # Project manifest; defines binary + cdylib targets
-├── src/
-│   ├── lib.rs          # ImGui overlay logic (HelloHud — renders "Hello, world!" + elapsed time)
-│   └── main.rs         # Injector CLI (process lookup + DLL injection)
-└── target/             # Build output (gitignored)
+```bash
+cargo run --release -- -n "Custom Window Name.exe"
 ```
 
-## Development Notes
+### Output
 
-- **Hook selection**: DX9 hooks are active in `lib.rs`; DX11 hooks are commented out. Switch by toggling the `hudhook!(...)` macro invocation.
-- **Error messages** in the injector are displayed in Russian (e.g., `"Ошибка при старте drmod"`, `"Не смогли найти..."`).
-- The ImGui window is intentionally unnamed (`"##hello"`) to prevent user interaction — it's a debug overlay.
-- No test infrastructure is currently in place.
+- `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary
+- `target/i686-pc-windows-msvc/release/drmod_rs_lib.dll` — HUD library DLL
 
-## Conventions
+Both files must be in the same directory for the injector to find the DLL.
 
-- Single-source-file crates: `lib.rs` and `main.rs` each contain all logic for their respective targets.
-- No linting or formatting config (e.g., `rustfmt.toml`, `.clippy.toml`) is present. Default `rustfmt` / `clippy` conventions apply.
+## Development
+
+### Language & Edition
+
+- Rust 2024 edition
+- UI messages are in Russian
+
+### Dependencies
+
+| Crate | Purpose |
+|-------|---------|
+| `hudhook` (0.9.0) | DirectX hooking and injection |
+| `imgui` (0.12.0) | ImGui bindings for UI rendering |
+| `windows` (0.62.2) | Windows API (UI windows, module loading) |
+
+### Notes
+
+- **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since the static pointer address is computed once in `new()` and never mutated.
+- The static pointer address (`base + 0x177B4A4`) is calculated once at init time, not per-frame, for performance.
+- The `.CT` file in the root (`METAL GEAR RISING REVENGEANCE (1).CT`) is a Cheat Engine table, likely used to discover the memory offsets
+- Error handling uses Windows `MessageBoxW` for user-facing errors
+- The `show_msgbox` function encodes text as UTF-16 for the Windows API
+- Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against)
