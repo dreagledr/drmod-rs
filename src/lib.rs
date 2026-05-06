@@ -64,6 +64,7 @@ struct HelloHud {
     start_time: Instant,
     base_addr: usize,
     static_ptr_addr: Option<NonNull<u8>>,
+    player_manager_addr: Option<NonNull<u8>>,
 }
 
 impl HelloHud {
@@ -80,10 +81,19 @@ impl HelloHud {
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x177B4A4) })
         };
 
+        let player_manager_addr = if base_addr == 0 {
+            None
+        } else {
+            // base + 0x17EA100 содержит указатель на PlayerManagerImplement
+            let pm_ptr = unsafe { *((base_addr + 0x17EA100) as *const usize) };
+            NonNull::new(pm_ptr as *mut u8)
+        };
+
         Self {
             start_time: Instant::now(),
             base_addr,
             static_ptr_addr,
+            player_manager_addr,
         }
     }
 }
@@ -94,7 +104,7 @@ unsafe impl Sync for HelloHud {}
 impl ImguiRenderLoop for HelloHud {
     fn render(&mut self, ui: &mut Ui) {
         ui.window("##hello")
-            .size([320., 200.], Condition::Always)
+            .size([320., 600.], Condition::Always)
             .build(|| {
                 ui.text(format!("Elapsed: {:?}", self.start_time.elapsed()));
 
@@ -117,7 +127,10 @@ impl ImguiRenderLoop for HelloHud {
                         };
                         ui.text_colored(color, format!("Status: {}", status.name()));
                     } else {
-                        ui.text_colored([1.0, 0.5, 0.0, 1.0], format!("Status: Unknown ({})", raw_status));
+                        ui.text_colored(
+                            [1.0, 0.5, 0.0, 1.0],
+                            format!("Status: Unknown ({})", raw_status),
+                        );
                     }
                 }
 
@@ -125,6 +138,21 @@ impl ImguiRenderLoop for HelloHud {
                     ui.text_colored([1.0, 0.0, 0.0, 1.0], "Module not found!");
                     return;
                 };
+
+                // --- WEAPONS ---
+                if let Some(pm_addr) = self.player_manager_addr {
+                    ui.separator();
+                    ui.text("Weapons:");
+
+                    let pm_ptr = pm_addr.as_ptr();
+                    let main_weapon = unsafe { *(pm_ptr.add(0xE0) as *const i32) };
+                    let custom_weapon = unsafe { *(pm_ptr.add(0xE4) as *const i32) };
+                    let sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
+
+                    ui.text(format!("Main: {}", main_weapon));
+                    ui.text(format!("Custom: {}", custom_weapon));
+                    ui.text(format!("Sub: {}", sub_weapon));
+                }
 
                 ui.text(format!(
                     "Static Ptr Addr: 0x{:08X}",
