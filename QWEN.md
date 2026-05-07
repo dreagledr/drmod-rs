@@ -94,3 +94,21 @@ Both files must be in the same directory for the injector to find the DLL.
 - Error handling uses Windows `MessageBoxW` for user-facing errors
 - The `show_msgbox` function encodes text as UTF-16 for the Windows API
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against)
+
+### Input Handling
+
+The overlay supports keyboard input via hudhook's built-in WndProc hook — it intercepts `WM_KEYDOWN`/`WM_KEYUP` messages from the game window and feeds them to imgui-rs through `Io::add_key_event()`.
+
+**Key detection** (in `HelloHud::render()`):
+- `ui.is_key_down(Key::*)` — клавиша зажата
+- `ui.is_key_pressed_no_repeat(Key::*)` — однократное нажатие
+- `ui.is_key_pressed(Key::*)` — нажатие с автоповтором
+
+All `imgui::Key` variants (including `Key::Keypad0`–`Key::Keypad9`) are available. See `Cargo registry imgui-0.12.0/src/input/keyboard.rs` for the full enum.
+
+**Current bindings:**
+| Key | Action |
+|-----|--------|
+| `NumPad0` | Toggle `test_flag` (debug/development use only) |
+
+These are processed inside the `.build(|| { ... })` closure using `self.test_flag = !self.test_flag` on press.

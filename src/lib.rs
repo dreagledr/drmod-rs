@@ -1,4 +1,4 @@
-use hudhook::ImguiRenderLoop;
+use hudhook::{ImguiRenderLoop, RenderContext};
 use imgui::*;
 use std::ptr::NonNull;
 use std::time::Instant;
@@ -65,6 +65,7 @@ struct HelloHud {
     base_addr: usize,
     static_ptr_addr: Option<NonNull<u8>>,
     player_manager_addr: Option<NonNull<u8>>,
+    test_flag: bool,
 }
 
 impl HelloHud {
@@ -94,6 +95,7 @@ impl HelloHud {
             base_addr,
             static_ptr_addr,
             player_manager_addr,
+            test_flag: false,
         }
     }
 }
@@ -102,11 +104,44 @@ unsafe impl Send for HelloHud {}
 unsafe impl Sync for HelloHud {}
 
 impl ImguiRenderLoop for HelloHud {
+    fn initialize<'a>(
+        &'a mut self,
+        ctx: &mut Context,
+        _render_context: &'a mut dyn RenderContext,
+    ) {
+        let fonts = ctx.fonts();
+
+        // Основной шрифт: Segoe UI Variable с поддержкой кириллицы
+        fonts.add_font(&[FontSource::TtfData {
+            data: include_bytes!("C:/Windows/Fonts/SegUIVar.ttf"),
+            size_pixels: 16.0,
+            config: Some(FontConfig {
+                glyph_ranges: FontGlyphRanges::cyrillic(),
+                ..Default::default()
+            }),
+        }]);
+    }
+
     fn render(&mut self, ui: &mut Ui) {
         ui.window("##hello")
             .size([320., 600.], Condition::Always)
             .build(|| {
                 ui.text(format!("Elapsed: {:?}", self.start_time.elapsed()));
+
+                // --- ТЕСТОВЫЙ ФЛАГ (NumPad0) ---
+                if ui.is_key_pressed_no_repeat(Key::Keypad0) {
+                    self.test_flag = !self.test_flag;
+                }
+                let flag_color = if self.test_flag {
+                    [0.0, 1.0, 0.0, 1.0]
+                } else {
+                    [1.0, 0.3, 0.3, 1.0]
+                };
+                ui.text_colored(
+                    flag_color,
+                    format!("Test Flag: {}", if self.test_flag { "ON" } else { "OFF" }),
+                );
+                ui.text("NumPad0: toggle");
 
                 // --- GAME MENU STATUS ---
                 if self.base_addr != 0 {
@@ -200,6 +235,14 @@ impl ImguiRenderLoop for HelloHud {
                     let hp = unsafe { *(player_obj_ptr.add(0x870) as *const i32) };
                     ui.separator();
                     ui.text(format!("HP: {}", hp));
+                }
+
+                // --- ВЫХОД ---
+                ui.separator();
+                if ui.button("Выход / Выгрузить DLL") {
+                    // hudhook::eject() корректно снимает хуки и выгружает DLL,
+                    // не убивая окно игры
+                    hudhook::eject();
                 }
             });
     }
