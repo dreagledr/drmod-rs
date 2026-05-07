@@ -11,7 +11,7 @@ The overlay currently displays:
 - Player coordinates (X, Y, Z) read from memory offsets
 - Player HP
 - Game menu status (In Game, Pause Menu, etc.)
-- Equipped weapons: Main, Custom, Sub (numeric IDs from PlayerManagerImplement)
+- Equipped weapons: Main, Custom (numeric ID + name), Sub (numeric ID from PlayerManagerImplement)
 
 Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and [imgui-rs](https://github.com/imgui-rs/imgui-rs) for the UI.
 
@@ -90,6 +90,7 @@ Both files must be in the same directory for the injector to find the DLL.
 - All static addresses (`0x177B4A4`, `0x17E9F9C`, `0x17EA100`) are calculated once at init time, not per-frame, for performance.
 - The `mgr-plugin-sdk/` directory contains a C++ SDK with 529 reverse-engineered game headers. `game/SDK_ANALYSIS.md` has the analysis.
 - Weapon type IDs are raw `int` values — the SDK has no enum mapping weapon names to IDs. IDs must be discovered through runtime experimentation.
+- Custom weapon ID → name mapping (in `custom_weapon_name()`): `0` → `None`, `2` → `Polearm`, `3` → `Sai`, `4` → `Pincer`. Unknown IDs show as `Unknown`.
 - The `.CT` file in the root (`METAL GEAR RISING REVENGEANCE (1).CT`) is a Cheat Engine table, used to discover memory offsets.
 - Error handling uses Windows `MessageBoxW` for user-facing errors
 - The `show_msgbox` function encodes text as UTF-16 for the Windows API
@@ -110,5 +111,6 @@ All `imgui::Key` variants (including `Key::Keypad0`–`Key::Keypad9`) are availa
 | Key | Action |
 |-----|--------|
 | `NumPad0` | Toggle `test_flag` (debug/development use only) |
+| `NumPad1` | +3m к Y-координате игрока (прямая запись в память) |
 
-These are processed inside the `.build(|| { ... })` closure using `self.test_flag = !self.test_flag` on press.
+Memory writes use raw `*mut f32` pointers — since the DLL is injected, it has direct access to game memory.

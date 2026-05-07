@@ -60,6 +60,16 @@ impl GameMenuStatus {
     }
 }
 
+fn custom_weapon_name(id: i32) -> &'static str {
+    match id {
+        0 => "None",
+        2 => "Polearm",
+        3 => "Sai",
+        4 => "Pincer",
+        _ => "Unknown",
+    }
+}
+
 struct HelloHud {
     start_time: Instant,
     base_addr: usize,
@@ -104,11 +114,7 @@ unsafe impl Send for HelloHud {}
 unsafe impl Sync for HelloHud {}
 
 impl ImguiRenderLoop for HelloHud {
-    fn initialize<'a>(
-        &'a mut self,
-        ctx: &mut Context,
-        _render_context: &'a mut dyn RenderContext,
-    ) {
+    fn initialize<'a>(&'a mut self, ctx: &mut Context, _render_context: &'a mut dyn RenderContext) {
         let fonts = ctx.fonts();
 
         // Основной шрифт: Segoe UI Variable с поддержкой кириллицы
@@ -185,7 +191,7 @@ impl ImguiRenderLoop for HelloHud {
                     let sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
 
                     ui.text(format!("Main: {}", main_weapon));
-                    ui.text(format!("Custom: {}", custom_weapon));
+                    ui.text(format!("Custom: {} ({})", custom_weapon, custom_weapon_name(custom_weapon)));
                     ui.text(format!("Sub: {}", sub_weapon));
                 }
 
@@ -219,6 +225,14 @@ impl ImguiRenderLoop for HelloHud {
                 } else {
                     ui.text_colored([0.0, 1.0, 0.0, 1.0], "Player found!");
 
+                    // NumPad1: +3m к высоте
+                    if ui.is_key_pressed_no_repeat(Key::Keypad1) {
+                        unsafe {
+                            let y_ptr: *mut f32 = player_obj_ptr.add(0x54) as *mut f32;
+                            *y_ptr += 10.0;
+                        }
+                    }
+
                     // 2. Читаем координаты из объекта игрока
                     // X: offset 0x50, Y: 0x54, Z: 0x58
                     let pos_x = unsafe { *(player_obj_ptr.add(0x50) as *const f32) };
@@ -235,6 +249,7 @@ impl ImguiRenderLoop for HelloHud {
                     let hp = unsafe { *(player_obj_ptr.add(0x870) as *const i32) };
                     ui.separator();
                     ui.text(format!("HP: {}", hp));
+                    ui.text("NumPad1: +10m Y");
                 }
 
                 // --- ВЫХОД ---
