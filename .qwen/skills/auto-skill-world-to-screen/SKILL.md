@@ -193,6 +193,67 @@ ui.text(format!("VP[4..8]: {:.3} {:.3} {:.3} {:.3}",
 
 Expected: matrix values are non-zero and change when moving the camera. If all zero, the camera pointer or offset is wrong.
 
+## Reusable drawing function
+
+When you need to render multiple world positions (saved marker, ghost trace, checkpoints), extract the projection + drawing into a single function to avoid code duplication:
+
+```rust
+fn draw_world_pos(
+    ui: &Ui,
+    world_pos: (f32, f32, f32),
+    camera_ptr: *const u8,
+    on_screen_color: u32,
+    off_screen_color: u32,
+    off_screen_text_color: u32,
+    label: &str,
+) {
+    let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
+    let cam_x = unsafe { *(camera_ptr.add(0x1B0) as *const f32) };
+    let cam_y = unsafe { *(camera_ptr.add(0x1B4) as *const f32) };
+    let cam_z = unsafe { *(camera_ptr.add(0x1B8) as *const f32) };
+
+    let [sw, sh] = ui.io().display_size;
+    const EDGE_MARGIN: f32 = 24.0;
+
+    if let Some(([scr_x, scr_y], dist)) =
+        world_to_screen(world_pos, &view_proj, [sw, sh], (cam_x, cam_y, cam_z))
+    {
+        let on_screen = scr_x >= 0.0 && scr_x <= sw && scr_y >= 0.0 && scr_y <= sh;
+        let (draw_x, draw_y) = if on_screen {
+            (scr_x, scr_y)
+        } else {
+            (scr_x.clamp(EDGE_MARGIN, sw - EDGE_MARGIN),
+             scr_y.clamp(EDGE_MARGIN, sh - EDGE_MARGIN))
+        };
+
+        let draw_list = ui.get_foreground_draw_list();
+        if on_screen {
+            draw_list.add_circle([draw_x, draw_y], 8.0, on_screen_color).thickness(2.0).build();
+            draw_list.add_text([draw_x + 12., draw_y - 8.], 0xFF_FF_FF_FF,
+                format!("{} ({:.1}m)", label, dist));
+        } else {
+            draw_list.add_circle([draw_x, draw_y], 8.0, off_screen_color).thickness(2.5).build();
+            draw_list.add_text([draw_x + 12., draw_y - 8.], off_screen_text_color,
+                format!("\u{25c6} {} ({:.1}m)", label, dist));
+        }
+    }
+}
+```
+
+Call it once per marker:
+
+```rust
+// Saved position (green)
+draw_world_pos(ui, (sx, sy, sz), camera_addr.as_ptr(),
+    0xFF_00_FF_00, 0xFF_00_80_FF, 0xFF_40_B0_FF, "Saved");
+
+// Ghost trace (red)
+draw_world_pos(ui, (gx, gy, gz), camera_addr.as_ptr(),
+    0xFF_00_00_FF, 0xFF_00_40_C0, 0xFF_40_20_C0, &ghost_label);
+```
+
+The `camera_ptr` parameter is the raw `*const u8` of the camera object (not a pointer-to-pointer). Colors are ABGR (`0xAA_BB_GG_RR`).
+
 ## Common pitfalls
 
 | Symptom | Likely cause |

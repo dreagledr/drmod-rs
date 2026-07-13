@@ -50,29 +50,29 @@ Alternative: use `%APPDATA%` (roaming) if the data should follow the user across
 Extract database init into a standalone function called once from the struct constructor. This keeps the constructor clean and isolates all fallible I/O:
 
 ```rust
-fn init_db() -> (String, Option<String>) {
+fn init_db() -> (String, Option<String>, Option<Connection>) {
     let now = Local::now();
     let current = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
     let localappdata = match std::env::var("LOCALAPPDATA") {
         Ok(v) => v,
-        Err(_) => return (current, None), // graceful: no env var
+        Err(_) => return (current, None, None), // graceful: no env var
     };
 
     let db_dir = format!("{}\\drmod", localappdata);
     let db_path = format!("{}\\runs.db", db_dir);
 
     if std::fs::create_dir_all(&db_dir).is_err() {
-        return (current, None); // graceful: can't create dir
+        return (current, None, None); // graceful: can't create dir
     }
 
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
-        Err(_) => return (current, None), // graceful: can't open DB
+        Err(_) => return (current, None, None), // graceful: can't open DB
     };
 
     if conn.execute("CREATE TABLE IF NOT EXISTS runs (...)", ()).is_err() {
-        return (current, None); // graceful: can't create table
+        return (current, None, Some(conn)); // return conn so caller can still use it
     }
 
     let prev = conn
@@ -83,38 +83,46 @@ fn init_db() -> (String, Option<String>) {
 
     let _ = conn.execute("INSERT INTO runs (started_at) VALUES (?1)", [&current]);
 
-    (current, prev)
+    (current, prev, Some(conn))
 }
 ```
 
-**Key pattern — return early with defaults on every fallible step.** The function never panics; every error returns `(current_time, None)`. This means:
+**Key pattern — return early with defaults on every fallible step.** The function never panics; every error returns `(current_time, None, None)`. This means:
 - If `LOCALAPPDATA` is unset → overlay still works, just shows `N/A` for previous
 - If disk is full → overlay still works
 - If DB is corrupted → overlay still works (next run will create a fresh DB)
 
-The `Connection` is NOT stored — it's opened, used, and dropped. This is fine for write-once-read-once patterns. If you need per-frame writes, store `Option<Connection>` as a struct field instead.
+**Return the `Connection` so the caller can store it.** For write-once-read-once patterns (e.g. recording run start), you can drop it. For per-frame queries/inserts (segment tracking, stats), store `Option<Connection>` as a struct field:
 
 ### 4. Wire into the struct constructor
 
 ```rust
 struct HelloHud {
-    start_time: Instant,
     current_run_start: String,
     prev_run_start: Option<String>,
+    db_conn: Option<Connection>,   // persist for per-frame queries
     // ... existing fields
 }
 
 impl HelloHud {
     fn new() -> Self {
-        let (current_run_start, prev_run_start) = init_db();
+        let (current_run_start, prev_run_start, db_conn) = init_db();
         // ... existing init code
         Self {
-            start_time: Instant::now(),
             current_run_start,
             prev_run_start,
+            db_conn,
             // ... existing fields
         }
     }
+}
+```
+
+For per-frame queries, reference `self.db_conn.as_ref()`:
+
+```rust
+if let Some(ref conn) = self.db_conn {
+    let result = conn.query_row("SELECT ...", [], |row| row.get(0)).ok();
 }
 ```
 

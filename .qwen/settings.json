@@ -3,5 +3,6 @@
     "allow": [
       "Bash(cargo build *)"
     ]
-  }
+  },
+  "$version": 4
 }
