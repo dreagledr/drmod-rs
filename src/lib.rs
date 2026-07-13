@@ -1,5 +1,7 @@
+use chrono::Local;
 use hudhook::{ImguiRenderLoop, RenderContext};
 use imgui::*;
+use rusqlite::Connection;
 use std::ptr::NonNull;
 use std::time::Instant;
 
@@ -70,16 +72,103 @@ fn custom_weapon_name(id: i32) -> &'static str {
     }
 }
 
+/// Проецирует мировую позицию на экран через view-projection матрицу (D3DXMATRIX, row-major).
+/// Возвращает `(screen_pos, distance_to_camera)` или `None` если точка за камерой.
+fn world_to_screen(
+    world_pos: (f32, f32, f32),
+    view_proj: &[f32; 16],
+    screen_size: [f32; 2],
+    camera_pos: (f32, f32, f32),
+) -> Option<([f32; 2], f32)> {
+    let (wx, wy, wz) = world_pos;
+    let (cx, cy, cz) = camera_pos;
+
+    // Умножение row-vector (x,y,z,1) на матрицу 4x4 (row-major layout)
+    let clip_x = wx * view_proj[0] + wy * view_proj[4] + wz * view_proj[8] + view_proj[12];
+    let clip_y = wx * view_proj[1] + wy * view_proj[5] + wz * view_proj[9] + view_proj[13];
+    let clip_w = wx * view_proj[3] + wy * view_proj[7] + wz * view_proj[11] + view_proj[15];
+
+    if clip_w <= 0.0 {
+        return None;
+    }
+
+    let inv_w = 1.0 / clip_w;
+    let ndc_x = clip_x * inv_w;
+    let ndc_y = clip_y * inv_w;
+
+    let screen_x = (ndc_x * 0.5 + 0.5) * screen_size[0];
+    let screen_y = (1.0 - (ndc_y * 0.5 + 0.5)) * screen_size[1];
+
+    let dx = wx - cx;
+    let dy = wy - cy;
+    let dz = wz - cz;
+    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
+
+    Some(([screen_x, screen_y], dist))
+}
+
+fn init_db() -> (String, Option<String>) {
+    let now = Local::now();
+    let current = now.format("%Y-%m-%d %H:%M:%S").to_string();
+
+    let localappdata = match std::env::var("LOCALAPPDATA") {
+        Ok(v) => v,
+        Err(_) => return (current, None),
+    };
+
+    let db_dir = format!("{}\\drmod", localappdata);
+    let db_path = format!("{}\\runs.db", db_dir);
+
+    if std::fs::create_dir_all(&db_dir).is_err() {
+        return (current, None);
+    }
+
+    let conn = match Connection::open(&db_path) {
+        Ok(c) => c,
+        Err(_) => return (current, None),
+    };
+
+    if conn
+        .execute(
+            "CREATE TABLE IF NOT EXISTS runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                started_at TEXT NOT NULL
+            )",
+            (),
+        )
+        .is_err()
+    {
+        return (current, None);
+    }
+
+    let prev = conn
+        .query_row(
+            "SELECT started_at FROM runs ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )
+        .ok();
+
+    let _ = conn.execute("INSERT INTO runs (started_at) VALUES (?1)", [&current]);
+
+    (current, prev)
+}
+
 struct HelloHud {
     start_time: Instant,
+    current_run_start: String,
+    prev_run_start: Option<String>,
     base_addr: usize,
     static_ptr_addr: Option<NonNull<u8>>,
     player_manager_addr: Option<NonNull<u8>>,
+    camera_ptr_addr: Option<NonNull<u8>>,
     saved_position: Option<(f32, f32, f32)>,
 }
 
 impl HelloHud {
     fn new() -> Self {
+        let (current_run_start, prev_run_start) = init_db();
+
         let base_addr = unsafe {
             windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::PCSTR::null())
         }
@@ -100,11 +189,21 @@ impl HelloHud {
             NonNull::new(pm_ptr as *mut u8)
         };
 
+        let camera_ptr_addr = if base_addr == 0 {
+            None
+        } else {
+            // base + 0x17EA1D0 — статический адрес cCameraGame::Instance (SDK)
+            NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA1D0) })
+        };
+
         Self {
             start_time: Instant::now(),
+            current_run_start,
+            prev_run_start,
             base_addr,
             static_ptr_addr,
             player_manager_addr,
+            camera_ptr_addr,
             saved_position: None,
         }
     }
@@ -133,6 +232,32 @@ impl ImguiRenderLoop for HelloHud {
             .size([320., 600.], Condition::Always)
             .build(|| {
                 ui.text(format!("Elapsed: {:?}", self.start_time.elapsed()));
+                ui.text(format!("Current run:  {}", self.current_run_start));
+                if let Some(ref prev) = self.prev_run_start {
+                    ui.text(format!("Previous run: {}", prev));
+                } else {
+                    ui.text_colored([0.5, 0.5, 0.5, 1.0], "Previous run: N/A");
+                }
+
+                // --- MISSION ---
+                if self.base_addr != 0 {
+                    let mission_id_addr = self.base_addr + 0x1764670;
+                    let mission_id = unsafe { *(mission_id_addr as *const i32) };
+                    let (name_addr, eff_id) = if mission_id != 0 {
+                        (self.base_addr + 0x1764674, mission_id)
+                    } else {
+                        (
+                            self.base_addr + 0x1766008,
+                            unsafe { *((self.base_addr + 0x1766004) as *const i32) },
+                        )
+                    };
+                    let mission_name = unsafe {
+                        std::ffi::CStr::from_ptr(name_addr as *const i8)
+                    }
+                    .to_string_lossy()
+                    .into_owned();
+                    ui.text(format!("Mission: {} (0x{:04X})", mission_name, eff_id));
+                }
 
                 // --- GAME MENU STATUS ---
                 if self.base_addr != 0 {
@@ -280,6 +405,78 @@ impl ImguiRenderLoop for HelloHud {
                         ui.text(format!("X: {:.3}", sx));
                         ui.text(format!("Y: {:.3}", sy));
                         ui.text(format!("Z: {:.3}", sz));
+
+                        // --- ДЕБАГ: проекция на экран ---
+                        ui.separator();
+                        ui.text("Screen projection debug:");
+                        match self.camera_ptr_addr {
+                            None => {
+                                ui.text_colored([1.0, 0.5, 0.0, 1.0], "camera_ptr_addr is None");
+                            }
+                            Some(cam_addr) => {
+                                // cam_addr.as_ptr() УЖЕ указывает на объект cCameraGame
+                                // (SDK: *(cCameraGame*)(base + 0x17EA1D0))
+                                let cam_ptr = cam_addr.as_ptr();
+
+                                let view_proj =
+                                    unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
+                                let cam_x = unsafe { *(cam_ptr.add(0x1B0) as *const f32) };
+                                let cam_y = unsafe { *(cam_ptr.add(0x1B4) as *const f32) };
+                                let cam_z = unsafe { *(cam_ptr.add(0x1B8) as *const f32) };
+                                let screen_size = ui.io().display_size;
+
+                                ui.text(format!("Camera ptr: 0x{:08X}", cam_ptr as usize));
+                                ui.text(format!(
+                                    "Cam pos: {:.1} {:.1} {:.1}", cam_x, cam_y, cam_z
+                                ));
+                                ui.text(format!(
+                                    "Screen: {:.0}x{:.0}", screen_size[0], screen_size[1]
+                                ));
+                                ui.text(format!(
+                                    "VP[0..4]: {:.3} {:.3} {:.3} {:.3}",
+                                    view_proj[0], view_proj[1], view_proj[2], view_proj[3]
+                                ));
+                                ui.text(format!(
+                                    "VP[4..8]: {:.3} {:.3} {:.3} {:.3}",
+                                    view_proj[4], view_proj[5], view_proj[6], view_proj[7]
+                                ));
+
+                                match world_to_screen(
+                                    (sx, sy, sz),
+                                    &view_proj,
+                                    screen_size,
+                                    (cam_x, cam_y, cam_z),
+                                ) {
+                                    Some(([scr_x, scr_y], dist)) => {
+                                        let on_scr = scr_x >= 0.0
+                                            && scr_x <= screen_size[0]
+                                            && scr_y >= 0.0
+                                            && scr_y <= screen_size[1];
+                                        let color = if on_scr {
+                                            [0.0, 1.0, 0.0, 1.0]
+                                        } else {
+                                            [1.0, 0.65, 0.0, 1.0]
+                                        };
+                                        ui.text_colored(
+                                            color,
+                                            format!(
+                                                "Screen: {:.0} {:.0}  Dist: {:.1}m  {}",
+                                                scr_x,
+                                                scr_y,
+                                                dist,
+                                                if on_scr { "ON" } else { "OFF" }
+                                            ),
+                                        );
+                                    }
+                                    None => {
+                                        ui.text_colored(
+                                            [1.0, 0.3, 0.3, 1.0],
+                                            "Behind camera (w <= 0)",
+                                        );
+                                    }
+                                }
+                            }
+                        }
                     } else {
                         ui.text_colored([0.5, 0.5, 0.5, 1.0], "не сохранена");
                     }
@@ -301,6 +498,65 @@ impl ImguiRenderLoop for HelloHud {
                     hudhook::eject();
                 }
             });
+
+        // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ ---
+        if let (Some((sx, sy, sz)), Some(camera_addr)) =
+            (self.saved_position, self.camera_ptr_addr)
+        {
+            // camera_addr.as_ptr() УЖЕ указывает на объект cCameraGame
+            let camera_ptr = camera_addr.as_ptr();
+
+            // m_viewProjectionMatrix: cCameraViewProj +0x200 (D3DXMATRIX row-major)
+            let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
+            // m_CameraMatrix.m_vecPosition: cCameraBase +0x1B0
+            let cam_x = unsafe { *(camera_ptr.add(0x1B0) as *const f32) };
+            let cam_y = unsafe { *(camera_ptr.add(0x1B4) as *const f32) };
+            let cam_z = unsafe { *(camera_ptr.add(0x1B8) as *const f32) };
+
+            let [sw, sh] = ui.io().display_size;
+            const EDGE_MARGIN: f32 = 24.0;
+
+            if let Some(([scr_x, scr_y], dist)) = world_to_screen(
+                (sx, sy, sz),
+                &view_proj,
+                [sw, sh],
+                (cam_x, cam_y, cam_z),
+            ) {
+                let on_screen = scr_x >= 0.0 && scr_x <= sw && scr_y >= 0.0 && scr_y <= sh;
+                let (draw_x, draw_y) = if on_screen {
+                    (scr_x, scr_y)
+                } else {
+                    (
+                        scr_x.clamp(EDGE_MARGIN, sw - EDGE_MARGIN),
+                        scr_y.clamp(EDGE_MARGIN, sh - EDGE_MARGIN),
+                    )
+                };
+
+                let draw_list = ui.get_foreground_draw_list();
+                // Цвета в ABGR: 0xAA_BB_GG_RR
+                if on_screen {
+                    draw_list
+                        .add_circle([draw_x, draw_y], 8.0, 0xFF_00_FF_00)
+                        .thickness(2.0)
+                        .build();
+                    draw_list.add_text(
+                        [draw_x + 12.0, draw_y - 8.0],
+                        0xFF_FF_FF_FF,
+                        format!("Saved ({:.1}m)", dist),
+                    );
+                } else {
+                    draw_list
+                        .add_circle([draw_x, draw_y], 8.0, 0xFF_00_80_FF)
+                        .thickness(2.5)
+                        .build();
+                    draw_list.add_text(
+                        [draw_x + 12.0, draw_y - 8.0],
+                        0xFF_40_B0_FF,
+                        format!("\u{25c6} Saved ({:.1}m)", dist),
+                    );
+                }
+            }
+        }
     }
 }
 

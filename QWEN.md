@@ -8,10 +8,12 @@ A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**
 - **Library (`drmod_rs_lib`)**: Hooks into DirectX 9 to render an ImGui overlay that reads game memory in real-time
 
 The overlay currently displays:
+- Current and previous run start times (from SQLite database)
 - Player coordinates (X, Y, Z) read from memory offsets
 - Player HP
 - Game menu status (In Game, Pause Menu, etc.)
 - Equipped weapons: Main, Custom (numeric ID + name), Sub (numeric ID from PlayerManagerImplement)
+- Saved position with teleport and on-screen projection
 
 Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and [imgui-rs](https://github.com/imgui-rs/imgui-rs) for the UI.
 
@@ -83,6 +85,8 @@ Both files must be in the same directory for the injector to find the DLL.
 | `hudhook` (0.9.0) | DirectX hooking and injection |
 | `imgui` (0.12.0) | ImGui bindings for UI rendering |
 | `windows` (0.62.2) | Windows API (UI windows, module loading) |
+| `rusqlite` (0.40.1, bundled) | SQLite for persisting run data (startup times, future: config, stats) |
+| `chrono` (0.4.45) | Time formatting for run timestamps |
 
 ### Notes
 
@@ -95,6 +99,23 @@ Both files must be in the same directory for the injector to find the DLL.
 - Error handling uses Windows `MessageBoxW` for user-facing errors
 - The `show_msgbox` function encodes text as UTF-16 for the Windows API
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against)
+
+### Run Persistence (SQLite)
+
+On DLL load, a SQLite database is created/opened at `%LOCALAPPDATA%\drmod\runs.db`. The directory is auto-created on first run.
+
+**Schema:**
+```sql
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL
+);
+```
+
+**Behavior:**
+- `init_db()` in `lib.rs` runs once in `HelloHud::new()` — reads the previous run's `started_at`, inserts the current `chrono::Local::now()` timestamp
+- UI displays `Current run:` and `Previous run:` (or `N/A` if no prior run or DB unavailable)
+- All errors are silently handled — if `LOCALAPPDATA` is unset, directory creation fails, or SQLite fails, the fields gracefully fall back to showing only the current time and `N/A` for previous
 
 ### Input Handling
 
