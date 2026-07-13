@@ -111,6 +111,8 @@ All `imgui::Key` variants (including `Key::Keypad0`–`Key::Keypad9`) are availa
 | Key | Action |
 |-----|--------|
 | `NumPad0` | Toggle `test_flag` (debug/development use only) |
-| `NumPad1` | +3m к Y-координате игрока (прямая запись в память) |
+| `NumPad1` | +10m к Y-координате игрока (прямая запись в память) |
+| `NumPad2` | Save current position |
+| `NumPad3` | Teleport to saved position |
 
 Memory writes use raw `*mut f32` pointers — since the DLL is injected, it has direct access to game memory.

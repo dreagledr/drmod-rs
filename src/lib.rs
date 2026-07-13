@@ -75,7 +75,7 @@ struct HelloHud {
     base_addr: usize,
     static_ptr_addr: Option<NonNull<u8>>,
     player_manager_addr: Option<NonNull<u8>>,
-    test_flag: bool,
+    saved_position: Option<(f32, f32, f32)>,
 }
 
 impl HelloHud {
@@ -105,7 +105,7 @@ impl HelloHud {
             base_addr,
             static_ptr_addr,
             player_manager_addr,
-            test_flag: false,
+            saved_position: None,
         }
     }
 }
@@ -134,21 +134,6 @@ impl ImguiRenderLoop for HelloHud {
             .build(|| {
                 ui.text(format!("Elapsed: {:?}", self.start_time.elapsed()));
 
-                // --- ТЕСТОВЫЙ ФЛАГ (NumPad0) ---
-                if ui.is_key_pressed_no_repeat(Key::Keypad0) {
-                    self.test_flag = !self.test_flag;
-                }
-                let flag_color = if self.test_flag {
-                    [0.0, 1.0, 0.0, 1.0]
-                } else {
-                    [1.0, 0.3, 0.3, 1.0]
-                };
-                ui.text_colored(
-                    flag_color,
-                    format!("Test Flag: {}", if self.test_flag { "ON" } else { "OFF" }),
-                );
-                ui.text("NumPad0: toggle");
-
                 // --- GAME MENU STATUS ---
                 if self.base_addr != 0 {
                     let menu_status_addr = self.base_addr + 0x17E9F9C;
@@ -175,6 +160,24 @@ impl ImguiRenderLoop for HelloHud {
                     }
                 }
 
+                // --- ДЕБАГ ПОЛЕЙ Pl0000 ---
+                if let Some(static_ptr) = self.static_ptr_addr {
+                    unsafe {
+                        let pl0000_ptr = *(static_ptr.as_ptr() as *const *mut u8);
+                        if !pl0000_ptr.is_null() {
+                            // m_SwordState (+0x13FC) — int
+                            let sword_state = *(pl0000_ptr.add(0x13FC) as *const i32);
+                            // m_bSwordHidden (+0xB74) — int (bool)
+                            let sword_hidden = *(pl0000_ptr.add(0xB74) as *const i32);
+
+                            ui.separator();
+                            ui.text("Pl0000 fields:");
+                            ui.text(format!("SwordState: {}", sword_state));
+                            ui.text(format!("SwordHidden: {}", sword_hidden));
+                        }
+                    }
+                }
+
                 let Some(static_ptr_addr) = self.static_ptr_addr else {
                     ui.text_colored([1.0, 0.0, 0.0, 1.0], "Module not found!");
                     return;
@@ -191,7 +194,11 @@ impl ImguiRenderLoop for HelloHud {
                     let sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
 
                     ui.text(format!("Main: {}", main_weapon));
-                    ui.text(format!("Custom: {} ({})", custom_weapon, custom_weapon_name(custom_weapon)));
+                    ui.text(format!(
+                        "Custom: {} ({})",
+                        custom_weapon,
+                        custom_weapon_name(custom_weapon)
+                    ));
                     ui.text(format!("Sub: {}", sub_weapon));
                 }
 
@@ -233,6 +240,27 @@ impl ImguiRenderLoop for HelloHud {
                         }
                     }
 
+                    // NumPad2: сохранение позиции
+                    if ui.is_key_pressed_no_repeat(Key::Keypad2) {
+                        unsafe {
+                            let x = *(player_obj_ptr.add(0x50) as *const f32);
+                            let y = *(player_obj_ptr.add(0x54) as *const f32);
+                            let z = *(player_obj_ptr.add(0x58) as *const f32);
+                            self.saved_position = Some((x, y, z));
+                        }
+                    }
+
+                    // NumPad3: телепорт на сохранённую позицию
+                    if ui.is_key_pressed_no_repeat(Key::Keypad3) {
+                        if let Some((sx, sy, sz)) = self.saved_position {
+                            unsafe {
+                                *(player_obj_ptr.add(0x50) as *mut f32) = sx;
+                                *(player_obj_ptr.add(0x54) as *mut f32) = sy;
+                                *(player_obj_ptr.add(0x58) as *mut f32) = sz;
+                            }
+                        }
+                    }
+
                     // 2. Читаем координаты из объекта игрока
                     // X: offset 0x50, Y: 0x54, Z: 0x58
                     let pos_x = unsafe { *(player_obj_ptr.add(0x50) as *const f32) };
@@ -245,11 +273,24 @@ impl ImguiRenderLoop for HelloHud {
                     ui.text(format!("Y: {:.3}", pos_y));
                     ui.text(format!("Z: {:.3}", pos_z));
 
+                    // Сохранённая позиция
+                    ui.separator();
+                    ui.text("Saved Position:");
+                    if let Some((sx, sy, sz)) = self.saved_position {
+                        ui.text(format!("X: {:.3}", sx));
+                        ui.text(format!("Y: {:.3}", sy));
+                        ui.text(format!("Z: {:.3}", sz));
+                    } else {
+                        ui.text_colored([0.5, 0.5, 0.5, 1.0], "не сохранена");
+                    }
+
                     // Дополнительно: HP (offset 0x870)
                     let hp = unsafe { *(player_obj_ptr.add(0x870) as *const i32) };
                     ui.separator();
                     ui.text(format!("HP: {}", hp));
                     ui.text("NumPad1: +10m Y");
+                    ui.text("NumPad2: Save position");
+                    ui.text("NumPad3: Teleport");
                 }
 
                 // --- ВЫХОД ---
