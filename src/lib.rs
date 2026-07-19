@@ -2,7 +2,6 @@ use chrono::Local;
 use hudhook::{ImguiRenderLoop, RenderContext};
 use imgui::*;
 use rusqlite::Connection;
-use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::time::Instant;
 
@@ -134,25 +133,25 @@ fn draw_world_pos(
     }
 }
 
-fn init_db() -> (String, Option<String>, Option<Connection>, HashMap<i32, (f32, f32, f32)>) {
+fn init_db() -> (String, Option<String>, Option<Connection>) {
     let now = Local::now();
     let current = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
     let localappdata = match std::env::var("LOCALAPPDATA") {
         Ok(v) => v,
-        Err(_) => return (current, None, None, HashMap::new()),
+        Err(_) => return (current, None, None),
     };
 
     let db_dir = format!("{}\\drmod", localappdata);
     let db_path = format!("{}\\runs.db", db_dir);
 
     if std::fs::create_dir_all(&db_dir).is_err() {
-        return (current, None, None, HashMap::new());
+        return (current, None, None);
     }
 
     let conn = match Connection::open(&db_path) {
         Ok(c) => c,
-        Err(_) => return (current, None, None, HashMap::new()),
+        Err(_) => return (current, None, None),
     };
 
     // WAL mode + relaxed sync for fast bulk inserts
@@ -170,14 +169,12 @@ fn init_db() -> (String, Option<String>, Option<Connection>, HashMap<i32, (f32, 
         )
         .is_err()
     {
-        return (current, None, Some(conn), HashMap::new());
+        return (current, None, Some(conn));
     }
 
     if segment::create_segment_tables(&conn).is_err() {
-        return (current, None, Some(conn), HashMap::new());
+        return (current, None, Some(conn));
     }
-
-    let start_conditions = segment::load_start_conditions(&conn);
 
     let prev = conn
         .query_row(
@@ -189,7 +186,7 @@ fn init_db() -> (String, Option<String>, Option<Connection>, HashMap<i32, (f32, 
 
     let _ = conn.execute("INSERT INTO runs (started_at) VALUES (?1)", [&current]);
 
-    (current, prev, Some(conn), start_conditions)
+    (current, prev, Some(conn))
 }
 
 struct HelloHud {
@@ -204,15 +201,14 @@ struct HelloHud {
     // Segment tracking
     active_segment: Option<segment::ActiveSegment>,
     segment_was_active: bool,
-    start_conditions: HashMap<i32, (f32, f32, f32)>,
-    position_buffer: Vec<(f32, f32, f32, i64)>,
-    ghost_positions: Vec<(f32, f32, f32, i64)>,
+    position_buffer: Vec<(segment::Vec3, i64)>,
+    ghost_positions: Vec<(segment::Vec3, i64)>,
     ghost_label: String,
 }
 
 impl HelloHud {
     fn new() -> Self {
-        let (current_run_start, prev_run_start, db_conn, start_conditions) = init_db();
+        let (current_run_start, prev_run_start, db_conn) = init_db();
 
         let base_addr = unsafe {
             windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::PCSTR::null())
@@ -252,7 +248,6 @@ impl HelloHud {
             saved_position: None,
             active_segment: None,
             segment_was_active: false,
-            start_conditions,
             position_buffer: Vec::new(),
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
@@ -302,45 +297,44 @@ impl ImguiRenderLoop for HelloHud {
 
                 // --- MISSION ---
                 let mut mission_id: i32 = 0;
+                let mission_id_raw: i32;
                 let mut mission_name_str = String::new();
                 if self.base_addr != 0 {
                     let mission_id_addr = self.base_addr + 0x1764670;
-                    mission_id = unsafe { *(mission_id_addr as *const i32) };
-                    let (name_addr, eff_id) = if mission_id != 0 {
-                        (self.base_addr + 0x1764674, mission_id)
+                    mission_id_raw = unsafe { *(mission_id_addr as *const i32) };
+                    let (name_addr, eff_id) = if mission_id_raw != 0 {
+                        (self.base_addr + 0x1764674, mission_id_raw)
                     } else {
-                        (
-                            self.base_addr + 0x1766008,
-                            unsafe { *((self.base_addr + 0x1766004) as *const i32) },
-                        )
+                        (self.base_addr + 0x1766008, unsafe {
+                            *((self.base_addr + 0x1766004) as *const i32)
+                        })
                     };
                     mission_id = eff_id;
-                    mission_name_str = unsafe {
-                        std::ffi::CStr::from_ptr(name_addr as *const i8)
-                    }
-                    .to_string_lossy()
-                    .into_owned();
-                    ui.text(format!("Mission: {} (0x{:04X})", mission_name_str, mission_id));
+                    mission_name_str = unsafe { std::ffi::CStr::from_ptr(name_addr as *const i8) }
+                        .to_string_lossy()
+                        .into_owned();
+                    ui.text(format!(
+                        "Mission: {} (0x{:04X}) [raw: 0x{:04X}]",
+                        mission_name_str, mission_id, mission_id_raw
+                    ));
                 }
 
                 // --- GAME MENU STATUS ---
+                let mut menu_status = game::GameMenuStatus::None;
                 if self.base_addr != 0 {
                     let menu_status_addr = self.base_addr + 0x17E9F9C;
                     let raw_status = unsafe { *(menu_status_addr as *const i32) };
-                    let menu_status = if (0..=18).contains(&raw_status) {
+                    if (0..=18).contains(&raw_status) {
                         // SAFETY: GameMenuStatus is repr(i32) с значениями 0..=18
-                        Some(unsafe { std::mem::transmute::<i32, game::GameMenuStatus>(raw_status) })
-                    } else {
-                        None
-                    };
-
-                    if let Some(status) = menu_status {
+                        let status =
+                            unsafe { std::mem::transmute::<i32, game::GameMenuStatus>(raw_status) };
                         let color = if status.is_in_game() {
                             [0.0, 1.0, 0.0, 1.0]
                         } else {
                             [1.0, 1.0, 0.0, 1.0]
                         };
                         ui.text_colored(color, format!("Status: {}", status.name()));
+                        menu_status = status;
                     } else {
                         ui.text_colored(
                             [1.0, 0.5, 0.0, 1.0],
@@ -415,45 +409,69 @@ impl ImguiRenderLoop for HelloHud {
                     }
                 };
 
-                let should_end = segment::segment_should_end(
-                    player_obj_ptr,
-                    mission_id,
-                    &mission_name_str,
-                    self.active_segment.as_ref(),
-                );
-
-                // --- SEGMENT END ---
-                if should_end {
-                    if let (Some(ref seg), Some(ref conn)) =
-                        (self.active_segment.as_ref(), self.db_conn.as_ref())
-                    {
-                        segment::finish_segment(conn, seg, &self.position_buffer);
-                    }
-                    self.position_buffer.clear();
-                    self.ghost_positions.clear();
-                    self.ghost_label.clear();
-                    self.active_segment = None;
-                }
-
-                if player_obj_ptr.is_null() {
-                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "Player object pointer is NULL");
-                    ui.text("Убедитесь, что вы в игре (не в меню).");
-                } else {
+                // Читаем позицию (или None, если игрока нет)
+                let pos_opt = if !player_obj_ptr.is_null() {
                     let pos_x = unsafe { *(player_obj_ptr.add(0x50) as *const f32) };
                     let pos_y = unsafe { *(player_obj_ptr.add(0x54) as *const f32) };
                     let pos_z = unsafe { *(player_obj_ptr.add(0x58) as *const f32) };
+                    Some(segment::Vec3 {
+                        x: pos_x,
+                        y: pos_y,
+                        z: pos_z,
+                    })
+                } else {
+                    None
+                };
 
-                    let should_start = segment::segment_should_start(
-                        player_obj_ptr,
-                        mission_id,
-                        &mission_name_str,
-                        (pos_x, pos_y, pos_z),
-                        &self.start_conditions,
-                        self.active_segment.as_ref(),
+                // --- SEGMENT ACTION ---
+                let action = segment::segment_action(
+                    mission_id,
+                    &mission_name_str,
+                    pos_opt,
+                    menu_status,
+                    self.active_segment.as_ref(),
+                );
+
+                // --- SEGMENT DEBUG ---
+                if self.active_segment.is_some() {
+                    let action_name = match action {
+                        segment::SegmentAction::None => "None",
+                        segment::SegmentAction::Start => "Start",
+                        segment::SegmentAction::End => "End",
+                        segment::SegmentAction::Reset => "Reset",
+                    };
+                    ui.text_colored(
+                        [0.5, 0.8, 1.0, 1.0],
+                        format!(
+                            "SEGDEBUG: seg.mission={} cur.mission={} status={} ({}) => {}",
+                            self.active_segment.as_ref().unwrap().mission_id,
+                            mission_id,
+                            menu_status.name(),
+                            menu_status as i32,
+                            action_name,
+                        ),
                     );
+                }
 
-                    // --- SEGMENT START ---
-                    if should_start {
+                match action {
+                    segment::SegmentAction::Reset => {
+                        self.position_buffer.clear();
+                        self.ghost_positions.clear();
+                        self.ghost_label.clear();
+                        self.active_segment = None;
+                    }
+                    segment::SegmentAction::End => {
+                        if let (Some(ref seg), Some(ref conn)) =
+                            (self.active_segment.as_ref(), self.db_conn.as_ref())
+                        {
+                            segment::finish_segment(conn, seg, &self.position_buffer);
+                        }
+                        self.position_buffer.clear();
+                        self.ghost_positions.clear();
+                        self.ghost_label.clear();
+                        self.active_segment = None;
+                    }
+                    segment::SegmentAction::Start => {
                         self.position_buffer.clear();
                         self.ghost_positions.clear();
                         self.ghost_label.clear();
@@ -461,10 +479,8 @@ impl ImguiRenderLoop for HelloHud {
                         let fastest_ms = if let Some(ref conn) = self.db_conn {
                             let (ms, positions) = segment::load_best_ghost(conn, mission_id);
                             if let Some(best_ms) = ms {
-                                self.ghost_label = format!(
-                                    "Best {}",
-                                    format_duration_ms(best_ms as u64)
-                                );
+                                self.ghost_label =
+                                    format!("Best {}", format_duration_ms(best_ms as u64));
                             }
                             self.ghost_positions = positions;
                             ms
@@ -480,6 +496,13 @@ impl ImguiRenderLoop for HelloHud {
                             fastest_ms,
                         });
                     }
+                    segment::SegmentAction::None => {}
+                }
+
+                if player_obj_ptr.is_null() {
+                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "Player object pointer is NULL");
+                    ui.text("Убедитесь, что вы в игре (не в меню).");
+                } else {
                     ui.text_colored([0.0, 1.0, 0.0, 1.0], "Player found!");
 
                     // NumPad1: +3m к высоте
@@ -511,103 +534,14 @@ impl ImguiRenderLoop for HelloHud {
                         }
                     }
 
-                    // 2. Читаем координаты из объекта игрока
-                    // X: offset 0x50, Y: 0x54, Z: 0x58
-
+                    // Position buffer push
                     if self.active_segment.is_some() {
-                        if let Some(ref seg) = self.active_segment {
+                        if let (Some(ref seg), Some(pos)) =
+                            (self.active_segment.as_ref(), pos_opt)
+                        {
                             let dur = seg.start_instant.elapsed().as_millis() as i64;
-                            self.position_buffer.push((pos_x, pos_y, pos_z, dur));
+                            self.position_buffer.push((pos, dur));
                         }
-                    }
-
-                    ui.separator();
-                    ui.text("Position:");
-                    ui.text(format!("X: {:.3}", pos_x));
-                    ui.text(format!("Y: {:.3}", pos_y));
-                    ui.text(format!("Z: {:.3}", pos_z));
-
-                    // Сохранённая позиция
-                    ui.separator();
-                    ui.text("Saved Position:");
-                    if let Some((sx, sy, sz)) = self.saved_position {
-                        ui.text(format!("X: {:.3}", sx));
-                        ui.text(format!("Y: {:.3}", sy));
-                        ui.text(format!("Z: {:.3}", sz));
-
-                        // --- ДЕБАГ: проекция на экран ---
-                        ui.separator();
-                        ui.text("Screen projection debug:");
-                        match self.camera_ptr_addr {
-                            None => {
-                                ui.text_colored([1.0, 0.5, 0.0, 1.0], "camera_ptr_addr is None");
-                            }
-                            Some(cam_addr) => {
-                                // cam_addr.as_ptr() УЖЕ указывает на объект cCameraGame
-                                // (SDK: *(cCameraGame*)(base + 0x17EA1D0))
-                                let cam_ptr = cam_addr.as_ptr();
-
-                                let view_proj =
-                                    unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
-                                let cam_x = unsafe { *(cam_ptr.add(0x1B0) as *const f32) };
-                                let cam_y = unsafe { *(cam_ptr.add(0x1B4) as *const f32) };
-                                let cam_z = unsafe { *(cam_ptr.add(0x1B8) as *const f32) };
-                                let screen_size = ui.io().display_size;
-
-                                ui.text(format!("Camera ptr: 0x{:08X}", cam_ptr as usize));
-                                ui.text(format!(
-                                    "Cam pos: {:.1} {:.1} {:.1}", cam_x, cam_y, cam_z
-                                ));
-                                ui.text(format!(
-                                    "Screen: {:.0}x{:.0}", screen_size[0], screen_size[1]
-                                ));
-                                ui.text(format!(
-                                    "VP[0..4]: {:.3} {:.3} {:.3} {:.3}",
-                                    view_proj[0], view_proj[1], view_proj[2], view_proj[3]
-                                ));
-                                ui.text(format!(
-                                    "VP[4..8]: {:.3} {:.3} {:.3} {:.3}",
-                                    view_proj[4], view_proj[5], view_proj[6], view_proj[7]
-                                ));
-
-                                match world_to_screen(
-                                    (sx, sy, sz),
-                                    &view_proj,
-                                    screen_size,
-                                    (cam_x, cam_y, cam_z),
-                                ) {
-                                    Some(([scr_x, scr_y], dist)) => {
-                                        let on_scr = scr_x >= 0.0
-                                            && scr_x <= screen_size[0]
-                                            && scr_y >= 0.0
-                                            && scr_y <= screen_size[1];
-                                        let color = if on_scr {
-                                            [0.0, 1.0, 0.0, 1.0]
-                                        } else {
-                                            [1.0, 0.65, 0.0, 1.0]
-                                        };
-                                        ui.text_colored(
-                                            color,
-                                            format!(
-                                                "Screen: {:.0} {:.0}  Dist: {:.1}m  {}",
-                                                scr_x,
-                                                scr_y,
-                                                dist,
-                                                if on_scr { "ON" } else { "OFF" }
-                                            ),
-                                        );
-                                    }
-                                    None => {
-                                        ui.text_colored(
-                                            [1.0, 0.3, 0.3, 1.0],
-                                            "Behind camera (w <= 0)",
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        ui.text_colored([0.5, 0.5, 0.5, 1.0], "не сохранена");
                     }
 
                     // Дополнительно: HP (offset 0x870)
@@ -617,6 +551,100 @@ impl ImguiRenderLoop for HelloHud {
                     ui.text("NumPad1: +10m Y");
                     ui.text("NumPad2: Save position");
                     ui.text("NumPad3: Teleport");
+                }
+
+                ui.separator();
+                ui.text("Position:");
+                if let Some(pos) = pos_opt {
+                    ui.text(format!("X: {:.3}", pos.x));
+                    ui.text(format!("Y: {:.3}", pos.y));
+                    ui.text(format!("Z: {:.3}", pos.z));
+                } else {
+                    ui.text("X: Null");
+                    ui.text("Y: Null");
+                    ui.text("Z: Null");
+                }
+
+                // Сохранённая позиция
+                ui.separator();
+                ui.text("Saved Position:");
+                if let Some((sx, sy, sz)) = self.saved_position {
+                    ui.text(format!("X: {:.3}", sx));
+                    ui.text(format!("Y: {:.3}", sy));
+                    ui.text(format!("Z: {:.3}", sz));
+
+                    // --- ДЕБАГ: проекция на экран ---
+                    ui.separator();
+                    ui.text("Screen projection debug:");
+                    match self.camera_ptr_addr {
+                        None => {
+                            ui.text_colored([1.0, 0.5, 0.0, 1.0], "camera_ptr_addr is None");
+                        }
+                        Some(cam_addr) => {
+                            // cam_addr.as_ptr() УЖЕ указывает на объект cCameraGame
+                            // (SDK: *(cCameraGame*)(base + 0x17EA1D0))
+                            let cam_ptr = cam_addr.as_ptr();
+
+                            let view_proj =
+                                unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
+                            let cam_x = unsafe { *(cam_ptr.add(0x1B0) as *const f32) };
+                            let cam_y = unsafe { *(cam_ptr.add(0x1B4) as *const f32) };
+                            let cam_z = unsafe { *(cam_ptr.add(0x1B8) as *const f32) };
+                            let screen_size = ui.io().display_size;
+
+                            ui.text(format!("Camera ptr: 0x{:08X}", cam_ptr as usize));
+                            ui.text(format!("Cam pos: {:.1} {:.1} {:.1}", cam_x, cam_y, cam_z));
+                            ui.text(format!(
+                                "Screen: {:.0}x{:.0}",
+                                screen_size[0], screen_size[1]
+                            ));
+                            ui.text(format!(
+                                "VP[0..4]: {:.3} {:.3} {:.3} {:.3}",
+                                view_proj[0], view_proj[1], view_proj[2], view_proj[3]
+                            ));
+                            ui.text(format!(
+                                "VP[4..8]: {:.3} {:.3} {:.3} {:.3}",
+                                view_proj[4], view_proj[5], view_proj[6], view_proj[7]
+                            ));
+
+                            match world_to_screen(
+                                (sx, sy, sz),
+                                &view_proj,
+                                screen_size,
+                                (cam_x, cam_y, cam_z),
+                            ) {
+                                Some(([scr_x, scr_y], dist)) => {
+                                    let on_scr = scr_x >= 0.0
+                                        && scr_x <= screen_size[0]
+                                        && scr_y >= 0.0
+                                        && scr_y <= screen_size[1];
+                                    let color = if on_scr {
+                                        [0.0, 1.0, 0.0, 1.0]
+                                    } else {
+                                        [1.0, 0.65, 0.0, 1.0]
+                                    };
+                                    ui.text_colored(
+                                        color,
+                                        format!(
+                                            "Screen: {:.0} {:.0}  Dist: {:.1}m  {}",
+                                            scr_x,
+                                            scr_y,
+                                            dist,
+                                            if on_scr { "ON" } else { "OFF" }
+                                        ),
+                                    );
+                                }
+                                None => {
+                                    ui.text_colored(
+                                        [1.0, 0.3, 0.3, 1.0],
+                                        "Behind camera (w <= 0)",
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    ui.text_colored([0.5, 0.5, 0.5, 1.0], "не сохранена");
                 }
 
                 self.segment_was_active = self.active_segment.is_some();
@@ -643,19 +671,22 @@ impl ImguiRenderLoop for HelloHud {
         }
 
         // --- ОТРИСОВКА ПРИЗРАКА ЛУЧШЕГО СЕГМЕНТА ---
-        if self.active_segment.is_some() && !self.ghost_positions.is_empty() && !self.ghost_label.is_empty() {
+        if self.active_segment.is_some()
+            && !self.ghost_positions.is_empty()
+            && !self.ghost_label.is_empty()
+        {
             if let (Some(camera_addr), Some(ref seg)) =
                 (self.camera_ptr_addr, self.active_segment.as_ref())
             {
                 let current_ms = seg.start_instant.elapsed().as_millis() as i64;
                 let idx = self
                     .ghost_positions
-                    .partition_point(|&(_, _, _, dur)| dur <= current_ms);
+                    .partition_point(|&(_, dur)| dur <= current_ms);
                 if idx > 0 {
-                    let (gx, gy, gz, _) = self.ghost_positions[idx - 1];
+                    let (gp, _) = self.ghost_positions[idx - 1];
                     draw_world_pos(
                         ui,
-                        (gx, gy, gz),
+                        (gp.x, gp.y, gp.z),
                         camera_addr.as_ptr(),
                         0xFF_00_00_FF,
                         &self.ghost_label,
