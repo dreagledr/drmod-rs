@@ -1,12 +1,15 @@
 use chrono::Local;
-use hudhook::{ImguiRenderLoop, RenderContext};
+use hudhook::{IDirect3DDevice9, ImguiRenderLoop, RenderContext};
 use imgui::*;
 use rusqlite::Connection;
 use std::ptr::NonNull;
 use std::time::Instant;
 
+mod d3d_render;
 mod game;
 mod segment;
+
+use d3d_render::CylinderRenderer;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
 
@@ -204,6 +207,10 @@ struct HelloHud {
     position_buffer: Vec<(segment::Vec3, i64)>,
     ghost_positions: Vec<(segment::Vec3, i64)>,
     ghost_label: String,
+    // 3D test dummy
+    dummy: CylinderRenderer,
+    d3d_frame_count: u32,
+    d3d_last_error: String,
 }
 
 impl HelloHud {
@@ -251,6 +258,9 @@ impl HelloHud {
             position_buffer: Vec::new(),
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
+            dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
+            d3d_frame_count: 0,
+            d3d_last_error: String::new(),
         }
     }
 }
@@ -271,6 +281,54 @@ impl ImguiRenderLoop for HelloHud {
                 ..Default::default()
             }),
         }]);
+    }
+
+    fn render_3d(&mut self, device: &IDirect3DDevice9) {
+        self.d3d_frame_count = self.d3d_frame_count.wrapping_add(1);
+
+        // Read camera view*proj matrix (needed for all draws)
+        let camera_ptr = match self.camera_ptr_addr {
+            Some(addr) => addr.as_ptr(),
+            None => return,
+        };
+        let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
+
+        // ── Ghost cylinder (red, semi-transparent) ──────────────────
+        if self.active_segment.is_some() && !self.ghost_positions.is_empty() {
+            let current_ms = self
+                .active_segment
+                .as_ref()
+                .unwrap()
+                .start_instant
+                .elapsed()
+                .as_millis() as i64;
+            let idx = self
+                .ghost_positions
+                .partition_point(|&(_, dur)| dur <= current_ms);
+            if idx > 0 {
+                let (gp, _) = self.ghost_positions[idx - 1];
+                self.dummy.render(
+                    device,
+                    (gp.x, gp.y, gp.z),
+                    0.4,
+                    2.0,
+                    0x800000FF, // red, 50% alpha
+                    &view_proj,
+                );
+            }
+        }
+
+        // ── Saved position cylinder (green, semi-transparent) ──────
+        if let Some((sx, sy, sz)) = self.saved_position {
+            self.dummy.render(
+                device,
+                (sx, sy, sz),
+                0.4,
+                2.0,
+                0x8000FF00, // green, 50% alpha
+                &view_proj,
+            );
+        }
     }
 
     fn render(&mut self, ui: &mut Ui) {
@@ -536,8 +594,7 @@ impl ImguiRenderLoop for HelloHud {
 
                     // Position buffer push
                     if self.active_segment.is_some() {
-                        if let (Some(ref seg), Some(pos)) =
-                            (self.active_segment.as_ref(), pos_opt)
+                        if let (Some(ref seg), Some(pos)) = (self.active_segment.as_ref(), pos_opt)
                         {
                             let dur = seg.start_instant.elapsed().as_millis() as i64;
                             self.position_buffer.push((pos, dur));
@@ -585,8 +642,7 @@ impl ImguiRenderLoop for HelloHud {
                             // (SDK: *(cCameraGame*)(base + 0x17EA1D0))
                             let cam_ptr = cam_addr.as_ptr();
 
-                            let view_proj =
-                                unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
+                            let view_proj = unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
                             let cam_x = unsafe { *(cam_ptr.add(0x1B0) as *const f32) };
                             let cam_y = unsafe { *(cam_ptr.add(0x1B4) as *const f32) };
                             let cam_z = unsafe { *(cam_ptr.add(0x1B8) as *const f32) };
@@ -635,10 +691,7 @@ impl ImguiRenderLoop for HelloHud {
                                     );
                                 }
                                 None => {
-                                    ui.text_colored(
-                                        [1.0, 0.3, 0.3, 1.0],
-                                        "Behind camera (w <= 0)",
-                                    );
+                                    ui.text_colored([1.0, 0.3, 0.3, 1.0], "Behind camera (w <= 0)");
                                 }
                             }
                         }
@@ -648,6 +701,19 @@ impl ImguiRenderLoop for HelloHud {
                 }
 
                 self.segment_was_active = self.active_segment.is_some();
+
+                // --- D3D DEBUG ---
+                ui.separator();
+                ui.text_colored(
+                    [0.5, 1.0, 0.5, 1.0],
+                    format!("D3D frames: {}", self.d3d_frame_count),
+                );
+                if !self.d3d_last_error.is_empty() {
+                    ui.text_colored(
+                        [1.0, 0.5, 0.0, 1.0],
+                        format!("D3D error: {}", self.d3d_last_error),
+                    );
+                }
 
                 // --- ВЫХОД ---
                 ui.separator();

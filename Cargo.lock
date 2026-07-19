@@ -94,6 +94,7 @@ dependencies = [
  "imgui",
  "rusqlite",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]
@@ -185,8 +186,6 @@ dependencies = [
 [[package]]
 name = "hudhook"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3f9c04b813d2c12e694bea2660c1077b1ff1709f3dd52958cb67e2b6b15123ec"
 dependencies = [
  "bitflags 2.11.1",
  "cc",

@@ -4,12 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-hudhook = "0.9.0"
+hudhook = { path = "vendor/hudhook" }
 imgui = "0.12.0"
 windows = {
     version = "0.62.2",
-    features = ["Win32_UI_WindowsAndMessaging"]
+    features = [
+        "Win32_UI_WindowsAndMessaging",
+        "Win32_Graphics_Direct3D9",
+        "Win32_Graphics_Direct3D",
+    ]
 }
+windows-numerics = "0.3"
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 chrono = "0.4.45"
 
