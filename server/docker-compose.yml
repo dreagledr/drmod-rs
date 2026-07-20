@@ -1,0 +1,7 @@
+services:
+  server:
+    build: .
+    ports:
+      - "5222:5222/tcp"
+      - "5222:5222/udp"
+    restart: unless-stopped

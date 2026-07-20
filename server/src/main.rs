@@ -149,12 +149,14 @@ impl Room {
 
 struct System {
     rooms: RwLock<HashMap<String, Arc<Mutex<Room>>>>,
+    enable_mock: bool,
 }
 
 impl System {
-    fn new() -> Self {
+    fn new(enable_mock: bool) -> Self {
         Self {
             rooms: RwLock::new(HashMap::new()),
+            enable_mock,
         }
     }
 
@@ -329,30 +331,32 @@ async fn handle_tcp(
                         }
 
                         // Добавляем mock если это первый реальный игрок
-                        let real_count = room_lock
-                            .client_ids()
-                            .iter()
-                            .filter(|&&cid| cid != MOCK_ID)
-                            .count();
-                        if real_count == 0 {
-                            let dummy_packet = PositionPacket {
-                                id,
-                                pos_x: 0.0,
-                                pos_y: 0.0,
-                                pos_z: 0.0,
-                                yaw: 0.0,
-                                hp: 100,
-                                mission_id: current_mission_id,
-                            };
-                            spawn_mock(&mut room_lock, id, &dummy_packet);
+                        if system.enable_mock {
+                            let real_count = room_lock
+                                .client_ids()
+                                .iter()
+                                .filter(|&&cid| cid != MOCK_ID)
+                                .count();
+                            if real_count == 0 {
+                                let dummy_packet = PositionPacket {
+                                    id,
+                                    pos_x: 0.0,
+                                    pos_y: 0.0,
+                                    pos_z: 0.0,
+                                    yaw: 0.0,
+                                    hp: 100,
+                                    mission_id: current_mission_id,
+                                };
+                                spawn_mock(&mut room_lock, id, &dummy_packet);
 
-                            let mock_msg = serde_json::json!({
-                                "type": "player_connected",
-                                "id": MOCK_ID,
-                                "name": MOCK_NAME,
-                                "mission_id": current_mission_id
-                            });
-                            let _ = tcp_tx.send(make_msg(&mock_msg));
+                                let mock_msg = serde_json::json!({
+                                    "type": "player_connected",
+                                    "id": MOCK_ID,
+                                    "name": MOCK_NAME,
+                                    "mission_id": current_mission_id
+                                });
+                                let _ = tcp_tx.send(make_msg(&mock_msg));
+                            }
                         }
 
                         room_lock.add_client(client);
@@ -386,13 +390,15 @@ async fn handle_tcp(
         room_lock.remove_client(id);
 
         // Удаляем mock если это был последний реальный игрок
-        let real_count = room_lock
-            .client_ids()
-            .iter()
-            .filter(|&&cid| cid != MOCK_ID)
-            .count();
-        if real_count == 0 {
-            remove_mock(&mut room_lock);
+        if system.enable_mock {
+            let real_count = room_lock
+                .client_ids()
+                .iter()
+                .filter(|&&cid| cid != MOCK_ID)
+                .count();
+            if real_count == 0 {
+                remove_mock(&mut room_lock);
+            }
         }
 
         // Оповещаем остальных
@@ -441,7 +447,11 @@ async fn handle_udp(udp: Arc<UdpSocket>, system: Arc<System>) {
                 room_lock.set_last_packet(packet_id, &buf);
 
                 // Обновляем mock если есть
-                let mock_packet = update_mock_packet(&mut room_lock, &packet);
+                let mock_packet = if system.enable_mock {
+                    update_mock_packet(&mut room_lock, &packet)
+                } else {
+                    None
+                };
 
                 // Ретранслируем всем остальным (включая mock)
                 room_lock
@@ -472,7 +482,12 @@ async fn ping_loop(system: Arc<System>) {
 
 #[tokio::main]
 async fn main() {
-    let system = Arc::new(System::new());
+    let enable_mock = std::env::args().any(|a| a == "--mock");
+    if enable_mock {
+        println!("[server] mock player enabled");
+    }
+
+    let system = Arc::new(System::new(enable_mock));
 
     let tcp_listener = TcpListener::bind(format!("0.0.0.0:{}", PORT))
         .await

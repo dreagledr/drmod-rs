@@ -26,7 +26,7 @@ pub struct UiState {
 }
 
 pub fn render_main_window(ui: &Ui, hud: &HelloHud, state: &UiState) {
-    ui.window("##hello")
+    ui.window("DrmodDebug")
         .size([320., 600.], Condition::Always)
         .build(|| {
             if let Some(ref seg) = hud.active_segment {
