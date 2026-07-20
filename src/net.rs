@@ -1,4 +1,4 @@
-use crate::protocol::{PositionPacket, TcpMessage};
+use crate::protocol::{self, PositionPacket, SkeletonBone, TcpMessage};
 use crate::segment::Vec3;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
@@ -15,6 +15,7 @@ pub struct RemotePlayer {
     pub mission_id: i32,
     pub last_update: Instant,
     pub is_mock: bool, // отмечен ли как mock-игрок (id = 0xFFFFFFFE)
+    pub skeleton: Vec<SkeletonBone>,
 }
 
 /// События из TCP-потока в главный поток.
@@ -158,6 +159,7 @@ impl NetClient {
                             mission_id,
                             last_update: Instant::now(),
                             is_mock: id == 0xFFFFFFFE,
+                            skeleton: Vec::new(),
                         });
                     }
                 }
@@ -171,14 +173,13 @@ impl NetClient {
         }
     }
 
-    /// Отправить свою позицию через UDP. Вызывать в кадре.
+    /// Отправить свою позицию через UDP (29 байт wire). Вызывать в кадре.
     pub fn send_position(&self, pos: Vec3, hp: i32, mission_id: i32) {
         if self.my_id == 0 {
-            return; // ещё не получили ID от сервера
+            return;
         }
         let packet = PositionPacket::from_vec3(self.my_id, pos, hp, mission_id);
-        let bytes = packet.to_bytes();
-        // send_to на неблокирующем сокете: если буфер ОС полон — silently drops
+        let bytes = packet.to_wire();
         let addr = match self.server_addr.to_socket_addrs() {
             Ok(mut a) => a.next(),
             Err(_) => None,
@@ -188,40 +189,77 @@ impl NetClient {
         }
     }
 
-    /// Принять чужие позиции через UDP. Вызывать в кадре.
-    pub fn recv_positions(&mut self) {
-        let mut buf = [0u8; 28];
+    /// Отправить скелет через UDP. Вызывать в кадре (раз в ~100 мс).
+    pub fn send_skeleton(&self, bones: &[SkeletonBone]) {
+        if self.my_id == 0 {
+            return;
+        }
+        let packet = protocol::SkeletonPacket {
+            id: self.my_id,
+            bones: bones.to_vec(),
+        };
+        let bytes = packet.to_wire();
+        let addr = match self.server_addr.to_socket_addrs() {
+            Ok(mut a) => a.next(),
+            Err(_) => None,
+        };
+        if let Some(addr) = addr {
+            let _ = self.udp.send_to(&bytes, addr);
+        }
+    }
+
+    /// Принять UDP-пакеты (позиции и скелеты). Вызывать в кадре.
+    pub fn recv_udp(&mut self) {
+        let mut buf = [0u8; 8192];
         loop {
             match self.udp.recv_from(&mut buf) {
                 Ok((n, _)) => {
-                    if n != 28 {
+                    if n == 0 {
                         continue;
                     }
-                    let packet = PositionPacket::from_bytes(&buf);
-                    if packet.id == self.my_id {
-                        continue; // свой пакет
-                    }
-                    // Обновить или вставить
-                    if let Some(rp) = self
-                        .remote_players
-                        .iter_mut()
-                        .find(|p| p.id == packet.id)
-                    {
-                        rp.pos = packet.to_vec3();
-                        rp.hp = packet.hp;
-                        rp.mission_id = packet.mission_id;
-                        rp.last_update = Instant::now();
-                    } else {
-                        let pid = { packet.id };
-                        self.remote_players.push(RemotePlayer {
-                            id: pid,
-                            name: format!("Player {}", pid),
-                            pos: packet.to_vec3(),
-                            hp: packet.hp,
-                            mission_id: packet.mission_id,
-                            last_update: Instant::now(),
-                            is_mock: packet.id == 0xFFFFFFFE,
-                        });
+                    match protocol::parse_udp(&buf[..n]) {
+                        Some(protocol::UdpPacket::Position(packet)) => {
+                            if packet.id == self.my_id {
+                                continue;
+                            }
+                            if let Some(rp) = self
+                                .remote_players
+                                .iter_mut()
+                                .find(|p| p.id == packet.id)
+                            {
+                                rp.pos = packet.to_vec3();
+                                rp.hp = packet.hp;
+                                rp.mission_id = packet.mission_id;
+                                rp.last_update = Instant::now();
+                            } else {
+                                let pid = packet.id;
+                                self.remote_players.push(RemotePlayer {
+                                    id: pid,
+                                    name: format!("Player {}", pid),
+                                    pos: packet.to_vec3(),
+                                    hp: packet.hp,
+                                    mission_id: packet.mission_id,
+                                    last_update: Instant::now(),
+                                    is_mock: packet.id == 0xFFFFFFFE,
+                                    skeleton: Vec::new(),
+                                });
+                            }
+                        }
+                        Some(protocol::UdpPacket::Skeleton(skel)) => {
+                            if skel.id == self.my_id {
+                                continue;
+                            }
+                            if let Some(rp) = self
+                                .remote_players
+                                .iter_mut()
+                                .find(|p| p.id == skel.id)
+                            {
+                                rp.skeleton = skel.bones;
+                                rp.last_update = Instant::now();
+                            }
+                            // Не создаём игрока только по скелету — ждём позицию
+                        }
+                        None => {} // неизвестный/битый пакет
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,

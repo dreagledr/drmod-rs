@@ -8,12 +8,17 @@ use tokio::time::{interval, Duration};
 use uuid::Uuid;
 
 const PORT: u16 = 5222;
-const PACKET_SIZE: usize = 28;
 const MOCK_ID: u32 = 0xFFFFFFFE;
 const MOCK_NAME: &str = "Mock Player";
 const MOCK_OFFSET: (f32, f32, f32) = (5.0, 0.0, 0.0);
+const MAX_UDP: usize = 8192;
 
-// ── Packet (дубликат src/protocol.rs — сервер независим от 32-bit крейта) ──
+// ── UDP packet type discriminators ────────────────────────────────
+
+const PKT_POSITION: u8 = 0x00;
+const PKT_SKELETON: u8 = 0x01;
+
+// ── Position packet (дубликат src/protocol.rs — 28 байт тело) ───
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -28,12 +33,29 @@ struct PositionPacket {
 }
 
 impl PositionPacket {
-    fn from_bytes(bytes: &[u8; PACKET_SIZE]) -> Self {
+    fn from_bytes(bytes: &[u8; 28]) -> Self {
         unsafe { std::mem::transmute(*bytes) }
     }
 
-    fn to_bytes(&self) -> [u8; PACKET_SIZE] {
+    fn to_bytes(&self) -> [u8; 28] {
         unsafe { std::mem::transmute(*self) }
+    }
+
+    /// Wire-формат: [PKT_POSITION] [28 байт] = 29 байт.
+    fn to_wire(&self) -> [u8; 29] {
+        let mut buf = [0u8; 29];
+        buf[0] = PKT_POSITION;
+        buf[1..29].copy_from_slice(&self.to_bytes());
+        buf
+    }
+
+    fn from_wire(data: &[u8]) -> Option<Self> {
+        if data.len() < 29 || data[0] != PKT_POSITION {
+            return None;
+        }
+        let mut arr = [0u8; 28];
+        arr.copy_from_slice(&data[1..29]);
+        Some(Self::from_bytes(&arr))
     }
 
     fn with_offset(&self, id: u32, name_offset: (f32, f32, f32)) -> Self {
@@ -44,6 +66,63 @@ impl PositionPacket {
             pos_z: self.pos_z + name_offset.2,
             ..*self
         }
+    }
+}
+
+// ── Skeleton helpers (wire-формат: 1 + 4 + 2 + N×16 байт) ───────
+
+#[repr(C, packed)]
+#[derive(Debug, Clone, Copy)]
+struct SkeletonBone {
+    index: u16,
+    parent_index: i16,
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+fn read_skeleton_bones(data: &[u8]) -> Option<Vec<SkeletonBone>> {
+    if data.len() < 7 || data[0] != PKT_SKELETON {
+        return None;
+    }
+    let count = u16::from_le_bytes([data[5], data[6]]) as usize;
+    let expected_len = 7 + count * 16;
+    if data.len() < expected_len {
+        return None;
+    }
+    let mut bones = Vec::with_capacity(count);
+    for i in 0..count {
+        let off = 7 + i * 16;
+        let index = u16::from_le_bytes([data[off], data[off + 1]]);
+        let parent_index = i16::from_le_bytes([data[off + 2], data[off + 3]]);
+        let x = f32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
+        let y = f32::from_le_bytes([data[off + 8], data[off + 9], data[off + 10], data[off + 11]]);
+        let z = f32::from_le_bytes([data[off + 12], data[off + 13], data[off + 14], data[off + 15]]);
+        bones.push(SkeletonBone { index, parent_index, x, y, z });
+    }
+    Some(bones)
+}
+
+fn build_skeleton_wire(id: u32, bones: &[SkeletonBone]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(7 + bones.len() * 16);
+    buf.push(PKT_SKELETON);
+    buf.extend_from_slice(&id.to_le_bytes());
+    buf.extend_from_slice(&(bones.len() as u16).to_le_bytes());
+    for bone in bones {
+        buf.extend_from_slice(&bone.index.to_le_bytes());
+        buf.extend_from_slice(&bone.parent_index.to_le_bytes());
+        buf.extend_from_slice(&bone.x.to_le_bytes());
+        buf.extend_from_slice(&bone.y.to_le_bytes());
+        buf.extend_from_slice(&bone.z.to_le_bytes());
+    }
+    buf
+}
+
+fn offset_skeleton_bones(bones: &mut [SkeletonBone], offset: (f32, f32, f32)) {
+    for bone in bones.iter_mut() {
+        bone.x += offset.0;
+        bone.y += offset.1;
+        bone.z += offset.2;
     }
 }
 
@@ -76,7 +155,8 @@ struct Client {
     id: u32,
     name: String,
     mission_id: i32,
-    last_packet: [u8; PACKET_SIZE],
+    last_position: [u8; 29],
+    last_skeleton: Option<Vec<u8>>,
     tcp_tx: mpsc::UnboundedSender<Vec<u8>>,
 }
 
@@ -119,27 +199,50 @@ impl Room {
         }
     }
 
-    fn set_last_packet(&mut self, id: u32, packet: &[u8; PACKET_SIZE]) {
+    fn set_last_position(&mut self, id: u32, wire: &[u8; 29]) {
         if let Some(c) = self.clients.get_mut(&id) {
-            c.last_packet = *packet;
+            c.last_position = *wire;
         }
     }
 
-    async fn send_last_packets(
+    fn set_last_skeleton(&mut self, id: u32, wire: Vec<u8>) {
+        if let Some(c) = self.clients.get_mut(&id) {
+            c.last_skeleton = Some(wire);
+        }
+    }
+
+    async fn send_last_positions(
         &self,
         udp: &UdpSocket,
         addr: SocketAddr,
         exclude_id: u32,
-        mock_packet: Option<&[u8; PACKET_SIZE]>,
+        mock_position: Option<&[u8; 29]>,
     ) {
-        // Шлём last_packet всех реальных клиентов
         for (id, c) in &self.clients {
             if *id != exclude_id && *id != MOCK_ID {
-                let _ = udp.send_to(&c.last_packet, addr).await;
+                let _ = udp.send_to(&c.last_position, addr).await;
             }
         }
-        // Шлём mock-пакет если есть
-        if let Some(pkt) = mock_packet {
+        if let Some(pkt) = mock_position {
+            let _ = udp.send_to(pkt, addr).await;
+        }
+    }
+
+    async fn send_last_skeletons(
+        &self,
+        udp: &UdpSocket,
+        addr: SocketAddr,
+        exclude_id: u32,
+        mock_skeleton: Option<&Vec<u8>>,
+    ) {
+        for (id, c) in &self.clients {
+            if *id != exclude_id && *id != MOCK_ID {
+                if let Some(ref skel) = c.last_skeleton {
+                    let _ = udp.send_to(skel, addr).await;
+                }
+            }
+        }
+        if let Some(pkt) = mock_skeleton {
             let _ = udp.send_to(pkt, addr).await;
         }
     }
@@ -193,7 +296,7 @@ impl System {
 // ── Mock helpers ──
 
 fn spawn_mock(room: &mut Room, real_id: u32, real_packet: &PositionPacket) {
-    let mock_packet = real_packet.with_offset(MOCK_ID, MOCK_OFFSET);
+    let mock_position = real_packet.with_offset(MOCK_ID, MOCK_OFFSET).to_wire();
 
     let (tx, _rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -201,14 +304,12 @@ fn spawn_mock(room: &mut Room, real_id: u32, real_packet: &PositionPacket) {
         id: MOCK_ID,
         name: MOCK_NAME.to_string(),
         mission_id: real_packet.mission_id,
-        last_packet: mock_packet.to_bytes(),
+        last_position: mock_position,
+        last_skeleton: None,
         tcp_tx: tx,
     };
     room.add_client(mock);
-    println!(
-        "[mock] spawned for real_id={} in room",
-        real_id
-    );
+    println!("[mock] spawned for real_id={} in room", real_id);
 }
 
 fn remove_mock(room: &mut Room) {
@@ -218,17 +319,28 @@ fn remove_mock(room: &mut Room) {
     }
 }
 
-fn update_mock_packet(room: &mut Room, real_packet: &PositionPacket) -> Option<[u8; PACKET_SIZE]> {
+fn update_mock_position(room: &mut Room, real_packet: &PositionPacket) -> Option<[u8; 29]> {
     if !room.client_ids().contains(&MOCK_ID) {
         return None;
     }
-    let mock_packet = real_packet.with_offset(MOCK_ID, MOCK_OFFSET);
-    let bytes = mock_packet.to_bytes();
-    // Обновляем last_packet у mock-клиента
+    let mock_wire = real_packet.with_offset(MOCK_ID, MOCK_OFFSET).to_wire();
     if let Some(mc) = room.clients.get_mut(&MOCK_ID) {
-        mc.last_packet = bytes;
+        mc.last_position = mock_wire;
     }
-    Some(bytes)
+    Some(mock_wire)
+}
+
+fn update_mock_skeleton(room: &mut Room, real_skel_data: &[u8]) -> Option<Vec<u8>> {
+    if !room.client_ids().contains(&MOCK_ID) {
+        return None;
+    }
+    let mut bones = read_skeleton_bones(real_skel_data)?;
+    offset_skeleton_bones(&mut bones, MOCK_OFFSET);
+    let mock_wire = build_skeleton_wire(MOCK_ID, &bones);
+    if let Some(mc) = room.clients.get_mut(&MOCK_ID) {
+        mc.last_skeleton = Some(mock_wire.clone());
+    }
+    Some(mock_wire)
 }
 
 // ── TCP handler ──
@@ -296,7 +408,8 @@ async fn handle_tcp(
                             id,
                             name: client_name.clone(),
                             mission_id: current_mission_id,
-                            last_packet: [0u8; PACKET_SIZE],
+                            last_position: [0u8; 29],
+                            last_skeleton: None,
                             tcp_tx: tcp_tx.clone(),
                         };
 
@@ -421,7 +534,7 @@ async fn handle_tcp(
 // ── UDP listener ──
 
 async fn handle_udp(udp: Arc<UdpSocket>, system: Arc<System>) {
-    let mut buf = [0u8; PACKET_SIZE];
+    let mut buf = vec![0u8; MAX_UDP];
     loop {
         let (n, addr) = match udp.recv_from(&mut buf).await {
             Ok(v) => v,
@@ -431,34 +544,70 @@ async fn handle_udp(udp: Arc<UdpSocket>, system: Arc<System>) {
             }
         };
 
-        if n != PACKET_SIZE {
+        if n == 0 {
             continue;
         }
 
-        let packet = PositionPacket::from_bytes(&buf);
-        let packet_id = { packet.id };
+        let data = &buf[..n];
+        let packet_type = data[0];
 
-        // Ищем клиента по ID во всех комнатах
-        let rooms = system.rooms.read().await;
-        for room_arc in rooms.values() {
-            let mut room_lock = room_arc.lock().await;
-            if room_lock.client_ids().contains(&packet_id) {
-                // Сохраняем last_packet
-                room_lock.set_last_packet(packet_id, &buf);
-
-                // Обновляем mock если есть
-                let mock_packet = if system.enable_mock {
-                    update_mock_packet(&mut room_lock, &packet)
-                } else {
-                    None
+        match packet_type {
+            PKT_POSITION => {
+                let packet = match PositionPacket::from_wire(data) {
+                    Some(p) => p,
+                    None => continue,
                 };
+                let packet_id = packet.id;
 
-                // Ретранслируем всем остальным (включая mock)
-                room_lock
-                    .send_last_packets(&udp, addr, packet_id, mock_packet.as_ref())
-                    .await;
-                break;
+                let rooms = system.rooms.read().await;
+                for room_arc in rooms.values() {
+                    let mut room_lock = room_arc.lock().await;
+                    if room_lock.client_ids().contains(&packet_id) {
+                        // Сохраняем last_position как wire (29 байт)
+                        let wire = packet.to_wire();
+                        room_lock.set_last_position(packet_id, &wire);
+
+                        let mock_position = if system.enable_mock {
+                            update_mock_position(&mut room_lock, &packet)
+                        } else {
+                            None
+                        };
+
+                        room_lock
+                            .send_last_positions(&udp, addr, packet_id, mock_position.as_ref())
+                            .await;
+                        break;
+                    }
+                }
             }
+            PKT_SKELETON => {
+                // Читаем id из wire (байты 1-4)
+                if data.len() < 5 {
+                    continue;
+                }
+                let packet_id = u32::from_le_bytes([data[1], data[2], data[3], data[4]]);
+
+                let rooms = system.rooms.read().await;
+                for room_arc in rooms.values() {
+                    let mut room_lock = room_arc.lock().await;
+                    if room_lock.client_ids().contains(&packet_id) {
+                        // Сохраняем сырой wire
+                        room_lock.set_last_skeleton(packet_id, data.to_vec());
+
+                        let mock_skeleton = if system.enable_mock {
+                            update_mock_skeleton(&mut room_lock, data)
+                        } else {
+                            None
+                        };
+
+                        room_lock
+                            .send_last_skeletons(&udp, addr, packet_id, mock_skeleton.as_ref())
+                            .await;
+                        break;
+                    }
+                }
+            }
+            _ => {} // неизвестный тип — игнорируем
         }
     }
 }
