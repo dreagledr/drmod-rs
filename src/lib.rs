@@ -369,6 +369,52 @@ impl ImguiRenderLoop for HelloHud {
     }
 
     fn render(&mut self, ui: &mut Ui) {
+        // ── Multiplayer network (выполняется каждый кадр, независимо от UI) ──
+        if let Some(ref mut nc) = self.net_client {
+            nc.poll_tcp();
+
+            // Читаем позицию для отправки
+            let pos_opt = self
+                .static_ptr_addr
+                .and_then(|addr| {
+                    let player_obj_ptr =
+                        unsafe { *(addr.as_ptr() as *const *mut u8) };
+                    if player_obj_ptr.is_null() {
+                        None
+                    } else {
+                        Some(segment::Vec3 {
+                            x: unsafe { *(player_obj_ptr.add(0x50) as *const f32) },
+                            y: unsafe { *(player_obj_ptr.add(0x54) as *const f32) },
+                            z: unsafe { *(player_obj_ptr.add(0x58) as *const f32) },
+                        })
+                    }
+                });
+
+            if let (Some(pos), Some(ref seg)) = (pos_opt, self.active_segment.as_ref()) {
+                let changed = self.last_sent_pos != Some(pos)
+                    || self.last_sent_mission_id != seg.mission_id;
+                if changed {
+                    let hp = self.static_ptr_addr
+                        .and_then(|addr| {
+                            let player_obj_ptr =
+                                unsafe { *(addr.as_ptr() as *const *mut u8) };
+                            if player_obj_ptr.is_null() {
+                                None
+                            } else {
+                                Some(unsafe { *(player_obj_ptr.add(0x870) as *const i32) })
+                            }
+                        })
+                        .unwrap_or(0);
+                    nc.send_position(pos, hp, seg.mission_id);
+                    self.last_sent_pos = Some(pos);
+                    self.last_sent_mission_id = seg.mission_id;
+                }
+            }
+
+            nc.recv_positions();
+        }
+        // ─────────────────────────────────────────────────────────────
+
         ui.window("##hello")
             .size([320., 600.], Condition::Always)
             .build(|| {
@@ -649,27 +695,6 @@ impl ImguiRenderLoop for HelloHud {
                     ui.text("NumPad3: Teleport");
                 }
 
-                // ── Multiplayer network ─────────────────────────────
-                // Обработка TCP-событий
-                if let Some(ref mut nc) = self.net_client {
-                    nc.poll_tcp();
-
-                    // Отправка своей позиции
-                    if let (Some(pos), Some(ref seg)) = (pos_opt, self.active_segment.as_ref()) {
-                        let changed = self.last_sent_pos != Some(pos)
-                            || self.last_sent_mission_id != seg.mission_id;
-                        if changed {
-                            nc.send_position(pos, hp, seg.mission_id);
-                            self.last_sent_pos = Some(pos);
-                            self.last_sent_mission_id = seg.mission_id;
-                        }
-                    }
-
-                    // Приём чужих позиций
-                    nc.recv_positions();
-                }
-                // ─────────────────────────────────────────────────────
-
                 ui.separator();
                 ui.text("Position:");
                 if let Some(pos) = pos_opt {
@@ -818,6 +843,32 @@ impl ImguiRenderLoop for HelloHud {
                         &self.ghost_label,
                     );
                 }
+            }
+        }
+
+        // --- ОТРИСОВКА ЧУЖИХ ИГРОКОВ (2D маркеры) ---
+        if let (Some(nc), Some(camera_addr), Some(seg)) =
+            (&self.net_client, self.camera_ptr_addr, self.active_segment.as_ref())
+        {
+            for rp in &nc.remote_players {
+                if rp.mission_id != seg.mission_id {
+                    continue;
+                }
+                if rp.last_update.elapsed() > std::time::Duration::from_secs(5) {
+                    continue;
+                }
+                let label = if rp.is_mock {
+                    format!("{} [mock]", rp.name)
+                } else {
+                    format!("{} ({}HP)", rp.name, rp.hp)
+                };
+                draw_world_pos(
+                    ui,
+                    (rp.pos.x, rp.pos.y, rp.pos.z),
+                    camera_addr.as_ptr(),
+                    0xFF_80_80_FF, // light blue
+                    &label,
+                );
             }
         }
 
