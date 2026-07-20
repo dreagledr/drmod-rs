@@ -219,8 +219,7 @@ impl HelloHud {
         // --- Pl0000 / Player ---
         if let Some(static_ptr) = self.static_ptr_addr {
             state.static_ptr_value = static_ptr.as_ptr() as usize;
-            self.cached_player_obj_ptr =
-                unsafe { *(static_ptr.as_ptr() as *const *mut u8) };
+            self.cached_player_obj_ptr = unsafe { *(static_ptr.as_ptr() as *const *mut u8) };
             if !self.cached_player_obj_ptr.is_null() {
                 state.player_found = true;
                 state.sword_state =
@@ -302,9 +301,7 @@ impl HelloHud {
 
         // --- POSITION BUFFER PUSH ---
         if state.player_found {
-            if let (Some(ref seg), Some(pos)) =
-                (self.active_segment.as_ref(), state.position)
-            {
+            if let (Some(ref seg), Some(pos)) = (self.active_segment.as_ref(), state.position) {
                 let dur = seg.start_instant.elapsed().as_millis() as i64;
                 self.position_buffer.push((pos, dur));
             }
@@ -340,7 +337,9 @@ impl ImguiRenderLoop for HelloHud {
         // Read D3D viewport — единственный надёжный источник размера области рендера
         {
             let mut vp = windows::Win32::Graphics::Direct3D9::D3DVIEWPORT9::default();
-            unsafe { device.GetViewport(&mut vp).ok(); }
+            unsafe {
+                device.GetViewport(&mut vp).ok();
+            }
             self.viewport = [vp.X as f32, vp.Y as f32, vp.Width as f32, vp.Height as f32];
         }
 
@@ -389,9 +388,7 @@ impl ImguiRenderLoop for HelloHud {
         }
 
         // ── Remote players (blue, semi-transparent) ────────────────
-        if let (Some(nc), Some(seg)) =
-            (&self.net_client, self.active_segment.as_ref())
-        {
+        if let (Some(nc), Some(seg)) = (&self.net_client, self.active_segment.as_ref()) {
             for rp in &nc.remote_players {
                 if rp.mission_id != seg.mission_id {
                     continue;
@@ -412,7 +409,8 @@ impl ImguiRenderLoop for HelloHud {
                 }
             }
 
-            // 3D скелет: рёбра цилиндрами + сфера головы
+            // 3D скелет: рёбра цилиндрами (батч) + сфера головы
+            let mut all_capsules: Vec<(f32, f32, f32, f32, f32, f32)> = Vec::new();
             for rp in &nc.remote_players {
                 if rp.skeleton.is_empty() || rp.mission_id != seg.mission_id {
                     continue;
@@ -420,30 +418,41 @@ impl ImguiRenderLoop for HelloHud {
                 if rp.last_update.elapsed() > std::time::Duration::from_secs(5) {
                     continue;
                 }
-                // Рёбра — цилиндры между костями
+                // Delta-компенсация по XZ + Y с учётом feet→pelvis offset (~1.0m)
+                let (dx, dy, dz) = if let Some(root) = rp.skeleton.iter().find(|b| b.index == 0) {
+                    (rp.pos.x - root.x, rp.pos.y - root.y + 1.0, rp.pos.z - root.z)
+                } else {
+                    (0.0, 0.0, 0.0)
+                };
+                // Собираем рёбра со смещением
                 let edges = skeleton::build_edges_from_wire(&rp.skeleton);
                 for &(p, c) in &edges {
                     let pb = &rp.skeleton[p];
                     let cb = &rp.skeleton[c];
-                    self.dummy.render_capsule(
-                        device,
-                        (pb.x, pb.y, pb.z),
-                        (cb.x, cb.y, cb.z),
-                        0.04,
-                        0x80FF8000, // orange, 50% alpha
-                        &view_proj,
-                    );
+                    all_capsules.push((
+                        pb.x + dx, pb.y + dy, pb.z + dz,
+                        cb.x + dx, cb.y + dy, cb.z + dz,
+                    ));
                 }
                 // Сфера на голове (bone index 5)
                 if let Some(head) = rp.skeleton.iter().find(|b| b.index == 5) {
                     self.remote_sphere.render(
                         device,
-                        (head.x, head.y, head.z),
+                        (head.x + dx, head.y + dy, head.z + dz),
                         0.12,
                         0x80FF0000, // red, 50% alpha
                         &view_proj,
                     );
                 }
+            }
+            if !all_capsules.is_empty() {
+                self.dummy.render_capsules_batched(
+                    device,
+                    &all_capsules,
+                    0.04,
+                    0x80FF8000, // orange, 50% alpha
+                    &view_proj,
+                );
             }
         }
     }
@@ -454,30 +463,27 @@ impl ImguiRenderLoop for HelloHud {
             nc.poll_tcp();
 
             // Читаем позицию для отправки
-            let pos_opt = self
-                .static_ptr_addr
-                .and_then(|addr| {
-                    let player_obj_ptr =
-                        unsafe { *(addr.as_ptr() as *const *mut u8) };
-                    if player_obj_ptr.is_null() {
-                        None
-                    } else {
-                        Some(segment::Vec3 {
-                            x: unsafe { *(player_obj_ptr.add(0x50) as *const f32) },
-                            y: unsafe { *(player_obj_ptr.add(0x54) as *const f32) },
-                            z: unsafe { *(player_obj_ptr.add(0x58) as *const f32) },
-                        })
-                    }
-                });
+            let pos_opt = self.static_ptr_addr.and_then(|addr| {
+                let player_obj_ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
+                if player_obj_ptr.is_null() {
+                    None
+                } else {
+                    Some(segment::Vec3 {
+                        x: unsafe { *(player_obj_ptr.add(0x50) as *const f32) },
+                        y: unsafe { *(player_obj_ptr.add(0x54) as *const f32) },
+                        z: unsafe { *(player_obj_ptr.add(0x58) as *const f32) },
+                    })
+                }
+            });
 
             if let (Some(pos), Some(ref seg)) = (pos_opt, self.active_segment.as_ref()) {
-                let changed = self.last_sent_pos != Some(pos)
-                    || self.last_sent_mission_id != seg.mission_id;
+                let changed =
+                    self.last_sent_pos != Some(pos) || self.last_sent_mission_id != seg.mission_id;
                 if changed {
-                    let hp = self.static_ptr_addr
+                    let hp = self
+                        .static_ptr_addr
                         .and_then(|addr| {
-                            let player_obj_ptr =
-                                unsafe { *(addr.as_ptr() as *const *mut u8) };
+                            let player_obj_ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
                             if player_obj_ptr.is_null() {
                                 None
                             } else {
@@ -494,17 +500,12 @@ impl ImguiRenderLoop for HelloHud {
             nc.recv_udp();
 
             // Отправляем скелет раз в ~100 мс
-            if self.last_skeleton_send.elapsed() > std::time::Duration::from_millis(100) {
+            if self.last_skeleton_send.elapsed() > std::time::Duration::from_millis(30) {
                 self.last_skeleton_send = Instant::now();
-                let player_obj_ptr =
-                    self.static_ptr_addr.and_then(|addr| {
-                        let ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
-                        if ptr.is_null() {
-                            None
-                        } else {
-                            Some(ptr)
-                        }
-                    });
+                let player_obj_ptr = self.static_ptr_addr.and_then(|addr| {
+                    let ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
+                    if ptr.is_null() { None } else { Some(ptr) }
+                });
                 if let Some(ptr) = player_obj_ptr {
                     let bones = unsafe { skeleton::read_full_skeleton(ptr) };
                     if !bones.is_empty() {
@@ -585,9 +586,11 @@ impl ImguiRenderLoop for HelloHud {
         }
 
         // --- ОТРИСОВКА ЧУЖИХ ИГРОКОВ (2D маркеры) ---
-        if let (Some(nc), Some(camera_addr), Some(seg)) =
-            (&self.net_client, self.camera_ptr_addr, self.active_segment.as_ref())
-        {
+        if let (Some(nc), Some(camera_addr), Some(seg)) = (
+            &self.net_client,
+            self.camera_ptr_addr,
+            self.active_segment.as_ref(),
+        ) {
             for rp in &nc.remote_players {
                 if rp.mission_id != seg.mission_id {
                     continue;

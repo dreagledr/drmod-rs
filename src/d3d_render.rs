@@ -353,6 +353,138 @@ impl CylinderRenderer {
             device.SetTextureStageState(0, D3DTSS_ALPHAOP, saved_alphaop).ok();
         }
     }
+
+    /// Батчевый рендер множества капсул одним save/restore.
+    pub fn render_capsules_batched(
+        &self,
+        device: &IDirect3DDevice9,
+        capsules: &[(f32, f32, f32, f32, f32, f32)],
+        radius: f32,
+        color: u32,
+        view_proj: &[f32; 16],
+    ) {
+        if capsules.is_empty() {
+            return;
+        }
+        unsafe {
+            let mut saved_fvf: u32 = 0;
+            let _ = device.GetFVF(&mut saved_fvf);
+            macro_rules! get_rs {
+                ($rs:ident, $def:expr) => {{
+                    let mut v: u32 = 0;
+                    device.GetRenderState($rs, &mut v).ok();
+                    if v == 0 { $def } else { v }
+                }};
+            }
+            let saved_zenable    = get_rs!(D3DRS_ZENABLE, 1);
+            let saved_zwrite     = get_rs!(D3DRS_ZWRITEENABLE, 1);
+            let saved_zfunc      = get_rs!(D3DRS_ZFUNC, D3DCMP_LESSEQUAL.0 as u32);
+            let saved_lighting   = get_rs!(D3DRS_LIGHTING, 1);
+            let saved_cull       = get_rs!(D3DRS_CULLMODE, D3DCULL_CCW.0 as u32);
+            let saved_alphablend = get_rs!(D3DRS_ALPHABLENDENABLE, 0);
+            let saved_alphatest  = get_rs!(D3DRS_ALPHATESTENABLE, 0);
+            let saved_sepblend   = get_rs!(D3DRS_SEPARATEALPHABLENDENABLE, 0);
+            let saved_covertex   = get_rs!(D3DRS_COLORVERTEX, 1);
+            let saved_fill       = get_rs!(D3DRS_FILLMODE, D3DFILL_SOLID.0 as u32);
+            let saved_srcblend   = get_rs!(D3DRS_SRCBLEND, D3DBLEND_ONE.0 as u32);
+            let saved_dstblend   = get_rs!(D3DRS_DESTBLEND, D3DBLEND_ZERO.0 as u32);
+            let saved_ambient    = get_rs!(D3DRS_AMBIENT, 0);
+            let saved_texfactor  = get_rs!(D3DRS_TEXTUREFACTOR, 0xFFFFFFFF);
+            macro_rules! get_tss {
+                ($tss:ident, $def:expr) => {{
+                    let mut v: u32 = 0;
+                    device.GetTextureStageState(0, $tss, &mut v).ok();
+                    if v == 0 { $def } else { v }
+                }};
+            }
+            let saved_colorop = get_tss!(D3DTSS_COLOROP, D3DTOP_MODULATE.0 as u32);
+            let saved_alphaop = get_tss!(D3DTSS_ALPHAOP, D3DTOP_SELECTARG1.0 as u32);
+
+            // ── Один setup ──
+            device.SetVertexShader(None).ok();
+            device.SetPixelShader(None).ok();
+            device.SetVertexDeclaration(None).ok();
+            device.SetFVF(D3DFVF_XYZ | D3DFVF_DIFFUSE).ok();
+            let vp = view_proj_to_matrix4x4(view_proj);
+            device.SetTransform(D3DTS_VIEW, &vp).ok();
+            device.SetTransform(D3DTS_PROJECTION, &IDENTITY_MATRIX).ok();
+
+            device.SetRenderState(D3DRS_ZENABLE, D3DZB_TRUE.0 as u32).ok();
+            device.SetRenderState(D3DRS_ZWRITEENABLE, 0).ok();
+            device.SetRenderState(D3DRS_ZFUNC, D3DCMP_LESSEQUAL.0 as u32).ok();
+            device.SetRenderState(D3DRS_LIGHTING, 0).ok();
+            device.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE.0 as u32).ok();
+            device.SetRenderState(D3DRS_ALPHABLENDENABLE, 1).ok();
+            device.SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA.0 as u32).ok();
+            device.SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA.0 as u32).ok();
+            device.SetRenderState(D3DRS_ALPHATESTENABLE, 0).ok();
+            device.SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, 0).ok();
+            device.SetRenderState(D3DRS_COLORVERTEX, 1).ok();
+            device.SetRenderState(D3DRS_FILLMODE, D3DFILL_SOLID.0 as u32).ok();
+            device.SetRenderState(D3DRS_AMBIENT, 0x00FFFFFF).ok();
+            device.SetRenderState(D3DRS_TEXTUREFACTOR, color).ok();
+            device.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE.0 as u32).ok();
+            device.SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE).ok();
+            device.SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_TFACTOR).ok();
+            device.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE.0 as u32).ok();
+            device.SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE).ok();
+            device.SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_TFACTOR).ok();
+
+            // ── Цикл по капсулам: только SetTransform(WORLD) + draw ──
+            for &(sx, sy, sz, ex, ey, ez) in capsules {
+                let dx = ex - sx;
+                let dy = ey - sy;
+                let dz = ez - sz;
+                let len_sq = dx * dx + dy * dy + dz * dz;
+                if len_sq < 0.000001 {
+                    continue;
+                }
+                let length = len_sq.sqrt();
+                let nx = dx / length;
+                let ny = dy / length;
+                let nz = dz / length;
+
+                let (ax, ay, az) = if nx.abs() < 0.99 {
+                    let len = (nz * nz + nx * nx).sqrt();
+                    (nz / len, 0.0, -nx / len)
+                } else {
+                    let len = (nz * nz + ny * ny).sqrt();
+                    (0.0, nz / len, -ny / len)
+                };
+                let zx = ny * az - nz * ay;
+                let zy = nz * ax - nx * az;
+                let zz = nx * ay - ny * ax;
+
+                let world = Matrix4x4 {
+                    M11: radius * ax, M12: radius * ay, M13: radius * az, M14: 0.0,
+                    M21: dx,          M22: dy,          M23: dz,          M24: 0.0,
+                    M31: radius * zx, M32: radius * zy, M33: radius * zz, M34: 0.0,
+                    M41: sx,          M42: sy,          M43: sz,          M44: 1.0,
+                };
+                device.SetTransform(D3DTS_WORLD, &world).ok();
+                self.draw_raw(device);
+            }
+
+            // ── Один restore ──
+            device.SetFVF(saved_fvf).ok();
+            device.SetRenderState(D3DRS_ZENABLE, saved_zenable).ok();
+            device.SetRenderState(D3DRS_ZWRITEENABLE, saved_zwrite).ok();
+            device.SetRenderState(D3DRS_ZFUNC, saved_zfunc).ok();
+            device.SetRenderState(D3DRS_LIGHTING, saved_lighting).ok();
+            device.SetRenderState(D3DRS_CULLMODE, saved_cull).ok();
+            device.SetRenderState(D3DRS_ALPHABLENDENABLE, saved_alphablend).ok();
+            device.SetRenderState(D3DRS_SRCBLEND, saved_srcblend).ok();
+            device.SetRenderState(D3DRS_DESTBLEND, saved_dstblend).ok();
+            device.SetRenderState(D3DRS_ALPHATESTENABLE, saved_alphatest).ok();
+            device.SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE, saved_sepblend).ok();
+            device.SetRenderState(D3DRS_COLORVERTEX, saved_covertex).ok();
+            device.SetRenderState(D3DRS_FILLMODE, saved_fill).ok();
+            device.SetRenderState(D3DRS_AMBIENT, saved_ambient).ok();
+            device.SetRenderState(D3DRS_TEXTUREFACTOR, saved_texfactor).ok();
+            device.SetTextureStageState(0, D3DTSS_COLOROP, saved_colorop).ok();
+            device.SetTextureStageState(0, D3DTSS_ALPHAOP, saved_alphaop).ok();
+        }
+    }
 }
 
 // ── Sphere renderer ─────────────────────────────────────────────────
