@@ -3,11 +3,14 @@ name: world-to-screen
 description: Project a 3D world position to 2D screen coordinates in an MGR:R hudhook/imgui-rs overlay using the game's camera matrices read from memory
 source: auto-skill
 extracted_at: '2026-07-13T15:00:00.000Z'
+updated_at: '2026-07-20T14:30:00.000Z'
 ---
 
 # World-to-Screen Projection (MGR:R + DirectX 9 + imgui-rs)
 
 Project a 3D world position to 2D screen coordinates using the game's camera `view × projection` matrix, read directly from game memory. Draw screen-space markers via imgui foreground draw lists, with on-screen and off-screen (edge-clamped) styling.
+
+**Location:** All functions live in `src/overlay.rs` — `world_to_screen`, `format_duration_ms`, `draw_world_pos`. They are pure functions with no dependency on `HelloHud` state. Import with `use crate::overlay::*` or call as `overlay::draw_world_pos(...)`.
 
 ## When to use
 

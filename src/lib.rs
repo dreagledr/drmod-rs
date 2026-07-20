@@ -11,6 +11,7 @@ mod net;
 mod overlay;
 pub mod protocol;
 mod segment;
+mod ui;
 
 use d3d_render::CylinderRenderer;
 
@@ -73,30 +74,31 @@ fn init_db() -> (String, Option<String>, Option<Connection>) {
 }
 
 struct HelloHud {
-    current_run_start: String,
-    prev_run_start: Option<String>,
-    db_conn: Option<Connection>,
-    base_addr: usize,
-    static_ptr_addr: Option<NonNull<u8>>,
-    player_manager_addr: Option<NonNull<u8>>,
-    camera_ptr_addr: Option<NonNull<u8>>,
-    saved_position: Option<(f32, f32, f32)>,
+    pub(crate) current_run_start: String,
+    pub(crate) prev_run_start: Option<String>,
+    pub(crate) db_conn: Option<Connection>,
+    pub(crate) base_addr: usize,
+    pub(crate) static_ptr_addr: Option<NonNull<u8>>,
+    pub(crate) player_manager_addr: Option<NonNull<u8>>,
+    pub(crate) camera_ptr_addr: Option<NonNull<u8>>,
+    pub(crate) saved_position: Option<(f32, f32, f32)>,
     // Segment tracking
-    active_segment: Option<segment::ActiveSegment>,
+    pub(crate) active_segment: Option<segment::ActiveSegment>,
     segment_was_active: bool,
-    position_buffer: Vec<(segment::Vec3, i64)>,
-    ghost_positions: Vec<(segment::Vec3, i64)>,
-    ghost_label: String,
+    pub(crate) position_buffer: Vec<(segment::Vec3, i64)>,
+    pub(crate) ghost_positions: Vec<(segment::Vec3, i64)>,
+    pub(crate) ghost_label: String,
     // 3D test dummy
     dummy: CylinderRenderer,
-    d3d_frame_count: u32,
-    d3d_last_error: String,
+    pub(crate) cached_player_obj_ptr: *mut u8,
+    pub(crate) d3d_frame_count: u32,
+    pub(crate) d3d_last_error: String,
     // Multiplayer
-    net_client: Option<net::NetClient>,
-    player_name: String,
-    room_name: String,
-    server_addr: String,
-    last_sent_pos: Option<segment::Vec3>,
+    pub(crate) net_client: Option<net::NetClient>,
+    pub(crate) player_name: String,
+    pub(crate) room_name: String,
+    pub(crate) server_addr: String,
+    pub(crate) last_sent_pos: Option<segment::Vec3>,
     last_sent_mission_id: i32,
 }
 
@@ -146,6 +148,7 @@ impl HelloHud {
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
+            cached_player_obj_ptr: std::ptr::null_mut(),
             d3d_frame_count: 0,
             d3d_last_error: String::new(),
             net_client: None,
@@ -155,6 +158,151 @@ impl HelloHud {
             last_sent_pos: None,
             last_sent_mission_id: 0,
         }
+    }
+    fn read_game_state(&mut self) -> ui::UiState {
+        let mut state = ui::UiState {
+            mission_id: 0,
+            mission_id_raw: 0,
+            mission_name: String::new(),
+            menu_status_raw: 0,
+            menu_status_valid: false,
+            menu_status: game::GameMenuStatus::None,
+            sword_state: 0,
+            sword_hidden: 0,
+            main_weapon: 0,
+            custom_weapon: 0,
+            sub_weapon: 0,
+            static_ptr_value: 0,
+            position: None,
+            hp: 0,
+            player_found: false,
+            segment_action: segment::SegmentAction::None,
+        };
+
+        if self.base_addr != 0 {
+            // --- MISSION ---
+            let mission_id_addr = self.base_addr + 0x1764670;
+            state.mission_id_raw = unsafe { *(mission_id_addr as *const i32) };
+            let (name_addr, eff_id) = if state.mission_id_raw != 0 {
+                (self.base_addr + 0x1764674, state.mission_id_raw)
+            } else {
+                (self.base_addr + 0x1766008, unsafe {
+                    *((self.base_addr + 0x1766004) as *const i32)
+                })
+            };
+            state.mission_id = eff_id;
+            state.mission_name = unsafe { std::ffi::CStr::from_ptr(name_addr as *const i8) }
+                .to_string_lossy()
+                .into_owned();
+
+            // --- GAME MENU STATUS ---
+            let menu_status_addr = self.base_addr + 0x17E9F9C;
+            state.menu_status_raw = unsafe { *(menu_status_addr as *const i32) };
+            if (0..=18).contains(&state.menu_status_raw) {
+                state.menu_status = unsafe {
+                    std::mem::transmute::<i32, game::GameMenuStatus>(state.menu_status_raw)
+                };
+                state.menu_status_valid = true;
+            }
+        }
+
+        // --- Pl0000 / Player ---
+        if let Some(static_ptr) = self.static_ptr_addr {
+            state.static_ptr_value = static_ptr.as_ptr() as usize;
+            self.cached_player_obj_ptr =
+                unsafe { *(static_ptr.as_ptr() as *const *mut u8) };
+            if !self.cached_player_obj_ptr.is_null() {
+                state.player_found = true;
+                state.sword_state =
+                    unsafe { *(self.cached_player_obj_ptr.add(0x13FC) as *const i32) };
+                state.sword_hidden =
+                    unsafe { *(self.cached_player_obj_ptr.add(0xB74) as *const i32) };
+                state.position = Some(segment::Vec3 {
+                    x: unsafe { *(self.cached_player_obj_ptr.add(0x50) as *const f32) },
+                    y: unsafe { *(self.cached_player_obj_ptr.add(0x54) as *const f32) },
+                    z: unsafe { *(self.cached_player_obj_ptr.add(0x58) as *const f32) },
+                });
+                state.hp = unsafe { *(self.cached_player_obj_ptr.add(0x870) as *const i32) };
+            }
+        }
+
+        // --- WEAPONS ---
+        if let Some(pm_addr) = self.player_manager_addr {
+            let pm_ptr = pm_addr.as_ptr();
+            state.main_weapon = unsafe { *(pm_ptr.add(0xE0) as *const i32) };
+            state.custom_weapon = unsafe { *(pm_ptr.add(0xE4) as *const i32) };
+            state.sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
+        }
+
+        // --- SEGMENT ACTION ---
+        state.segment_action = segment::segment_action(
+            state.mission_id,
+            &state.mission_name,
+            state.position,
+            state.menu_status,
+            self.active_segment.as_ref(),
+        );
+
+        // --- APPLY SEGMENT ACTION ---
+        match state.segment_action {
+            segment::SegmentAction::Reset => {
+                self.position_buffer.clear();
+                self.ghost_positions.clear();
+                self.ghost_label.clear();
+                self.active_segment = None;
+            }
+            segment::SegmentAction::End => {
+                if let (Some(seg), Some(ref conn)) =
+                    (self.active_segment.as_ref(), self.db_conn.as_ref())
+                {
+                    segment::finish_segment(conn, seg, &self.position_buffer);
+                }
+                self.position_buffer.clear();
+                self.ghost_positions.clear();
+                self.ghost_label.clear();
+                self.active_segment = None;
+            }
+            segment::SegmentAction::Start => {
+                self.position_buffer.clear();
+                self.ghost_positions.clear();
+                self.ghost_label.clear();
+
+                let fastest_ms = if let Some(ref conn) = self.db_conn {
+                    let (ms, positions) = segment::load_best_ghost(conn, state.mission_id);
+                    if let Some(best_ms) = ms {
+                        self.ghost_label =
+                            format!("Best {}", overlay::format_duration_ms(best_ms as u64));
+                    }
+                    self.ghost_positions = positions;
+                    ms
+                } else {
+                    None
+                };
+
+                self.active_segment = Some(segment::ActiveSegment {
+                    start_instant: Instant::now(),
+                    started_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
+                    mission_id: state.mission_id,
+                    mission_name: state.mission_name.clone(),
+                    fastest_ms,
+                });
+            }
+            segment::SegmentAction::None => {}
+        }
+
+        // --- POSITION BUFFER PUSH ---
+        if state.player_found {
+            if let (Some(ref seg), Some(pos)) =
+                (self.active_segment.as_ref(), state.position)
+            {
+                let dur = seg.start_instant.elapsed().as_millis() as i64;
+                self.position_buffer.push((pos, dur));
+            }
+        }
+
+        self.segment_was_active = self.active_segment.is_some();
+
+        state
     }
 }
 
@@ -293,399 +441,34 @@ impl ImguiRenderLoop for HelloHud {
         }
         // ─────────────────────────────────────────────────────────────
 
-        ui.window("##hello")
-            .size([320., 600.], Condition::Always)
-            .build(|| {
-                if let Some(ref seg) = self.active_segment {
-                    let elapsed_ms = seg.start_instant.elapsed().as_millis() as u64;
-                    ui.text(format!("Segment: {}", overlay::format_duration_ms(elapsed_ms)));
-                    if let Some(best_ms) = seg.fastest_ms {
-                        ui.text(format!("Best:    {}", overlay::format_duration_ms(best_ms as u64)));
-                    } else {
-                        ui.text_colored([0.5, 0.5, 0.5, 1.0], "Best:    N/A");
-                    }
-                } else {
-                    ui.text_colored([0.5, 0.5, 0.5, 1.0], "No active segment");
+        let ui_state = self.read_game_state();
+
+        // Key handlers (NumPad1/2/3)
+        if !self.cached_player_obj_ptr.is_null() {
+            let p = self.cached_player_obj_ptr;
+            if ui.is_key_pressed_no_repeat(Key::Keypad1) {
+                unsafe {
+                    *(p.add(0x54) as *mut f32) += 10.0;
                 }
-                ui.text(format!("Current run:  {}", self.current_run_start));
-                if let Some(ref prev) = self.prev_run_start {
-                    ui.text(format!("Previous run: {}", prev));
-                } else {
-                    ui.text_colored([0.5, 0.5, 0.5, 1.0], "Previous run: N/A");
+            }
+            if ui.is_key_pressed_no_repeat(Key::Keypad2) {
+                unsafe {
+                    let x = *(p.add(0x50) as *const f32);
+                    let y = *(p.add(0x54) as *const f32);
+                    let z = *(p.add(0x58) as *const f32);
+                    self.saved_position = Some((x, y, z));
                 }
-
-                // --- MISSION ---
-                let mut mission_id: i32 = 0;
-                let mission_id_raw: i32;
-                let mut mission_name_str = String::new();
-                if self.base_addr != 0 {
-                    let mission_id_addr = self.base_addr + 0x1764670;
-                    mission_id_raw = unsafe { *(mission_id_addr as *const i32) };
-                    let (name_addr, eff_id) = if mission_id_raw != 0 {
-                        (self.base_addr + 0x1764674, mission_id_raw)
-                    } else {
-                        (self.base_addr + 0x1766008, unsafe {
-                            *((self.base_addr + 0x1766004) as *const i32)
-                        })
-                    };
-                    mission_id = eff_id;
-                    mission_name_str = unsafe { std::ffi::CStr::from_ptr(name_addr as *const i8) }
-                        .to_string_lossy()
-                        .into_owned();
-                    ui.text(format!(
-                        "Mission: {} (0x{:04X}) [raw: 0x{:04X}]",
-                        mission_name_str, mission_id, mission_id_raw
-                    ));
+            }
+            if ui.is_key_pressed_no_repeat(Key::Keypad3)
+                && let Some((sx, sy, sz)) = self.saved_position
+            {
+                unsafe {
+                    *(p.add(0x50) as *mut f32) = sx;
+                    *(p.add(0x54) as *mut f32) = sy;
+                    *(p.add(0x58) as *mut f32) = sz;
                 }
-
-                // --- GAME MENU STATUS ---
-                let mut menu_status = game::GameMenuStatus::None;
-                if self.base_addr != 0 {
-                    let menu_status_addr = self.base_addr + 0x17E9F9C;
-                    let raw_status = unsafe { *(menu_status_addr as *const i32) };
-                    if (0..=18).contains(&raw_status) {
-                        // SAFETY: GameMenuStatus is repr(i32) с значениями 0..=18
-                        let status =
-                            unsafe { std::mem::transmute::<i32, game::GameMenuStatus>(raw_status) };
-                        let color = if status.is_in_game() {
-                            [0.0, 1.0, 0.0, 1.0]
-                        } else {
-                            [1.0, 1.0, 0.0, 1.0]
-                        };
-                        ui.text_colored(color, format!("Status: {}", status.name()));
-                        menu_status = status;
-                    } else {
-                        ui.text_colored(
-                            [1.0, 0.5, 0.0, 1.0],
-                            format!("Status: Unknown ({})", raw_status),
-                        );
-                    }
-                }
-
-                // --- ДЕБАГ ПОЛЕЙ Pl0000 ---
-                if let Some(static_ptr) = self.static_ptr_addr {
-                    unsafe {
-                        let pl0000_ptr = *(static_ptr.as_ptr() as *const *mut u8);
-                        if !pl0000_ptr.is_null() {
-                            // m_SwordState (+0x13FC) — int
-                            let sword_state = *(pl0000_ptr.add(0x13FC) as *const i32);
-                            // m_bSwordHidden (+0xB74) — int (bool)
-                            let sword_hidden = *(pl0000_ptr.add(0xB74) as *const i32);
-
-                            ui.separator();
-                            ui.text("Pl0000 fields:");
-                            ui.text(format!("SwordState: {}", sword_state));
-                            ui.text(format!("SwordHidden: {}", sword_hidden));
-                        }
-                    }
-                }
-
-                let Some(static_ptr_addr) = self.static_ptr_addr else {
-                    ui.text_colored([1.0, 0.0, 0.0, 1.0], "Module not found!");
-                    return;
-                };
-
-                // --- WEAPONS ---
-                if let Some(pm_addr) = self.player_manager_addr {
-                    ui.separator();
-                    ui.text("Weapons:");
-
-                    let pm_ptr = pm_addr.as_ptr();
-                    let main_weapon = unsafe { *(pm_ptr.add(0xE0) as *const i32) };
-                    let custom_weapon = unsafe { *(pm_ptr.add(0xE4) as *const i32) };
-                    let sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
-
-                    ui.text(format!("Main: {}", main_weapon));
-                    ui.text(format!(
-                        "Custom: {} ({})",
-                        custom_weapon,
-                        game::custom_weapon_name(custom_weapon)
-                    ));
-                    ui.text(format!("Sub: {}", sub_weapon));
-                }
-
-                ui.text(format!(
-                    "Static Ptr Addr: 0x{:08X}",
-                    static_ptr_addr.as_ptr() as usize
-                ));
-
-                // --- ЧИТАЕМ КООРДИНАТЫ ИЗ ТАБЛИЦЫ CE ---
-
-                // 1. Адрес статического указателя: Base + 0x177B4A4
-                let static_ptr_addr = static_ptr_addr.as_ptr();
-
-                // Безопасное чтение указателя на объект игрока
-                let player_obj_ptr = unsafe {
-                    // Приводим адрес к типу "указатель на указатель"
-                    let ptr_to_player_ptr = static_ptr_addr as *const *mut u8;
-
-                    // Проверяем, что сам адрес указателя валиден
-                    if ptr_to_player_ptr.is_null() {
-                        std::ptr::null_mut()
-                    } else {
-                        // Разыменовываем, чтобы получить указатель на объект игрока
-                        *ptr_to_player_ptr
-                    }
-                };
-
-                // Читаем позицию (или None, если игрока нет)
-                let pos_opt = if !player_obj_ptr.is_null() {
-                    let pos_x = unsafe { *(player_obj_ptr.add(0x50) as *const f32) };
-                    let pos_y = unsafe { *(player_obj_ptr.add(0x54) as *const f32) };
-                    let pos_z = unsafe { *(player_obj_ptr.add(0x58) as *const f32) };
-                    Some(segment::Vec3 {
-                        x: pos_x,
-                        y: pos_y,
-                        z: pos_z,
-                    })
-                } else {
-                    None
-                };
-
-                // --- SEGMENT ACTION ---
-                let action = segment::segment_action(
-                    mission_id,
-                    &mission_name_str,
-                    pos_opt,
-                    menu_status,
-                    self.active_segment.as_ref(),
-                );
-
-                // --- SEGMENT DEBUG ---
-                if self.active_segment.is_some() {
-                    let action_name = match action {
-                        segment::SegmentAction::None => "None",
-                        segment::SegmentAction::Start => "Start",
-                        segment::SegmentAction::End => "End",
-                        segment::SegmentAction::Reset => "Reset",
-                    };
-                    ui.text_colored(
-                        [0.5, 0.8, 1.0, 1.0],
-                        format!(
-                            "SEGDEBUG: seg.mission={} cur.mission={} status={} ({}) => {}",
-                            self.active_segment.as_ref().unwrap().mission_id,
-                            mission_id,
-                            menu_status.name(),
-                            menu_status as i32,
-                            action_name,
-                        ),
-                    );
-                }
-
-                match action {
-                    segment::SegmentAction::Reset => {
-                        self.position_buffer.clear();
-                        self.ghost_positions.clear();
-                        self.ghost_label.clear();
-                        self.active_segment = None;
-                    }
-                    segment::SegmentAction::End => {
-                        if let (Some(ref seg), Some(ref conn)) =
-                            (self.active_segment.as_ref(), self.db_conn.as_ref())
-                        {
-                            segment::finish_segment(conn, seg, &self.position_buffer);
-                        }
-                        self.position_buffer.clear();
-                        self.ghost_positions.clear();
-                        self.ghost_label.clear();
-                        self.active_segment = None;
-                    }
-                    segment::SegmentAction::Start => {
-                        self.position_buffer.clear();
-                        self.ghost_positions.clear();
-                        self.ghost_label.clear();
-
-                        let fastest_ms = if let Some(ref conn) = self.db_conn {
-                            let (ms, positions) = segment::load_best_ghost(conn, mission_id);
-                            if let Some(best_ms) = ms {
-                                self.ghost_label =
-                                    format!("Best {}", overlay::format_duration_ms(best_ms as u64));
-                            }
-                            self.ghost_positions = positions;
-                            ms
-                        } else {
-                            None
-                        };
-
-                        self.active_segment = Some(segment::ActiveSegment {
-                            start_instant: Instant::now(),
-                            started_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                            mission_id,
-                            mission_name: mission_name_str.clone(),
-                            fastest_ms,
-                        });
-                    }
-                    segment::SegmentAction::None => {}
-                }
-
-                let mut hp: i32 = 0;
-
-                if player_obj_ptr.is_null() {
-                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "Player object pointer is NULL");
-                    ui.text("Убедитесь, что вы в игре (не в меню).");
-                } else {
-                    ui.text_colored([0.0, 1.0, 0.0, 1.0], "Player found!");
-
-                    // NumPad1: +3m к высоте
-                    if ui.is_key_pressed_no_repeat(Key::Keypad1) {
-                        unsafe {
-                            let y_ptr: *mut f32 = player_obj_ptr.add(0x54) as *mut f32;
-                            *y_ptr += 10.0;
-                        }
-                    }
-
-                    // NumPad2: сохранение позиции
-                    if ui.is_key_pressed_no_repeat(Key::Keypad2) {
-                        unsafe {
-                            let x = *(player_obj_ptr.add(0x50) as *const f32);
-                            let y = *(player_obj_ptr.add(0x54) as *const f32);
-                            let z = *(player_obj_ptr.add(0x58) as *const f32);
-                            self.saved_position = Some((x, y, z));
-                        }
-                    }
-
-                    // NumPad3: телепорт на сохранённую позицию
-                    if ui.is_key_pressed_no_repeat(Key::Keypad3) {
-                        if let Some((sx, sy, sz)) = self.saved_position {
-                            unsafe {
-                                *(player_obj_ptr.add(0x50) as *mut f32) = sx;
-                                *(player_obj_ptr.add(0x54) as *mut f32) = sy;
-                                *(player_obj_ptr.add(0x58) as *mut f32) = sz;
-                            }
-                        }
-                    }
-
-                    // Position buffer push
-                    if self.active_segment.is_some() {
-                        if let (Some(ref seg), Some(pos)) = (self.active_segment.as_ref(), pos_opt)
-                        {
-                            let dur = seg.start_instant.elapsed().as_millis() as i64;
-                            self.position_buffer.push((pos, dur));
-                        }
-                    }
-
-                    // Дополнительно: HP (offset 0x870)
-                    hp = unsafe { *(player_obj_ptr.add(0x870) as *const i32) };
-                    ui.separator();
-                    ui.text(format!("HP: {}", hp));
-                    ui.text("NumPad1: +10m Y");
-                    ui.text("NumPad2: Save position");
-                    ui.text("NumPad3: Teleport");
-                }
-
-                ui.separator();
-                ui.text("Position:");
-                if let Some(pos) = pos_opt {
-                    ui.text(format!("X: {:.3}", pos.x));
-                    ui.text(format!("Y: {:.3}", pos.y));
-                    ui.text(format!("Z: {:.3}", pos.z));
-                } else {
-                    ui.text("X: Null");
-                    ui.text("Y: Null");
-                    ui.text("Z: Null");
-                }
-
-                // Сохранённая позиция
-                ui.separator();
-                ui.text("Saved Position:");
-                if let Some((sx, sy, sz)) = self.saved_position {
-                    ui.text(format!("X: {:.3}", sx));
-                    ui.text(format!("Y: {:.3}", sy));
-                    ui.text(format!("Z: {:.3}", sz));
-
-                    // --- ДЕБАГ: проекция на экран ---
-                    ui.separator();
-                    ui.text("Screen projection debug:");
-                    match self.camera_ptr_addr {
-                        None => {
-                            ui.text_colored([1.0, 0.5, 0.0, 1.0], "camera_ptr_addr is None");
-                        }
-                        Some(cam_addr) => {
-                            // cam_addr.as_ptr() УЖЕ указывает на объект cCameraGame
-                            // (SDK: *(cCameraGame*)(base + 0x17EA1D0))
-                            let cam_ptr = cam_addr.as_ptr();
-
-                            let view_proj = unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
-                            let cam_x = unsafe { *(cam_ptr.add(0x1B0) as *const f32) };
-                            let cam_y = unsafe { *(cam_ptr.add(0x1B4) as *const f32) };
-                            let cam_z = unsafe { *(cam_ptr.add(0x1B8) as *const f32) };
-                            let screen_size = ui.io().display_size;
-
-                            ui.text(format!("Camera ptr: 0x{:08X}", cam_ptr as usize));
-                            ui.text(format!("Cam pos: {:.1} {:.1} {:.1}", cam_x, cam_y, cam_z));
-                            ui.text(format!(
-                                "Screen: {:.0}x{:.0}",
-                                screen_size[0], screen_size[1]
-                            ));
-                            ui.text(format!(
-                                "VP[0..4]: {:.3} {:.3} {:.3} {:.3}",
-                                view_proj[0], view_proj[1], view_proj[2], view_proj[3]
-                            ));
-                            ui.text(format!(
-                                "VP[4..8]: {:.3} {:.3} {:.3} {:.3}",
-                                view_proj[4], view_proj[5], view_proj[6], view_proj[7]
-                            ));
-
-                            match overlay::world_to_screen(
-                                (sx, sy, sz),
-                                &view_proj,
-                                screen_size,
-                                (cam_x, cam_y, cam_z),
-                            ) {
-                                Some(([scr_x, scr_y], dist)) => {
-                                    let on_scr = scr_x >= 0.0
-                                        && scr_x <= screen_size[0]
-                                        && scr_y >= 0.0
-                                        && scr_y <= screen_size[1];
-                                    let color = if on_scr {
-                                        [0.0, 1.0, 0.0, 1.0]
-                                    } else {
-                                        [1.0, 0.65, 0.0, 1.0]
-                                    };
-                                    ui.text_colored(
-                                        color,
-                                        format!(
-                                            "Screen: {:.0} {:.0}  Dist: {:.1}m  {}",
-                                            scr_x,
-                                            scr_y,
-                                            dist,
-                                            if on_scr { "ON" } else { "OFF" }
-                                        ),
-                                    );
-                                }
-                                None => {
-                                    ui.text_colored([1.0, 0.3, 0.3, 1.0], "Behind camera (w <= 0)");
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    ui.text_colored([0.5, 0.5, 0.5, 1.0], "не сохранена");
-                }
-
-                self.segment_was_active = self.active_segment.is_some();
-
-                // --- D3D DEBUG ---
-                ui.separator();
-                ui.text_colored(
-                    [0.5, 1.0, 0.5, 1.0],
-                    format!("D3D frames: {}", self.d3d_frame_count),
-                );
-                if !self.d3d_last_error.is_empty() {
-                    ui.text_colored(
-                        [1.0, 0.5, 0.0, 1.0],
-                        format!("D3D error: {}", self.d3d_last_error),
-                    );
-                }
-
-                // --- ВЫХОД ---
-                ui.separator();
-                if ui.button("Выход / Выгрузить DLL") {
-                    // hudhook::eject() корректно снимает хуки и выгружает DLL,
-                    // не убивая окно игры
-                    hudhook::eject();
-                }
-            });
+            }
+        }
 
         // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ ---
         if let (Some((sx, sy, sz)), Some(camera_addr)) = (self.saved_position, self.camera_ptr_addr)
@@ -750,76 +533,9 @@ impl ImguiRenderLoop for HelloHud {
             }
         }
 
-        // ── Multiplayer UI ─────────────────────────────────────────
-        ui.window("Multiplayer")
-            .size([300.0, 250.0], Condition::FirstUseEver)
-            .build(|| {
-                ui.input_text("Server", &mut self.server_addr)
-                    .hint("127.0.0.1:5222")
-                    .build();
-                ui.input_text("Name", &mut self.player_name).build();
-                ui.input_text("Room", &mut self.room_name).build();
+        ui::render_main_window(ui, self, &ui_state);
 
-                if self.net_client.is_none() {
-                    if ui.button("Connect") {
-                        match net::NetClient::new(
-                            &self.server_addr,
-                            &self.player_name,
-                            &self.room_name,
-                        ) {
-                            Ok(nc) => {
-                                self.net_client = Some(nc);
-                            }
-                            Err(e) => {
-                                // silently fail — user sees status unchanged
-                                let _ = e;
-                            }
-                        }
-                    }
-                } else {
-                    if ui.button("Disconnect") {
-                        self.net_client = None;
-                        self.last_sent_pos = None;
-                    }
-                }
-
-                if let Some(nc) = &self.net_client {
-                    ui.separator();
-                    if nc.my_id != 0 {
-                        ui.text(format!("Status: Connected (ID: {})", nc.my_id));
-                    } else {
-                        ui.text_colored([1.0, 1.0, 0.0, 1.0], "Status: Waiting for ID...");
-                    }
-
-                    ui.separator();
-                    ui.text("Players:");
-                    let my_mission = self
-                        .active_segment
-                        .as_ref()
-                        .map(|s| s.mission_name.as_str())
-                        .unwrap_or("-");
-                    ui.text(format!("{} (you) - {}", self.player_name, my_mission));
-
-                    for rp in &nc.remote_players {
-                        let mission = format!("0x{:04X}", rp.mission_id);
-                        let active =
-                            if self.active_segment.as_ref().map_or(false, |s| {
-                                s.mission_id == rp.mission_id
-                            }) {
-                                " [active]"
-                            } else {
-                                ""
-                            };
-                        let mock_tag = if rp.is_mock { " [mock]" } else { "" };
-                        let age = rp.last_update.elapsed().as_secs();
-                        let stale = if age > 5 { " (stale)" } else { "" };
-                        ui.text(format!(
-                            "{}{} - {} HP:{}{}{}",
-                            rp.name, mock_tag, mission, rp.hp, active, stale
-                        ));
-                    }
-                }
-            });
+        ui::render_multiplayer_window(ui, self);
     }
 }
 
