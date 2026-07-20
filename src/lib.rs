@@ -11,9 +11,11 @@ mod net;
 mod overlay;
 pub mod protocol;
 mod segment;
+mod skeleton;
 mod ui;
 
 use d3d_render::CylinderRenderer;
+use skeleton::BonePos;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
 
@@ -82,6 +84,7 @@ struct HelloHud {
     pub(crate) player_manager_addr: Option<NonNull<u8>>,
     pub(crate) camera_ptr_addr: Option<NonNull<u8>>,
     pub(crate) saved_position: Option<(f32, f32, f32)>,
+    pub(crate) saved_bones: Option<Vec<BonePos>>,
     // Segment tracking
     pub(crate) active_segment: Option<segment::ActiveSegment>,
     segment_was_active: bool,
@@ -143,6 +146,7 @@ impl HelloHud {
             player_manager_addr,
             camera_ptr_addr,
             saved_position: None,
+            saved_bones: None,
             active_segment: None,
             segment_was_active: false,
             position_buffer: Vec::new(),
