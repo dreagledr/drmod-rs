@@ -2,39 +2,7 @@
 
 use imgui::Ui;
 
-// ── Projection helper ───────────────────────────────────────────────
-
-fn world_to_screen(
-    world_pos: (f32, f32, f32),
-    view_proj: &[f32; 16],
-    screen_size: [f32; 2],
-    camera_pos: (f32, f32, f32),
-) -> Option<([f32; 2], f32)> {
-    let (wx, wy, wz) = world_pos;
-    let (cx, cy, cz) = camera_pos;
-
-    let clip_x = wx * view_proj[0] + wy * view_proj[4] + wz * view_proj[8] + view_proj[12];
-    let clip_y = wx * view_proj[1] + wy * view_proj[5] + wz * view_proj[9] + view_proj[13];
-    let clip_w = wx * view_proj[3] + wy * view_proj[7] + wz * view_proj[11] + view_proj[15];
-
-    if clip_w <= 0.0 {
-        return None;
-    }
-
-    let inv_w = 1.0 / clip_w;
-    let ndc_x = clip_x * inv_w;
-    let ndc_y = clip_y * inv_w;
-
-    let screen_x = (ndc_x * 0.5 + 0.5) * screen_size[0];
-    let screen_y = (1.0 - (ndc_y * 0.5 + 0.5)) * screen_size[1];
-
-    let dx = wx - cx;
-    let dy = wy - cy;
-    let dz = wz - cz;
-    let dist = (dx * dx + dy * dy + dz * dz).sqrt();
-
-    Some(([screen_x, screen_y], dist))
-}
+use crate::overlay::world_to_screen;
 
 // ── cModelBase offsets (от начала cParts / player_obj_ptr) ─────────
 const BONESET_PBONES_OFFSET: usize = 0x350; // BoneSet::m_pBones (cParts*)
@@ -137,7 +105,7 @@ pub fn draw_skeleton_overlay(ui: &Ui, bones: &[BonePos], camera_ptr: *const u8, 
 
     let projections: Vec<Option<([f32; 2], f32)>> = bones
         .iter()
-        .map(|b| world_to_screen((b.x, b.y, b.z), &view_proj, [sw, sh], (cam_x, cam_y, cam_z)))
+        .map(|b| world_to_screen((b.x, b.y, b.z), &view_proj, [0.0, 0.0, sw, sh], (cam_x, cam_y, cam_z)))
         .collect();
 
     let draw_list = ui.get_foreground_draw_list();
