@@ -1,12 +1,34 @@
 use drmod_rs_lib::DEFAULT_TITLE;
 use hudhook::inject::Process;
 use std::env;
+use std::path::PathBuf;
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
-use windows::core::*;
+use windows::core::{h, PCWSTR};
+
+// DLL embedded at compile time. Binary crate compiles after the library,
+// so the DLL already exists in the target directory.
+#[cfg(debug_assertions)]
+const EMBEDDED_DLL: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/target/i686-pc-windows-msvc/debug/drmod_rs_lib.dll"
+));
+#[cfg(not(debug_assertions))]
+const EMBEDDED_DLL: &[u8] = include_bytes!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/target/i686-pc-windows-msvc/release/drmod_rs_lib.dll"
+));
 
 fn main() {
     let title = match parse_name_args(env::args()) {
         Ok(t) => t,
+        Err(e) => {
+            show_msgbox(&e);
+            return;
+        }
+    };
+
+    let dll_path = match extract_dll() {
+        Ok(p) => p,
         Err(e) => {
             show_msgbox(&e);
             return;
@@ -24,20 +46,24 @@ fn main() {
         }
     };
 
-    let exe_path = env::current_exe().expect("Failed to get current exe path");
-    let exe_dir = exe_path.parent().expect("Failed to get parent directory");
-    let dll_path = exe_dir.join("drmod_rs_lib.dll");
-    if !dll_path.exists() {
-        show_msgbox(&format!(
-            "Не смогли найти библиотеку с модом в {:?}",
-            dll_path
-        ));
-        return;
-    }
-
     if let Err(e) = process.inject(dll_path) {
         show_msgbox(&format!("Не смогли внедрить мод в MGR.\n{}", e));
     }
+}
+
+/// Extract embedded DLL to %LOCALAPPDATA%\drmod\ dir.
+fn extract_dll() -> std::result::Result<PathBuf, String> {
+    let localappdata =
+        env::var("LOCALAPPDATA").map_err(|_| "Переменная LOCALAPPDATA не найдена".to_string())?;
+    let drmod_dir = format!("{}\\drmod", localappdata);
+    let dll_path = PathBuf::from(format!("{}\\drmod_rs_lib.dll", drmod_dir));
+
+    std::fs::create_dir_all(&drmod_dir)
+        .map_err(|e| format!("Не удалось создать {}: {}", drmod_dir, e))?;
+    std::fs::write(&dll_path, EMBEDDED_DLL)
+        .map_err(|e| format!("Не удалось записать DLL в {}: {}", dll_path.display(), e))?;
+
+    Ok(dll_path)
 }
 
 fn parse_name_args(mut args: env::Args) -> std::result::Result<String, String> {

@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec3 {
     pub x: f32,
     pub y: f32,
@@ -11,13 +11,76 @@ pub struct Vec3 {
 }
 
 static START_CONDITIONS: &[(i32, Vec3)] = &[
-    //R-01 mission stats, R-02 start
+    //R-00 start
     (
-        280,
+        0x0A10,
+        Vec3 {
+            x: 37.7,
+            y: 10.1,
+            z: -100.0,
+        },
+    ),
+    //R-01 beach start
+    (
+        0x0118,
         Vec3 {
             x: -24.7,
             y: 12.14,
             z: 120.7,
+        },
+    ),
+    //R-02 mexico start
+    (
+        0x0210,
+        Vec3 {
+            x: -88.0,
+            y: -0.56,
+            z: 106.0,
+        },
+    ),
+    //R-03 start
+    (
+        0x0310,
+        Vec3 {
+            x: 2.86,
+            y: 0.0,
+            z: 70.91,
+        },
+    ),
+    //R-04 start
+    (
+        0x0410,
+        Vec3 {
+            x: 0.0,
+            y: 13.0,
+            z: 48.0,
+        },
+    ),
+    //R-05 start
+    (
+        0x0510,
+        Vec3 {
+            x: 534.7,
+            y: -324.0,
+            z: -814.0,
+        },
+    ),
+    //R-06 start
+    (
+        0x0610,
+        Vec3 {
+            x: -32.63,
+            y: 9.3,
+            z: 0.03,
+        },
+    ),
+    //R-07 start
+    (
+        0x0710,
+        Vec3 {
+            x: 74.24,
+            y: 15.59,
+            z: -66.14,
         },
     ),
 ];
@@ -56,10 +119,72 @@ pub fn segment_action(
             return SegmentAction::Reset;
         }
 
-        // Хардкод: R-01 → R-02 переход (mission 280 → 210 через InMenu)
-        if seg.mission_id == 280 && game_menu_status == GameMenuStatus::InMenu && mission_id == 528
+        // Хардкод: R-00 → R-01 переход
+        if seg.mission_id == 0x0A10
+            && game_menu_status == GameMenuStatus::InMenu
+            && mission_id == 0x0118
         {
             return SegmentAction::End;
+        }
+
+        // Хардкод: R-01 → R-02 переход (mission 280 → 210 через InMenu)
+        if seg.mission_id == 0x0118
+            && game_menu_status == GameMenuStatus::InMenu
+            && mission_id == 0x0210
+        {
+            return SegmentAction::End;
+        }
+
+        // Хардкод: R-02 → R-03 переход
+        if seg.mission_id == 0x0210
+            && game_menu_status == GameMenuStatus::InMenu
+            && mission_id == 0x0310
+        {
+            return SegmentAction::End;
+        }
+
+        // Хардкод: R-03 → R-04 переход
+        if seg.mission_id == 0x0310
+            && game_menu_status == GameMenuStatus::InMenu
+            && mission_id == 0x0410
+        {
+            return SegmentAction::End;
+        }
+
+        // Хардкод: R-04 → R-05 переход
+        if seg.mission_id == 0x0410
+            && game_menu_status == GameMenuStatus::InMenu
+            && mission_id == 0x0510
+        {
+            return SegmentAction::End;
+        }
+
+        // Хардкод: R-05 → R-06 переход
+        if seg.mission_id == 0x0510
+            && game_menu_status == GameMenuStatus::InMenu
+            && mission_id == 0x0610
+        {
+            return SegmentAction::End;
+        }
+
+        // Хардкод: R-06 → R-07 переход
+        if seg.mission_id == 0x0610
+            && game_menu_status == GameMenuStatus::InMenu
+            && mission_id == 0x0710
+        {
+            return SegmentAction::End;
+        }
+
+        // Хардкод: R-07 B qte
+        if let Some(pos) = pos {
+            if seg.mission_id == 0x0710
+                && game_menu_status == GameMenuStatus::InGame
+                && (pos.x - (-195.73)).abs() <= 0.1
+                && (pos.y - (-7.1)).abs() <= 0.1
+                && (pos.z - (-491.38)).abs() <= 0.1
+            {
+                return SegmentAction::End;
+            }
         }
 
         return SegmentAction::None;
@@ -73,7 +198,7 @@ pub fn segment_action(
     if let Some(pos) = pos {
         if let Some(&(_, start_pos)) = START_CONDITIONS.iter().find(|&&(id, _)| id == mission_id) {
             if (pos.x - start_pos.x).abs() <= 0.1
-                && (pos.y - start_pos.y).abs() <= 0.1
+                && (pos.y - start_pos.y).abs() <= 1.0
                 && (pos.z - start_pos.z).abs() <= 0.1
             {
                 return SegmentAction::Start;

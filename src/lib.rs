@@ -1,12 +1,17 @@
 use chrono::Local;
-use hudhook::{ImguiRenderLoop, RenderContext};
+use hudhook::{IDirect3DDevice9, ImguiRenderLoop, RenderContext};
 use imgui::*;
 use rusqlite::Connection;
 use std::ptr::NonNull;
 use std::time::Instant;
 
+mod d3d_render;
 mod game;
+mod net;
+pub mod protocol;
 mod segment;
+
+use d3d_render::CylinderRenderer;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
 
@@ -204,6 +209,17 @@ struct HelloHud {
     position_buffer: Vec<(segment::Vec3, i64)>,
     ghost_positions: Vec<(segment::Vec3, i64)>,
     ghost_label: String,
+    // 3D test dummy
+    dummy: CylinderRenderer,
+    d3d_frame_count: u32,
+    d3d_last_error: String,
+    // Multiplayer
+    net_client: Option<net::NetClient>,
+    player_name: String,
+    room_name: String,
+    server_addr: String,
+    last_sent_pos: Option<segment::Vec3>,
+    last_sent_mission_id: i32,
 }
 
 impl HelloHud {
@@ -251,6 +267,15 @@ impl HelloHud {
             position_buffer: Vec::new(),
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
+            dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
+            d3d_frame_count: 0,
+            d3d_last_error: String::new(),
+            net_client: None,
+            player_name: "Raiden".to_string(),
+            room_name: "default".to_string(),
+            server_addr: "127.0.0.1:5222".to_string(),
+            last_sent_pos: None,
+            last_sent_mission_id: 0,
         }
     }
 }
@@ -271,6 +296,76 @@ impl ImguiRenderLoop for HelloHud {
                 ..Default::default()
             }),
         }]);
+    }
+
+    fn render_3d(&mut self, device: &IDirect3DDevice9) {
+        self.d3d_frame_count = self.d3d_frame_count.wrapping_add(1);
+
+        // Read camera view*proj matrix (needed for all draws)
+        let camera_ptr = match self.camera_ptr_addr {
+            Some(addr) => addr.as_ptr(),
+            None => return,
+        };
+        let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
+
+        // ── Ghost cylinder (red, semi-transparent) ──────────────────
+        if self.active_segment.is_some() && !self.ghost_positions.is_empty() {
+            let current_ms = self
+                .active_segment
+                .as_ref()
+                .unwrap()
+                .start_instant
+                .elapsed()
+                .as_millis() as i64;
+            let idx = self
+                .ghost_positions
+                .partition_point(|&(_, dur)| dur <= current_ms);
+            if idx > 0 {
+                let (gp, _) = self.ghost_positions[idx - 1];
+                self.dummy.render(
+                    device,
+                    (gp.x, gp.y, gp.z),
+                    0.4,
+                    2.0,
+                    0x800000FF, // red, 50% alpha
+                    &view_proj,
+                );
+            }
+        }
+
+        // ── Saved position cylinder (green, semi-transparent) ──────
+        if let Some((sx, sy, sz)) = self.saved_position {
+            self.dummy.render(
+                device,
+                (sx, sy, sz),
+                0.4,
+                2.0,
+                0x8000FF00, // green, 50% alpha
+                &view_proj,
+            );
+        }
+
+        // ── Remote players (blue, semi-transparent) ────────────────
+        if let (Some(nc), Some(seg)) =
+            (&self.net_client, self.active_segment.as_ref())
+        {
+            for rp in &nc.remote_players {
+                if rp.mission_id != seg.mission_id {
+                    continue;
+                }
+                if rp.last_update.elapsed() > std::time::Duration::from_secs(5) {
+                    continue;
+                }
+                self.dummy.render(
+                    device,
+                    (rp.pos.x, rp.pos.y, rp.pos.z),
+                    0.4,
+                    2.0,
+                    0x8000FFFF, // blue, 50% alpha
+                    &view_proj,
+                );
+            }
+        }
     }
 
     fn render(&mut self, ui: &mut Ui) {
@@ -499,6 +594,8 @@ impl ImguiRenderLoop for HelloHud {
                     segment::SegmentAction::None => {}
                 }
 
+                let mut hp: i32 = 0;
+
                 if player_obj_ptr.is_null() {
                     ui.text_colored([1.0, 0.5, 0.0, 1.0], "Player object pointer is NULL");
                     ui.text("Убедитесь, что вы в игре (не в меню).");
@@ -536,8 +633,7 @@ impl ImguiRenderLoop for HelloHud {
 
                     // Position buffer push
                     if self.active_segment.is_some() {
-                        if let (Some(ref seg), Some(pos)) =
-                            (self.active_segment.as_ref(), pos_opt)
+                        if let (Some(ref seg), Some(pos)) = (self.active_segment.as_ref(), pos_opt)
                         {
                             let dur = seg.start_instant.elapsed().as_millis() as i64;
                             self.position_buffer.push((pos, dur));
@@ -545,13 +641,34 @@ impl ImguiRenderLoop for HelloHud {
                     }
 
                     // Дополнительно: HP (offset 0x870)
-                    let hp = unsafe { *(player_obj_ptr.add(0x870) as *const i32) };
+                    hp = unsafe { *(player_obj_ptr.add(0x870) as *const i32) };
                     ui.separator();
                     ui.text(format!("HP: {}", hp));
                     ui.text("NumPad1: +10m Y");
                     ui.text("NumPad2: Save position");
                     ui.text("NumPad3: Teleport");
                 }
+
+                // ── Multiplayer network ─────────────────────────────
+                // Обработка TCP-событий
+                if let Some(ref mut nc) = self.net_client {
+                    nc.poll_tcp();
+
+                    // Отправка своей позиции
+                    if let (Some(pos), Some(ref seg)) = (pos_opt, self.active_segment.as_ref()) {
+                        let changed = self.last_sent_pos != Some(pos)
+                            || self.last_sent_mission_id != seg.mission_id;
+                        if changed {
+                            nc.send_position(pos, hp, seg.mission_id);
+                            self.last_sent_pos = Some(pos);
+                            self.last_sent_mission_id = seg.mission_id;
+                        }
+                    }
+
+                    // Приём чужих позиций
+                    nc.recv_positions();
+                }
+                // ─────────────────────────────────────────────────────
 
                 ui.separator();
                 ui.text("Position:");
@@ -585,8 +702,7 @@ impl ImguiRenderLoop for HelloHud {
                             // (SDK: *(cCameraGame*)(base + 0x17EA1D0))
                             let cam_ptr = cam_addr.as_ptr();
 
-                            let view_proj =
-                                unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
+                            let view_proj = unsafe { *(cam_ptr.add(0x200) as *const [f32; 16]) };
                             let cam_x = unsafe { *(cam_ptr.add(0x1B0) as *const f32) };
                             let cam_y = unsafe { *(cam_ptr.add(0x1B4) as *const f32) };
                             let cam_z = unsafe { *(cam_ptr.add(0x1B8) as *const f32) };
@@ -635,10 +751,7 @@ impl ImguiRenderLoop for HelloHud {
                                     );
                                 }
                                 None => {
-                                    ui.text_colored(
-                                        [1.0, 0.3, 0.3, 1.0],
-                                        "Behind camera (w <= 0)",
-                                    );
+                                    ui.text_colored([1.0, 0.3, 0.3, 1.0], "Behind camera (w <= 0)");
                                 }
                             }
                         }
@@ -648,6 +761,19 @@ impl ImguiRenderLoop for HelloHud {
                 }
 
                 self.segment_was_active = self.active_segment.is_some();
+
+                // --- D3D DEBUG ---
+                ui.separator();
+                ui.text_colored(
+                    [0.5, 1.0, 0.5, 1.0],
+                    format!("D3D frames: {}", self.d3d_frame_count),
+                );
+                if !self.d3d_last_error.is_empty() {
+                    ui.text_colored(
+                        [1.0, 0.5, 0.0, 1.0],
+                        format!("D3D error: {}", self.d3d_last_error),
+                    );
+                }
 
                 // --- ВЫХОД ---
                 ui.separator();
@@ -694,6 +820,77 @@ impl ImguiRenderLoop for HelloHud {
                 }
             }
         }
+
+        // ── Multiplayer UI ─────────────────────────────────────────
+        ui.window("Multiplayer")
+            .size([300.0, 250.0], Condition::FirstUseEver)
+            .build(|| {
+                ui.input_text("Server", &mut self.server_addr)
+                    .hint("127.0.0.1:5222")
+                    .build();
+                ui.input_text("Name", &mut self.player_name).build();
+                ui.input_text("Room", &mut self.room_name).build();
+
+                if self.net_client.is_none() {
+                    if ui.button("Connect") {
+                        match net::NetClient::new(
+                            &self.server_addr,
+                            &self.player_name,
+                            &self.room_name,
+                        ) {
+                            Ok(nc) => {
+                                self.net_client = Some(nc);
+                            }
+                            Err(e) => {
+                                // silently fail — user sees status unchanged
+                                let _ = e;
+                            }
+                        }
+                    }
+                } else {
+                    if ui.button("Disconnect") {
+                        self.net_client = None;
+                        self.last_sent_pos = None;
+                    }
+                }
+
+                if let Some(nc) = &self.net_client {
+                    ui.separator();
+                    if nc.my_id != 0 {
+                        ui.text(format!("Status: Connected (ID: {})", nc.my_id));
+                    } else {
+                        ui.text_colored([1.0, 1.0, 0.0, 1.0], "Status: Waiting for ID...");
+                    }
+
+                    ui.separator();
+                    ui.text("Players:");
+                    let my_mission = self
+                        .active_segment
+                        .as_ref()
+                        .map(|s| s.mission_name.as_str())
+                        .unwrap_or("-");
+                    ui.text(format!("{} (you) - {}", self.player_name, my_mission));
+
+                    for rp in &nc.remote_players {
+                        let mission = format!("0x{:04X}", rp.mission_id);
+                        let active =
+                            if self.active_segment.as_ref().map_or(false, |s| {
+                                s.mission_id == rp.mission_id
+                            }) {
+                                " [active]"
+                            } else {
+                                ""
+                            };
+                        let mock_tag = if rp.is_mock { " [mock]" } else { "" };
+                        let age = rp.last_update.elapsed().as_secs();
+                        let stale = if age > 5 { " (stale)" } else { "" };
+                        ui.text(format!(
+                            "{}{} - {} HP:{}{}{}",
+                            rp.name, mock_tag, mission, rp.hp, active, stale
+                        ));
+                    }
+                }
+            });
     }
 }
 
