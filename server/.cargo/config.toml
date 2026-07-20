@@ -1,0 +1,4 @@
+[build]
+target = "x86_64-pc-windows-msvc"
+
+# Для Docker: cargo build --target x86_64-unknown-linux-gnu --release

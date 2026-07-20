@@ -3,7 +3,7 @@ use rusqlite::Connection;
 use std::collections::HashMap;
 use std::time::Instant;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Vec3 {
     pub x: f32,
     pub y: f32,

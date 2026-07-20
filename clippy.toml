@@ -1,0 +1,6 @@
+# clippy configuration for drmod-rs — game-hacking overlay project
+# Project uses extensive unsafe (direct memory access) and complex render loop logic.
+
+cognitive-complexity-threshold = 35
+too-many-arguments-threshold = 10
+type-complexity-threshold = 300
