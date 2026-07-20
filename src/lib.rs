@@ -14,7 +14,7 @@ mod segment;
 mod skeleton;
 mod ui;
 
-use d3d_render::CylinderRenderer;
+use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
@@ -93,6 +93,7 @@ struct HelloHud {
     pub(crate) ghost_label: String,
     // 3D test dummy
     dummy: CylinderRenderer,
+    remote_sphere: SphereRenderer,
     pub(crate) cached_player_obj_ptr: *mut u8,
     pub(crate) d3d_frame_count: u32,
     pub(crate) d3d_last_error: String,
@@ -103,6 +104,7 @@ struct HelloHud {
     pub(crate) server_addr: String,
     pub(crate) last_sent_pos: Option<segment::Vec3>,
     last_sent_mission_id: i32,
+    last_skeleton_send: Instant,
     pub(crate) viewport: [f32; 4], // [X, Y, Width, Height] from D3D GetViewport
 }
 
@@ -153,6 +155,7 @@ impl HelloHud {
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
+            remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
             cached_player_obj_ptr: std::ptr::null_mut(),
             d3d_frame_count: 0,
             d3d_last_error: String::new(),
@@ -162,6 +165,7 @@ impl HelloHud {
             server_addr: "127.0.0.1:5222".to_string(),
             last_sent_pos: None,
             last_sent_mission_id: 0,
+            last_skeleton_send: Instant::now(),
             viewport: [0.0; 4],
         }
     }
@@ -395,14 +399,51 @@ impl ImguiRenderLoop for HelloHud {
                 if rp.last_update.elapsed() > std::time::Duration::from_secs(5) {
                     continue;
                 }
-                self.dummy.render(
-                    device,
-                    (rp.pos.x, rp.pos.y, rp.pos.z),
-                    0.4,
-                    2.0,
-                    0x8000FFFF, // blue, 50% alpha
-                    &view_proj,
-                );
+                // Цилиндр — только если нет скелета
+                if rp.skeleton.is_empty() {
+                    self.dummy.render(
+                        device,
+                        (rp.pos.x, rp.pos.y, rp.pos.z),
+                        0.4,
+                        2.0,
+                        0x8000FFFF, // blue, 50% alpha
+                        &view_proj,
+                    );
+                }
+            }
+
+            // 3D скелет: рёбра цилиндрами + сфера головы
+            for rp in &nc.remote_players {
+                if rp.skeleton.is_empty() || rp.mission_id != seg.mission_id {
+                    continue;
+                }
+                if rp.last_update.elapsed() > std::time::Duration::from_secs(5) {
+                    continue;
+                }
+                // Рёбра — цилиндры между костями
+                let edges = skeleton::build_edges_from_wire(&rp.skeleton);
+                for &(p, c) in &edges {
+                    let pb = &rp.skeleton[p];
+                    let cb = &rp.skeleton[c];
+                    self.dummy.render_capsule(
+                        device,
+                        (pb.x, pb.y, pb.z),
+                        (cb.x, cb.y, cb.z),
+                        0.04,
+                        0x80FF8000, // orange, 50% alpha
+                        &view_proj,
+                    );
+                }
+                // Сфера на голове (bone index 5)
+                if let Some(head) = rp.skeleton.iter().find(|b| b.index == 5) {
+                    self.remote_sphere.render(
+                        device,
+                        (head.x, head.y, head.z),
+                        0.12,
+                        0x80FF0000, // red, 50% alpha
+                        &view_proj,
+                    );
+                }
             }
         }
     }
@@ -450,7 +491,28 @@ impl ImguiRenderLoop for HelloHud {
                 }
             }
 
-            nc.recv_positions();
+            nc.recv_udp();
+
+            // Отправляем скелет раз в ~100 мс
+            if self.last_skeleton_send.elapsed() > std::time::Duration::from_millis(100) {
+                self.last_skeleton_send = Instant::now();
+                let player_obj_ptr =
+                    self.static_ptr_addr.and_then(|addr| {
+                        let ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
+                        if ptr.is_null() {
+                            None
+                        } else {
+                            Some(ptr)
+                        }
+                    });
+                if let Some(ptr) = player_obj_ptr {
+                    let bones = unsafe { skeleton::read_full_skeleton(ptr) };
+                    if !bones.is_empty() {
+                        let wire = skeleton::bones_to_wire(&bones);
+                        nc.send_skeleton(&wire);
+                    }
+                }
+            }
         }
         // ─────────────────────────────────────────────────────────────
 

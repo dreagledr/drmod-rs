@@ -3,6 +3,7 @@
 use imgui::Ui;
 
 use crate::overlay::world_to_screen;
+use crate::protocol::SkeletonBone;
 
 // ── cModelBase offsets (от начала cParts / player_obj_ptr) ─────────
 const BONESET_PBONES_OFFSET: usize = 0x350; // BoneSet::m_pBones (cParts*)
@@ -151,6 +152,110 @@ pub fn draw_skeleton_overlay(ui: &Ui, bones: &[BonePos], camera_ptr: *const u8, 
                 .build();
 
             draw_list.add_text([dx + 5.0, dy - 5.0], color, format!("#{}", bones[i].index));
+        }
+    }
+}
+
+// ── Serialization helpers ─────────────────────────────────────────
+
+/// Конвертирует `BonePos` → `SkeletonBone` для отправки по сети.
+/// `bone_ptr_to_idx` — маппинг адрес кости → индекс в массиве.
+pub fn bones_to_wire(bones: &[BonePos]) -> Vec<SkeletonBone> {
+    // Строим маппинг: ptr → позиция в массиве
+    let ptr_to_idx: std::collections::HashMap<usize, u16> = bones
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.ptr, i as u16))
+        .collect();
+
+    bones
+        .iter()
+        .map(|b| {
+            let parent_ptr =
+                unsafe { *((b.ptr as *const u8).add(BONE_PARENT) as *const usize) };
+            let parent_index = if parent_ptr == 0 {
+                -1i16
+            } else {
+                ptr_to_idx.get(&parent_ptr).map(|&i| i as i16).unwrap_or(-1)
+            };
+            SkeletonBone {
+                index: b.index,
+                parent_index,
+                x: b.x,
+                y: b.y,
+                z: b.z,
+            }
+        })
+        .collect()
+}
+
+// ── Remote skeleton rendering ─────────────────────────────────────
+
+/// Строит список рёбер (пар индексов в массиве) на основе `parent_index`.
+pub fn build_edges_from_wire(bones: &[SkeletonBone]) -> Vec<(usize, usize)> {
+    let mut edges = Vec::new();
+    for (i, bone) in bones.iter().enumerate() {
+        if bone.parent_index < 0 {
+            continue;
+        }
+        let parent_idx = bone.parent_index as usize;
+        if parent_idx < bones.len() {
+            edges.push((parent_idx, i));
+        }
+    }
+    edges
+}
+
+/// Рисует скелет удалённого игрока как 2D-оверлей.
+pub fn draw_remote_skeleton(
+    ui: &Ui,
+    bones: &[SkeletonBone],
+    camera_ptr: *const u8,
+    color: u32,
+) {
+    if bones.is_empty() || camera_ptr.is_null() {
+        return;
+    }
+
+    let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
+    let cam_x = unsafe { *(camera_ptr.add(0x1B0) as *const f32) };
+    let cam_y = unsafe { *(camera_ptr.add(0x1B4) as *const f32) };
+    let cam_z = unsafe { *(camera_ptr.add(0x1B8) as *const f32) };
+    let [sw, sh] = ui.io().display_size;
+
+    let projections: Vec<Option<([f32; 2], f32)>> = bones
+        .iter()
+        .map(|b| {
+            world_to_screen(
+                (b.x, b.y, b.z),
+                &view_proj,
+                [0.0, 0.0, sw, sh],
+                (cam_x, cam_y, cam_z),
+            )
+        })
+        .collect();
+
+    let draw_list = ui.get_foreground_draw_list();
+
+    let edges = build_edges_from_wire(bones);
+    for (parent_idx, child_idx) in &edges {
+        let p = &projections[*parent_idx];
+        let c = &projections[*child_idx];
+        if let (Some(([px, py], _)), Some(([cx, cy], _))) = (p, c) {
+            let on_screen =
+                |x: f32, y: f32| x >= -50.0 && x <= sw + 50.0 && y >= -50.0 && y <= sh + 50.0;
+            if on_screen(*px, *py) || on_screen(*cx, *cy) {
+                let clamp_x = |v: f32| v.clamp(-50.0, sw + 50.0);
+                let clamp_y = |v: f32| v.clamp(-50.0, sh + 50.0);
+                draw_list
+                    .add_line(
+                        [clamp_x(*px), clamp_y(*py)],
+                        [clamp_x(*cx), clamp_y(*cy)],
+                        color,
+                    )
+                    .thickness(1.5)
+                    .build();
+            }
         }
     }
 }
