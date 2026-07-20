@@ -2,14 +2,16 @@ use imgui::*;
 
 /// Проецирует мировую позицию на экран через view-projection матрицу (D3DXMATRIX, row-major).
 /// Возвращает `(screen_pos, distance_to_camera)` или `None` если точка за камерой.
+/// `viewport`: [X, Y, Width, Height] — из D3D GetViewport (с учётом смещения для 4K/letterbox).
 pub fn world_to_screen(
     world_pos: (f32, f32, f32),
     view_proj: &[f32; 16],
-    screen_size: [f32; 2],
+    viewport: [f32; 4],
     camera_pos: (f32, f32, f32),
 ) -> Option<([f32; 2], f32)> {
     let (wx, wy, wz) = world_pos;
     let (cx, cy, cz) = camera_pos;
+    let [vp_x, vp_y, vp_w, vp_h] = viewport;
 
     // Умножение row-vector (x,y,z,1) на матрицу 4x4 (row-major layout)
     let clip_x = wx * view_proj[0] + wy * view_proj[4] + wz * view_proj[8] + view_proj[12];
@@ -24,8 +26,8 @@ pub fn world_to_screen(
     let ndc_x = clip_x * inv_w;
     let ndc_y = clip_y * inv_w;
 
-    let screen_x = (ndc_x * 0.5 + 0.5) * screen_size[0];
-    let screen_y = (1.0 - (ndc_y * 0.5 + 0.5)) * screen_size[1];
+    let screen_x = (ndc_x * 0.5 + 0.5) * vp_w + vp_x;
+    let screen_y = (1.0 - (ndc_y * 0.5 + 0.5)) * vp_h + vp_y;
 
     let dx = wx - cx;
     let dy = wy - cy;
@@ -47,6 +49,7 @@ pub fn draw_world_pos(
     ui: &Ui,
     world_pos: (f32, f32, f32),
     camera_ptr: *const u8,
+    viewport: [f32; 4],
     color: u32,
     label: &str,
 ) {
@@ -54,19 +57,19 @@ pub fn draw_world_pos(
     let cam_x = unsafe { *(camera_ptr.add(0x1B0) as *const f32) };
     let cam_y = unsafe { *(camera_ptr.add(0x1B4) as *const f32) };
     let cam_z = unsafe { *(camera_ptr.add(0x1B8) as *const f32) };
-    let [sw, sh] = ui.io().display_size;
+    let [vp_x, vp_y, vp_w, vp_h] = viewport;
 
     if let Some(([scr_x, scr_y], dist)) =
-        world_to_screen(world_pos, &view_proj, [sw, sh], (cam_x, cam_y, cam_z))
+        world_to_screen(world_pos, &view_proj, viewport, (cam_x, cam_y, cam_z))
     {
-        let on_screen = scr_x >= 0.0 && scr_x <= sw && scr_y >= 0.0 && scr_y <= sh;
+        let on_screen = scr_x >= vp_x && scr_x <= vp_x + vp_w && scr_y >= vp_y && scr_y <= vp_y + vp_h;
 
         // Screen-space radius for a 0.5m world-space offset
         let (wx, wy, wz) = world_pos;
         let radius = if let Some(([rx, _], _)) = world_to_screen(
             (wx + 0.5, wy, wz),
             &view_proj,
-            [sw, sh],
+            viewport,
             (cam_x, cam_y, cam_z),
         ) {
             (rx - scr_x).abs().clamp(2.0, 64.0)
@@ -78,8 +81,8 @@ pub fn draw_world_pos(
             (scr_x, scr_y, radius + 4.0)
         } else {
             (
-                scr_x.clamp(24.0, sw - 24.0),
-                scr_y.clamp(24.0, sh - 24.0),
+                scr_x.clamp(vp_x + 24.0, vp_x + vp_w - 24.0),
+                scr_y.clamp(vp_y + 24.0, vp_y + vp_h - 24.0),
                 radius + 4.0,
             )
         };
@@ -91,7 +94,7 @@ pub fn draw_world_pos(
             if let Some(([head_x, head_y], _)) = world_to_screen(
                 (wx, wy + 2.0, wz),
                 &view_proj,
-                [sw, sh],
+                viewport,
                 (cam_x, cam_y, cam_z),
             ) {
                 draw_list

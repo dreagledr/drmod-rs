@@ -170,7 +170,7 @@ pub fn render_main_window(ui: &Ui, hud: &HelloHud, state: &UiState) {
                         let cam_x = unsafe { *(cam_ptr.add(0x1B0) as *const f32) };
                         let cam_y = unsafe { *(cam_ptr.add(0x1B4) as *const f32) };
                         let cam_z = unsafe { *(cam_ptr.add(0x1B8) as *const f32) };
-                        let screen_size = ui.io().display_size;
+                        let [vp_x, vp_y, vp_w, vp_h] = hud.viewport;
 
                         ui.text(format!("Camera ptr: 0x{:08X}", cam_ptr as usize));
                         ui.text(format!(
@@ -178,8 +178,8 @@ pub fn render_main_window(ui: &Ui, hud: &HelloHud, state: &UiState) {
                             cam_x, cam_y, cam_z
                         ));
                         ui.text(format!(
-                            "Screen: {:.0}x{:.0}",
-                            screen_size[0], screen_size[1]
+                            "Viewport: [{:.0},{:.0}] {:.0}x{:.0}",
+                            vp_x, vp_y, vp_w, vp_h
                         ));
                         ui.text(format!(
                             "VP[0..4]: {:.3} {:.3} {:.3} {:.3}",
@@ -193,14 +193,14 @@ pub fn render_main_window(ui: &Ui, hud: &HelloHud, state: &UiState) {
                         match overlay::world_to_screen(
                             (sx, sy, sz),
                             &view_proj,
-                            screen_size,
+                            hud.viewport,
                             (cam_x, cam_y, cam_z),
                         ) {
                             Some(([scr_x, scr_y], dist)) => {
-                                let on_scr = scr_x >= 0.0
-                                    && scr_x <= screen_size[0]
-                                    && scr_y >= 0.0
-                                    && scr_y <= screen_size[1];
+                                let on_scr = scr_x >= vp_x
+                                    && scr_x <= vp_x + vp_w
+                                    && scr_y >= vp_y
+                                    && scr_y <= vp_y + vp_h;
                                 let color = if on_scr {
                                     [0.0, 1.0, 0.0, 1.0]
                                 } else {

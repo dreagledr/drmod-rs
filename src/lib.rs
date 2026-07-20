@@ -100,6 +100,7 @@ struct HelloHud {
     pub(crate) server_addr: String,
     pub(crate) last_sent_pos: Option<segment::Vec3>,
     last_sent_mission_id: i32,
+    pub(crate) viewport: [f32; 4], // [X, Y, Width, Height] from D3D GetViewport
 }
 
 impl HelloHud {
@@ -157,6 +158,7 @@ impl HelloHud {
             server_addr: "127.0.0.1:5222".to_string(),
             last_sent_pos: None,
             last_sent_mission_id: 0,
+            viewport: [0.0; 4],
         }
     }
     fn read_game_state(&mut self) -> ui::UiState {
@@ -327,6 +329,13 @@ impl ImguiRenderLoop for HelloHud {
     fn render_3d(&mut self, device: &IDirect3DDevice9) {
         self.d3d_frame_count = self.d3d_frame_count.wrapping_add(1);
 
+        // Read D3D viewport — единственный надёжный источник размера области рендера
+        {
+            let mut vp = windows::Win32::Graphics::Direct3D9::D3DVIEWPORT9::default();
+            unsafe { device.GetViewport(&mut vp).ok(); }
+            self.viewport = [vp.X as f32, vp.Y as f32, vp.Width as f32, vp.Height as f32];
+        }
+
         // Read camera view*proj matrix (needed for all draws)
         let camera_ptr = match self.camera_ptr_addr {
             Some(addr) => addr.as_ptr(),
@@ -477,6 +486,7 @@ impl ImguiRenderLoop for HelloHud {
                 ui,
                 (sx, sy, sz),
                 camera_addr.as_ptr(),
+                self.viewport,
                 0xFF_00_FF_00,
                 "Saved",
             );
@@ -500,6 +510,7 @@ impl ImguiRenderLoop for HelloHud {
                         ui,
                         (gp.x, gp.y, gp.z),
                         camera_addr.as_ptr(),
+                        self.viewport,
                         0xFF_00_00_FF,
                         &self.ghost_label,
                     );
@@ -527,6 +538,7 @@ impl ImguiRenderLoop for HelloHud {
                     ui,
                     (rp.pos.x, rp.pos.y, rp.pos.z),
                     camera_addr.as_ptr(),
+                    self.viewport,
                     0xFF_80_80_FF, // light blue
                     &label,
                 );
