@@ -387,7 +387,7 @@ impl ImguiRenderLoop for HelloHud {
                 (sx, sy, sz),
                 0.4,
                 2.0,
-                0x8000FF00, // green, 50% alpha
+                settings::apply_opacity(0x0000FF00, self.settings.ghost_opacity),
                 &view_proj,
             );
         }
@@ -584,7 +584,7 @@ impl ImguiRenderLoop for HelloHud {
                         (gp.x, gp.y, gp.z),
                         camera_addr.as_ptr(),
                         self.viewport,
-                        settings::apply_opacity(0x000000FF, self.settings.ghost_opacity),
+                        0xFF0000FF,
                         &self.ghost_label,
                     );
                 }
@@ -614,7 +614,7 @@ impl ImguiRenderLoop for HelloHud {
                     (rp.pos.x, rp.pos.y, rp.pos.z),
                     camera_addr.as_ptr(),
                     self.viewport,
-                    settings::apply_opacity(0x008080FF, self.settings.ghost_opacity),
+                    0xFF8080FF,
                     &label,
                 );
             }
