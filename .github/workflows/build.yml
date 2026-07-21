@@ -33,3 +33,37 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: out/drmod-rs.zip
+
+  upload-s3:
+    name: Upload to Yandex S3
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: drmod-rs
+          path: dist
+
+      - name: Unzip artifact
+        run: |
+          mkdir -p dist/unpacked
+          unzip dist/drmod-rs.zip -d dist/unpacked
+
+      - name: Fetch S3 secrets from Lockbox
+        id: lockbox
+        uses: yc-actions/yc-lockbox@v2
+        with:
+          yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
+          secret-id: ${{ vars.LOCKBOX_SECRET_ID }}
+
+      - name: Upload to Yandex Object Storage
+        uses: nekitcorp/yandex-storage-website-action@v2
+        with:
+          access-key-id: ${{ steps.lockbox.outputs.S3_API_KEY_ID }}
+          secret-access-key: ${{ steps.lockbox.outputs.S3_API_KEY_VALUE }}
+          bucket: drmod
+          clear: true
+          working-directory: dist/unpacked
+          include: |
+            **/*
