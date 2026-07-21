@@ -5,6 +5,7 @@ use tokio::time::{Duration, interval};
 use crate::system::System;
 use drmod_protocol::{make_msg, TcpMessage};
 
+mod http;
 mod mock;
 mod system;
 mod tcp;
@@ -35,10 +36,26 @@ async fn ping_loop(system: Arc<System>) {
 
 #[tokio::main]
 async fn main() {
-    let enable_mock = std::env::args().any(|a| a == "--mock");
+    let args: Vec<String> = std::env::args().collect();
+    let enable_mock = args.iter().any(|a| a == "--mock");
+
+    let public_addr = {
+        let mut addr = std::env::var("PUBLIC_ADDR").unwrap_or_else(|_| String::from("localhost:5222"));
+        let mut i = 1;
+        while i < args.len() {
+            if args[i] == "--public-addr" && i + 1 < args.len() {
+                addr = args[i + 1].clone();
+                break;
+            }
+            i += 1;
+        }
+        addr
+    };
+
     if enable_mock {
         println!("[server] mock player enabled");
     }
+    println!("[server] public address: {}", public_addr);
 
     let system = Arc::new(System::new(enable_mock));
 
@@ -72,6 +89,10 @@ async fn main() {
     let system_udp = system.clone();
     let udp_udp = udp_socket.clone();
     tokio::spawn(udp::handle_udp(udp_udp, system_udp));
+
+    let system_http = system.clone();
+    let http_addr = public_addr.clone();
+    tokio::spawn(http::serve_http(system_http, http_addr));
 
     ping_loop(system).await;
 }

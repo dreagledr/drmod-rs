@@ -1,0 +1,13 @@
+/target
+/out
+/src
+/vendor
+/mgr-plugin-sdk
+/MGR-RedTrainer
+/mmultiplayer
+/game
+/.git
+/.qwen
+/*.CT
+/*.md
+/*.ps1

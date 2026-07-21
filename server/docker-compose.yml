@@ -1,7 +1,13 @@
 services:
   server:
-    build: .
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
     ports:
       - "5222:5222/tcp"
       - "5222:5222/udp"
+      - "${HTTP_PORT:-8080}:${HTTP_PORT:-8080}/tcp"
+    environment:
+      - PUBLIC_ADDR=${PUBLIC_ADDR:-localhost:5222}
+      - HTTP_PORT=${HTTP_PORT:-8080}
     restart: unless-stopped
