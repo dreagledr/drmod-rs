@@ -25,7 +25,7 @@ pub struct UiState {
     pub segment_action: segment::SegmentAction,
 }
 
-pub fn render_main_window(ui: &Ui, hud: &HelloHud, state: &UiState) {
+pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
     ui.window("DrmodDebug")
         .size([320., 600.], Condition::Always)
         .build(|| {
@@ -246,6 +246,7 @@ pub fn render_main_window(ui: &Ui, hud: &HelloHud, state: &UiState) {
             // --- ВЫХОД ---
             ui.separator();
             if ui.button("Выход / Выгрузить DLL") {
+                hud.net_client = None;
                 hudhook::eject();
             }
         });

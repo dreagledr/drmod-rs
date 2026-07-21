@@ -1,7 +1,7 @@
 use crate::protocol::{self, PositionPacket, SkeletonBone, TcpMessage};
 use crate::segment::Vec3;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{Shutdown, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc;
 use std::time::Instant;
 
@@ -34,6 +34,7 @@ pub enum TcpEvent {
 /// - TCP-соединением (блокирующим, в отдельном потоке)
 /// - UDP-сокетом (неблокирующим, опрос в кадре)
 pub struct NetClient {
+    tcp: Option<TcpStream>,
     tcp_handle: Option<std::thread::JoinHandle<()>>,
     tcp_rx: mpsc::Receiver<TcpEvent>,
     udp: UdpSocket,
@@ -74,6 +75,11 @@ impl NetClient {
 
         let (tx, rx) = mpsc::channel();
 
+        // Клонируем TCP для потока, оригинал оставляем в NetClient для shutdown в Drop
+        let mut tcp_clone = tcp
+            .try_clone()
+            .map_err(|e| format!("tcp clone: {}", e))?;
+
         // Запускаем TCP-поток чтения
         let tcp_handle = {
             std::thread::Builder::new()
@@ -82,7 +88,7 @@ impl NetClient {
                     let mut byte = [0u8; 1];
                     let mut buf = Vec::new();
                     loop {
-                        match tcp.read_exact(&mut byte) {
+                        match tcp_clone.read_exact(&mut byte) {
                             Ok(()) => {
                                 if byte[0] == 0 {
                                     if let Ok(msg) = serde_json::from_slice::<TcpMessage>(&buf) {
@@ -124,6 +130,7 @@ impl NetClient {
         };
 
         Ok(Self {
+            tcp: Some(tcp),
             tcp_handle: Some(tcp_handle),
             tcp_rx: rx,
             udp,
@@ -271,11 +278,13 @@ impl NetClient {
 
 impl Drop for NetClient {
     fn drop(&mut self) {
-        // TCP-поток сам остановится когда tcp дропнется (сокет закроется)
-        // JoinHandle ждать не будем — может зависнуть, просто забываем
+        // 1. Вырубаем TCP-сокет — это разбудит поток, заблокированный в read_exact()
+        if let Some(ref tcp) = self.tcp {
+            let _ = tcp.shutdown(Shutdown::Both);
+        }
+        // 2. Ждём завершения TCP-потока (shutdown гарантирует, что read_exact вернёт ошибку)
         if let Some(handle) = self.tcp_handle.take() {
-            // Не джойним — поток увидит ошибку при read и выйдет сам
-            std::mem::drop(handle); // detach
+            let _ = handle.join();
         }
     }
 }
