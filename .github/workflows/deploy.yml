@@ -1,0 +1,70 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: Deploy to VPS
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Fetch secrets from Lockbox
+        id: lockbox
+        uses: yc-actions/yc-lockbox@v2
+        with:
+          yc-sa-json-credentials: ${{ secrets.YC_SA_JSON_CREDENTIALS }}
+          secret-id: ${{ vars.LOCKBOX_SECRET_ID }}
+
+      - name: Copy project to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ steps.lockbox.outputs.VPS_HOST }}
+          username: ${{ steps.lockbox.outputs.VPS_USER }}
+          key: ${{ steps.lockbox.outputs.VPS_SSH_KEY }}
+          source: "protocol/,server/,.dockerignore"
+          target: "~/drmod-rs"
+          overwrite: true
+          rm: true
+
+      - name: Deploy services
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          host: ${{ steps.lockbox.outputs.VPS_HOST }}
+          username: ${{ steps.lockbox.outputs.VPS_USER }}
+          key: ${{ steps.lockbox.outputs.VPS_SSH_KEY }}
+          script: |
+            set -e
+            echo "=== Deploy drmod-rs at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+
+            cd ~/drmod-rs
+
+            echo "=== Generating .env ==="
+            cat > server/.env << 'ENVEOF'
+            PUBLIC_ADDR=${{ steps.lockbox.outputs.VPS_HOST }}:5222
+            HTTP_PORT=8080
+            ENVEOF
+
+            echo "=== docker compose down (if running) ==="
+            docker compose -f server/docker-compose.yml down --remove-orphans || true
+
+            echo "=== docker compose up --build -d ==="
+            docker compose -f server/docker-compose.yml up --build -d
+
+            echo "=== Waiting 30s for containers to start ==="
+            sleep 30
+
+            echo "=== docker compose ps ==="
+            docker compose -f server/docker-compose.yml ps
+
+            echo "=== docker compose logs --tail=20 ==="
+            docker compose -f server/docker-compose.yml logs --tail=20
+
+            echo "=== docker image prune -f ==="
+            docker image prune -f
+
+            echo "=== Deploy complete ==="
