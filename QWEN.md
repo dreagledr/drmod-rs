@@ -66,10 +66,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 ### Output
 
-- `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary
-- `target/i686-pc-windows-msvc/release/drmod_rs_lib.dll` — HUD library DLL
-
-Both files must be in the same directory for the injector to find the DLL.
+- `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary (DLL embedded via `include_bytes!`, extracted to `%TEMP%` at runtime)
 
 ## Development
 
