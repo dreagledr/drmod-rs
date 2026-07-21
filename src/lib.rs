@@ -11,6 +11,7 @@ mod net;
 mod overlay;
 pub mod protocol;
 mod segment;
+mod settings;
 mod skeleton;
 mod ui;
 
@@ -91,6 +92,7 @@ struct HelloHud {
     pub(crate) position_buffer: Vec<(segment::Vec3, i64)>,
     pub(crate) ghost_positions: Vec<(segment::Vec3, i64)>,
     pub(crate) ghost_label: String,
+    pub(crate) settings: settings::Settings,
     // 3D test dummy
     dummy: CylinderRenderer,
     remote_sphere: SphereRenderer,
@@ -154,6 +156,7 @@ impl HelloHud {
             position_buffer: Vec::new(),
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
+            settings: settings::Settings::default(),
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
             cached_player_obj_ptr: std::ptr::null_mut(),
@@ -351,7 +354,10 @@ impl ImguiRenderLoop for HelloHud {
         let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
 
         // ── Ghost cylinder (red, semi-transparent) ──────────────────
-        if self.active_segment.is_some() && !self.ghost_positions.is_empty() {
+        if self.settings.show_best_ghost
+            && self.active_segment.is_some()
+            && !self.ghost_positions.is_empty()
+        {
             let current_ms = self
                 .active_segment
                 .as_ref()
@@ -369,7 +375,7 @@ impl ImguiRenderLoop for HelloHud {
                     (gp.x, gp.y, gp.z),
                     0.4,
                     2.0,
-                    0x800000FF, // red, 50% alpha
+                    settings::apply_opacity(0x000000FF, self.settings.ghost_opacity),
                     &view_proj,
                 );
             }
@@ -403,7 +409,7 @@ impl ImguiRenderLoop for HelloHud {
                         (rp.pos.x, rp.pos.y, rp.pos.z),
                         0.4,
                         2.0,
-                        0x8000FFFF, // blue, 50% alpha
+                        settings::apply_opacity(0x0000FFFF, self.settings.ghost_opacity),
                         &view_proj,
                     );
                 }
@@ -440,7 +446,7 @@ impl ImguiRenderLoop for HelloHud {
                         device,
                         (head.x + dx, head.y + dy, head.z + dz),
                         0.12,
-                        0x80FF0000, // red, 50% alpha
+                        settings::apply_opacity(0x00FF0000, self.settings.ghost_opacity),
                         &view_proj,
                     );
                 }
@@ -450,7 +456,7 @@ impl ImguiRenderLoop for HelloHud {
                     device,
                     &all_capsules,
                     0.04,
-                    0x80FF8000, // orange, 50% alpha
+                    settings::apply_opacity(0x00FF8000, self.settings.ghost_opacity),
                     &view_proj,
                 );
             }
@@ -560,7 +566,8 @@ impl ImguiRenderLoop for HelloHud {
         }
 
         // --- ОТРИСОВКА ПРИЗРАКА ЛУЧШЕГО СЕГМЕНТА ---
-        if self.active_segment.is_some()
+        if self.settings.show_best_ghost
+            && self.active_segment.is_some()
             && !self.ghost_positions.is_empty()
             && !self.ghost_label.is_empty()
         {
@@ -578,7 +585,7 @@ impl ImguiRenderLoop for HelloHud {
                         (gp.x, gp.y, gp.z),
                         camera_addr.as_ptr(),
                         self.viewport,
-                        0xFF_00_00_FF,
+                        settings::apply_opacity(0x000000FF, self.settings.ghost_opacity),
                         &self.ghost_label,
                     );
                 }
@@ -608,7 +615,7 @@ impl ImguiRenderLoop for HelloHud {
                     (rp.pos.x, rp.pos.y, rp.pos.z),
                     camera_addr.as_ptr(),
                     self.viewport,
-                    0xFF_80_80_FF, // light blue
+                    settings::apply_opacity(0x008080FF, self.settings.ghost_opacity),
                     &label,
                 );
             }
@@ -617,6 +624,8 @@ impl ImguiRenderLoop for HelloHud {
         ui::render_main_window(ui, self, &ui_state);
 
         ui::render_multiplayer_window(ui, self);
+
+        ui::render_settings_window(ui, &mut self.settings);
     }
 }
 

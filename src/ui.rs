@@ -319,3 +319,12 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
             }
         });
 }
+
+pub fn render_settings_window(ui: &Ui, settings: &mut crate::settings::Settings) {
+    ui.window("Settings")
+        .size([250.0, 150.0], Condition::FirstUseEver)
+        .build(|| {
+            ui.checkbox("Show best ghost", &mut settings.show_best_ghost);
+            ui.slider("Ghost opacity", 0.0f32, 1.0f32, &mut settings.ghost_opacity);
+        });
+}
