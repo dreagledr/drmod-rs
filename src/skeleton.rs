@@ -3,7 +3,7 @@
 use imgui::Ui;
 
 use crate::overlay::world_to_screen;
-use crate::protocol::SkeletonBone;
+use drmod_protocol::SkeletonBone;
 
 // ── cModelBase offsets (от начала cParts / player_obj_ptr) ─────────
 const BONESET_PBONES_OFFSET: usize = 0x350; // BoneSet::m_pBones (cParts*)

@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["server"]
+members = ["protocol", "server"]
 
 [dependencies]
+drmod-protocol = { path = "protocol" }
 hudhook = { path = "vendor/hudhook" }
 imgui = "0.12.0"
 windows-numerics = "0.3"

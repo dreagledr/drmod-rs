@@ -9,7 +9,6 @@ mod d3d_render;
 mod game;
 mod net;
 mod overlay;
-pub mod protocol;
 mod segment;
 mod settings;
 mod skeleton;

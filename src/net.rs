@@ -1,5 +1,5 @@
-use crate::protocol::{self, PositionPacket, SkeletonBone, TcpMessage};
 use crate::segment::Vec3;
+use drmod_protocol::{parse_udp, PositionPacket, SkeletonBone, SkeletonPacket, TcpMessage, UdpPacket};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc;
@@ -185,7 +185,15 @@ impl NetClient {
         if self.my_id == 0 {
             return;
         }
-        let packet = PositionPacket::from_vec3(self.my_id, pos, hp, mission_id);
+        let packet = PositionPacket {
+            id: self.my_id,
+            pos_x: pos.x,
+            pos_y: pos.y,
+            pos_z: pos.z,
+            yaw: 0.0,
+            hp,
+            mission_id,
+        };
         let bytes = packet.to_wire();
         let addr = match self.server_addr.to_socket_addrs() {
             Ok(mut a) => a.next(),
@@ -201,7 +209,7 @@ impl NetClient {
         if self.my_id == 0 {
             return;
         }
-        let packet = protocol::SkeletonPacket {
+        let packet = SkeletonPacket {
             id: self.my_id,
             bones: bones.to_vec(),
         };
@@ -224,8 +232,8 @@ impl NetClient {
                     if n == 0 {
                         continue;
                     }
-                    match protocol::parse_udp(&buf[..n]) {
-                        Some(protocol::UdpPacket::Position(packet)) => {
+                    match parse_udp(&buf[..n]) {
+                        Some(UdpPacket::Position(packet)) => {
                             if packet.id == self.my_id {
                                 continue;
                             }
@@ -234,7 +242,11 @@ impl NetClient {
                                 .iter_mut()
                                 .find(|p| p.id == packet.id)
                             {
-                                rp.pos = packet.to_vec3();
+                                rp.pos = Vec3 {
+                                    x: packet.pos_x,
+                                    y: packet.pos_y,
+                                    z: packet.pos_z,
+                                };
                                 rp.hp = packet.hp;
                                 rp.mission_id = packet.mission_id;
                                 rp.last_update = Instant::now();
@@ -243,7 +255,11 @@ impl NetClient {
                                 self.remote_players.push(RemotePlayer {
                                     id: pid,
                                     name: format!("Player {}", pid),
-                                    pos: packet.to_vec3(),
+                                    pos: Vec3 {
+                                        x: packet.pos_x,
+                                        y: packet.pos_y,
+                                        z: packet.pos_z,
+                                    },
                                     hp: packet.hp,
                                     mission_id: packet.mission_id,
                                     last_update: Instant::now(),
@@ -252,7 +268,7 @@ impl NetClient {
                                 });
                             }
                         }
-                        Some(protocol::UdpPacket::Skeleton(skel)) => {
+                        Some(UdpPacket::Skeleton(skel)) => {
                             if skel.id == self.my_id {
                                 continue;
                             }

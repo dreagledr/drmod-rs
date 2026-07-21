@@ -1,4 +1,3 @@
-use crate::segment::Vec3;
 use serde::{Deserialize, Serialize};
 
 // ── UDP packet type discriminators ────────────────────────────────
@@ -31,26 +30,6 @@ pub struct PositionPacket {
 }
 
 impl PositionPacket {
-    pub fn to_vec3(&self) -> Vec3 {
-        Vec3 {
-            x: self.pos_x,
-            y: self.pos_y,
-            z: self.pos_z,
-        }
-    }
-
-    pub fn from_vec3(id: u32, pos: Vec3, hp: i32, mission_id: i32) -> Self {
-        Self {
-            id,
-            pos_x: pos.x,
-            pos_y: pos.y,
-            pos_z: pos.z,
-            yaw: 0.0,
-            hp,
-            mission_id,
-        }
-    }
-
     /// Wire-формат: [PKT_POSITION] [28 байт тела] = 29 байт.
     pub fn to_wire(&self) -> [u8; 29] {
         let mut buf = [0u8; 29];
@@ -76,6 +55,17 @@ impl PositionPacket {
     pub fn from_bytes(bytes: &[u8; 28]) -> Self {
         unsafe { std::mem::transmute(*bytes) }
     }
+
+    /// Копирует пакет с заменой id и смещением позиции.
+    pub fn with_offset(&self, id: u32, offset: (f32, f32, f32)) -> Self {
+        Self {
+            id,
+            pos_x: self.pos_x + offset.0,
+            pos_y: self.pos_y + offset.1,
+            pos_z: self.pos_z + offset.2,
+            ..*self
+        }
+    }
 }
 
 // ── Skeleton packet ──────────────────────────────────────────────
@@ -95,6 +85,14 @@ pub struct SkeletonBone {
     pub x: f32,
     pub y: f32,
     pub z: f32,
+}
+
+impl SkeletonBone {
+    pub fn offset(&mut self, dx: f32, dy: f32, dz: f32) {
+        self.x += dx;
+        self.y += dy;
+        self.z += dz;
+    }
 }
 
 /// Скелет-пакет для UDP (переменной длины).
@@ -186,6 +184,8 @@ pub fn parse_udp(data: &[u8]) -> Option<UdpPacket> {
     }
 }
 
+// ── TCP messages ─────────────────────────────────────────────────
+
 /// TCP-сообщения (JSON, разделитель \0).
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -215,4 +215,11 @@ pub enum TcpMessage {
     PlayerDisconnected { id: u32 },
     #[serde(rename = "pong")]
     Pong,
+}
+
+/// Сериализует значение в JSON-вектор, добавляет `\0`-разделитель.
+pub fn make_msg<T: Serialize>(value: &T) -> Vec<u8> {
+    let mut json = serde_json::to_vec(value).unwrap_or_default();
+    json.push(0);
+    json
 }
