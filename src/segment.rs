@@ -87,7 +87,7 @@ static START_CONDITIONS: &[(i32, Vec3)] = &[
 
 pub enum SegmentAction {
     None,
-    Start,
+    Start { mission_id: i32 },
     End,
     Reset,
 }
@@ -102,89 +102,79 @@ pub struct ActiveSegment {
 
 /// Определяет необходимое действие с сегментом на основе текущего состояния игры.
 ///
-/// - `Reset`: активный сегмент есть + `MainMenuLoad` — сброс без сохранения
-/// - `End`: активный сегмент с mission_id 280 + `InMenu` + текущий mission_id 210
-/// - `Start`: нет активного сегмента + mission_id в хардкод-условиях + позиция совпадает
-/// - `None`: ничего не делать
+/// Старты (R-01–R-07): gStr4-переход `PF01 → Pxxx/EV60` (ASL start block).
+/// Старт R-00: позиционный (gStr2 пока не читаем).
+/// Финиши: ASL-сплиты через gStr/gStr2/rAnim (строгие, без fallback).
+/// Сброс: `MainMenuLoad`.
 pub fn segment_action(
     mission_id: i32,
     mission_name: &str,
     pos: Option<Vec3>,
     game_menu_status: GameMenuStatus,
+    gstr: &str,
+    prev_gstr: &str,
+    gstr2: &str,
+    prev_gstr2: &str,
+    r_anim: i32,
+    prev_r_anim: i32,
     active_segment: Option<&ActiveSegment>,
 ) -> SegmentAction {
     if let Some(seg) = active_segment {
-        // Сброс при выходе в главное меню
         if game_menu_status == GameMenuStatus::MainMenuLoad {
             return SegmentAction::Reset;
         }
 
-        // Хардкод: R-00 → R-01 переход
-        if seg.mission_id == 0x0A10
-            && game_menu_status == GameMenuStatus::InMenu
-            && mission_id == 0x0118
-        {
-            return SegmentAction::End;
-        }
-
-        // Хардкод: R-01 → R-02 переход (mission 280 → 210 через InMenu)
-        if seg.mission_id == 0x0118
-            && game_menu_status == GameMenuStatus::InMenu
-            && mission_id == 0x0210
-        {
-            return SegmentAction::End;
-        }
-
-        // Хардкод: R-02 → R-03 переход
-        if seg.mission_id == 0x0210
-            && game_menu_status == GameMenuStatus::InMenu
-            && mission_id == 0x0310
-        {
-            return SegmentAction::End;
-        }
-
-        // Хардкод: R-03 → R-04 переход
-        if seg.mission_id == 0x0310
-            && game_menu_status == GameMenuStatus::InMenu
-            && mission_id == 0x0410
-        {
-            return SegmentAction::End;
-        }
-
-        // Хардкод: R-04 → R-05 переход
-        if seg.mission_id == 0x0410
-            && game_menu_status == GameMenuStatus::InMenu
-            && mission_id == 0x0510
-        {
-            return SegmentAction::End;
-        }
-
-        // Хардкод: R-05 → R-06 переход
-        if seg.mission_id == 0x0510
-            && game_menu_status == GameMenuStatus::InMenu
-            && mission_id == 0x0610
-        {
-            return SegmentAction::End;
-        }
-
-        // Хардкод: R-06 → R-07 переход
-        if seg.mission_id == 0x0610
-            && game_menu_status == GameMenuStatus::InMenu
-            && mission_id == 0x0710
-        {
-            return SegmentAction::End;
-        }
-
-        // Хардкод: R-07 B qte
-        if let Some(pos) = pos {
-            if seg.mission_id == 0x0710
-                && game_menu_status == GameMenuStatus::InGame
-                && (pos.x - (-195.73)).abs() <= 0.1
-                && (pos.y - (-7.1)).abs() <= 0.1
-                && (pos.z - (-491.38)).abs() <= 0.1
-            {
-                return SegmentAction::End;
+        // Финиши миссий (ASL-сплиты, строгие)
+        match seg.mission_id {
+            0x0A10 => {
+                // R-00 finish: gStr2 "BEACH" ← "" && gStr ""
+                if gstr2 == "BEACH" && prev_gstr2.is_empty() && gstr.is_empty() {
+                    return SegmentAction::End;
+                }
             }
+            0x0118 => {
+                // R-01 finish: gStr "MIST_RESU" ← "MISTRAL03"
+                if gstr == "MIST_RESU" && prev_gstr == "MISTRAL03" {
+                    return SegmentAction::End;
+                }
+            }
+            0x0210 => {
+                // R-02 finish: gStr "EVENT2" + rAnim transition to 43
+                if gstr == "EVENT2" && r_anim != prev_r_anim && r_anim == 43 {
+                    return SegmentAction::End;
+                }
+            }
+            0x0310 => {
+                // R-03 finish: gStr "MON_RESUL" ← "FINISH_QT"
+                if gstr == "MON_RESUL" && prev_gstr == "FINISH_QT" {
+                    return SegmentAction::End;
+                }
+            }
+            0x0410 => {
+                // R-04 finish: gStr "SUN_RESUL" ← "QTE"
+                if gstr == "SUN_RESUL" && prev_gstr == "QTE" {
+                    return SegmentAction::End;
+                }
+            }
+            0x0510 => {
+                // R-05 finish: gStr "" ← "STREET"
+                if gstr.is_empty() && prev_gstr == "STREET" {
+                    return SegmentAction::End;
+                }
+            }
+            0x0610 => {
+                // R-06 finish: gStr "BOSS_END" ← "BOSS"
+                if gstr == "BOSS_END" && prev_gstr == "BOSS" {
+                    return SegmentAction::End;
+                }
+            }
+            0x0710 => {
+                // R-07 finish: rAnim 70 → 297 (Armstrong QTE)
+                if r_anim == 297 && prev_r_anim == 70 {
+                    return SegmentAction::End;
+                }
+            }
+            _ => {}
         }
 
         return SegmentAction::None;
@@ -201,7 +191,9 @@ pub fn segment_action(
                 && (pos.y - start_pos.y).abs() <= 1.0
                 && (pos.z - start_pos.z).abs() <= 0.1
             {
-                return SegmentAction::Start;
+                return SegmentAction::Start {
+                    mission_id,
+                };
             }
         }
     }

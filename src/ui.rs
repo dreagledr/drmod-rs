@@ -23,6 +23,10 @@ pub struct UiState {
     pub hp: i32,
     pub player_found: bool,
     pub segment_action: segment::SegmentAction,
+    pub gstr: String,
+    pub gstr2: String,
+    pub gstr4: String,
+    pub r_anim: i32,
 }
 
 pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
@@ -106,7 +110,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             if hud.active_segment.is_some() {
                 let action_name = match state.segment_action {
                     segment::SegmentAction::None => "None",
-                    segment::SegmentAction::Start => "Start",
+                    segment::SegmentAction::Start { .. } => "Start",
                     segment::SegmentAction::End => "End",
                     segment::SegmentAction::Reset => "Reset",
                 };

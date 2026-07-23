@@ -89,6 +89,12 @@ struct HelloHud {
     pub(crate) active_segment: Option<segment::ActiveSegment>,
     segment_was_active: bool,
     pub(crate) position_buffer: Vec<(segment::Vec3, i64)>,
+    // Per-frame previous values for ASL transition detection
+    prev_gstr: String,
+    prev_gstr2: String,
+    prev_gstr4: String,
+    prev_r_anim: i32,
+    r_anim_ptr: Option<NonNull<u8>>,
     pub(crate) ghost_positions: Vec<(segment::Vec3, i64)>,
     pub(crate) ghost_label: String,
     pub(crate) settings: settings::Settings,
@@ -140,6 +146,23 @@ impl HelloHud {
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA1D0) })
         };
 
+        // rAnim: 3-level pointer chain (ASL: 0x019C14C4 → +0x788 → +0x618)
+        let r_anim_ptr = if base_addr == 0 {
+            None
+        } else {
+            let l1 = unsafe { *((base_addr + 0x019C14C4) as *const usize) };
+            if l1 == 0 {
+                None
+            } else {
+                let l2 = unsafe { *((l1 + 0x788) as *const usize) };
+                if l2 == 0 {
+                    None
+                } else {
+                    NonNull::new((l2 + 0x618) as *mut u8)
+                }
+            }
+        };
+
         Self {
             current_run_start,
             prev_run_start,
@@ -153,6 +176,11 @@ impl HelloHud {
             active_segment: None,
             segment_was_active: false,
             position_buffer: Vec::new(),
+            prev_gstr: String::new(),
+            prev_gstr2: String::new(),
+            prev_gstr4: String::new(),
+            prev_r_anim: 0,
+            r_anim_ptr,
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
             settings: settings::Settings::default(),
@@ -189,6 +217,10 @@ impl HelloHud {
             hp: 0,
             player_found: false,
             segment_action: segment::SegmentAction::None,
+            gstr: String::new(),
+            gstr2: String::new(),
+            gstr4: String::new(),
+            r_anim: 0,
         };
 
         if self.base_addr != 0 {
@@ -215,6 +247,28 @@ impl HelloHud {
                     std::mem::transmute::<i32, game::GameMenuStatus>(state.menu_status_raw)
                 };
                 state.menu_status_valid = true;
+            }
+
+            // --- gStr / gStr2 / gStr4 (ASL location strings) ---
+            state.gstr = unsafe {
+                std::ffi::CStr::from_ptr((self.base_addr + 0x14B9181) as *const i8)
+            }
+            .to_string_lossy()
+            .into_owned();
+            state.gstr2 = unsafe {
+                std::ffi::CStr::from_ptr((self.base_addr + 0x14B91AD) as *const i8)
+            }
+            .to_string_lossy()
+            .into_owned();
+            state.gstr4 = unsafe {
+                std::ffi::CStr::from_ptr((self.base_addr + 0x14B91A8) as *const i8)
+            }
+            .to_string_lossy()
+            .into_owned();
+
+            // --- rAnim (Raiden animation, 3-level pointer chain) ---
+            if let Some(r_anim_ptr) = self.r_anim_ptr {
+                state.r_anim = unsafe { *(r_anim_ptr.as_ptr() as *const i32) };
             }
         }
 
@@ -251,8 +305,20 @@ impl HelloHud {
             &state.mission_name,
             state.position,
             state.menu_status,
+            &state.gstr,
+            &self.prev_gstr,
+            &state.gstr2,
+            &self.prev_gstr2,
+            state.r_anim,
+            self.prev_r_anim,
             self.active_segment.as_ref(),
         );
+
+        // Update prev_ values for next frame
+        self.prev_gstr = state.gstr.clone();
+        self.prev_gstr2 = state.gstr2.clone();
+        self.prev_gstr4 = state.gstr4.clone();
+        self.prev_r_anim = state.r_anim;
 
         // --- APPLY SEGMENT ACTION ---
         match state.segment_action {
@@ -273,13 +339,13 @@ impl HelloHud {
                 self.ghost_label.clear();
                 self.active_segment = None;
             }
-            segment::SegmentAction::Start => {
+            segment::SegmentAction::Start { mission_id } => {
                 self.position_buffer.clear();
                 self.ghost_positions.clear();
                 self.ghost_label.clear();
 
                 let fastest_ms = if let Some(ref conn) = self.db_conn {
-                    let (ms, positions) = segment::load_best_ghost(conn, state.mission_id);
+                    let (ms, positions) = segment::load_best_ghost(conn, mission_id);
                     if let Some(best_ms) = ms {
                         self.ghost_label =
                             format!("Best {}", overlay::format_duration_ms(best_ms as u64));
@@ -293,7 +359,7 @@ impl HelloHud {
                 self.active_segment = Some(segment::ActiveSegment {
                     start_instant: Instant::now(),
                     started_at: Local::now().format("%Y-%m-%d %H:%M:%S").to_string(),
-                    mission_id: state.mission_id,
+                    mission_id,
                     mission_name: state.mission_name.clone(),
                     fastest_ms,
                 });
