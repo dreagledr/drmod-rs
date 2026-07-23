@@ -1,5 +1,6 @@
 use crate::game;
 use crate::net;
+#[cfg(debug_assertions)]
 use crate::overlay;
 use crate::segment;
 use crate::HelloHud;
@@ -29,6 +30,7 @@ pub struct UiState {
     pub r_anim: i32,
 }
 
+#[cfg(debug_assertions)]
 pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
     ui.window("DrmodDebug")
         .size([320., 600.], Condition::Always)
@@ -259,6 +261,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
 pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
     ui.window("Multiplayer")
         .size([300.0, 250.0], Condition::FirstUseEver)
+        .position([10.0, 30.0], Condition::FirstUseEver)
         .build(|| {
             ui.input_text("Server", &mut hud.server_addr)
                 .hint("127.0.0.1:5222")
@@ -324,11 +327,19 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
         });
 }
 
-pub fn render_settings_window(ui: &Ui, settings: &mut crate::settings::Settings) {
+pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
+    let settings = &mut hud.settings;
     ui.window("Settings")
         .size([250.0, 150.0], Condition::FirstUseEver)
+        .position([320.0, 30.0], Condition::FirstUseEver)
         .build(|| {
             ui.checkbox("Show best ghost", &mut settings.show_best_ghost);
             ui.slider("Ghost opacity", 0.0f32, 1.0f32, &mut settings.ghost_opacity);
+
+            ui.separator();
+            if ui.button("Выход / Выгрузить DLL") {
+                hud.net_client = None;
+                hudhook::eject();
+            }
         });
 }

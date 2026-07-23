@@ -447,6 +447,7 @@ impl ImguiRenderLoop for HelloHud {
         }
 
         // ── Saved position cylinder (green, semi-transparent) ──────
+        #[cfg(debug_assertions)]
         if let Some((sx, sy, sz)) = self.saved_position {
             self.dummy.render(
                 device,
@@ -589,8 +590,11 @@ impl ImguiRenderLoop for HelloHud {
         // ─────────────────────────────────────────────────────────────
 
         let ui_state = self.read_game_state();
+        #[cfg(not(debug_assertions))]
+        let _ = &ui_state; // suppress unused warning in release
 
-        // Key handlers (NumPad1/2/3)
+        // Key handlers (NumPad1/2/3) — debug only
+        #[cfg(debug_assertions)]
         if !self.cached_player_obj_ptr.is_null() {
             let p = self.cached_player_obj_ptr;
             if ui.is_key_pressed_no_repeat(Key::Keypad1) {
@@ -617,7 +621,8 @@ impl ImguiRenderLoop for HelloHud {
             }
         }
 
-        // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ ---
+        // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ (debug) ---
+        #[cfg(debug_assertions)]
         if let (Some((sx, sy, sz)), Some(camera_addr)) = (self.saved_position, self.camera_ptr_addr)
         {
             overlay::draw_world_pos(
@@ -686,11 +691,12 @@ impl ImguiRenderLoop for HelloHud {
             }
         }
 
+        #[cfg(debug_assertions)]
         ui::render_main_window(ui, self, &ui_state);
 
         ui::render_multiplayer_window(ui, self);
 
-        ui::render_settings_window(ui, &mut self.settings);
+        ui::render_settings_window(ui, self);
     }
 }
 
