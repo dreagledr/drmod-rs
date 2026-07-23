@@ -2,18 +2,18 @@
 
 ## Project Overview
 
-A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**. The project consists of two components:
+A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**. The project consists of:
 
 - **Binary (`drmod`)**: Injects a DLL into the running game process
 - **Library (`drmod_rs_lib`)**: Hooks into DirectX 9 to render an ImGui overlay that reads game memory in real-time
+- **Server (`server/`)**: Multiplayer relay server (tokio, Docker, 64-bit)
+- **Protocol (`protocol/`)**: Shared types for TCP (JSON) and UDP (binary) communication
 
-The overlay currently displays:
-- Current and previous run start times (from SQLite database)
-- Player coordinates (X, Y, Z) read from memory offsets
-- Player HP
-- Game menu status (In Game, Pause Menu, etc.)
-- Equipped weapons: Main, Custom (numeric ID + name), Sub (numeric ID from PlayerManagerImplement)
-- Saved position with teleport and on-screen projection
+Features:
+- Segment-based autosplitter with SQLite persistence and ghost replay
+- Multiplayer position sync (TCP + UDP)
+- World-to-screen projection (camera matrix, D3D viewport)
+- Debug panel with live game state (debug builds only)
 
 Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and [imgui-rs](https://github.com/imgui-rs/imgui-rs) for the UI.
 
@@ -21,21 +21,129 @@ Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and 
 
 ```
 src/
-├── main.rs    # Injector binary — finds game process, injects DLL
-└── lib.rs     # HUD library — hooks DX9, renders ImGui overlay, reads game memory
+├── main.rs          # Injector binary — finds game process, injects DLL
+├── lib.rs           # HUD library — DX9 hook, ImGui overlay, game memory, main loop
+├── segment.rs       # Segment tracking — start conditions, ASL-based finish triggers, DB cleanup
+├── ui.rs            # ImGui windows — debug panel (debug only), multiplayer, settings
+├── game.rs          # GameMenuStatus enum, weapon name helpers
+├── net.rs           # TCP + UDP client for multiplayer
+├── overlay.rs       # world_to_screen projection, draw_world_pos
+├── settings.rs      # User settings (ghost opacity, show ghost toggle)
+├── d3d_render.rs    # CylinderRenderer, SphereRenderer for 3D overlays
+├── skeleton.rs      # Bone/skeleton data structures
+server/              # Multiplayer server (tokio, 64-bit, Docker)
+protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPacket)
+ref/                 # Git submodules — read-only reference projects
 ```
 
-**Key memory offsets** (from `lib.rs`):
-- Static pointer to player object: `base + 0x177B4A4`
-- Position X/Y/Z: offsets `0x50`, `0x54`, `0x58` from player object pointer
-- HP: offset `0x870` from player object pointer
-- Game menu status: `base + 0x17E9F9C` (enum 0-18)
-- PlayerManagerImplement pointer: `base + 0x17EA100`
-  - Main weapon: offset `0xE0` from PlayerManagerImplement
-  - Custom weapon: offset `0xE4` from PlayerManagerImplement
-  - Sub weapon: offset `0xE8` from PlayerManagerImplement
+## Memory Offsets
 
-See `game/SDK_ANALYSIS.md` for full MGR plugin SDK analysis.
+All addresses are relative to the game module base (`GetModuleHandleA(null)`).
+
+### Player object (Pl0000)
+
+Static pointer: `base + 0x177B4A4` → dereference to get player object.
+
+| Offset | Type | Field |
+|--------|------|-------|
+| `0x50` | `f32` | Position X |
+| `0x54` | `f32` | Position Y |
+| `0x58` | `f32` | Position Z |
+| `0x870` | `i32` | Current HP |
+| `0xB74` | `i32` | Sword hidden flag |
+| `0x13FC` | `i32` | Sword state |
+
+### PlayerManagerImplement
+
+Static pointer: `base + 0x17EA100`.
+
+| Offset | Type | Field |
+|--------|------|-------|
+| `0xE0` | `i32` | Main weapon ID |
+| `0xE4` | `i32` | Custom weapon ID |
+| `0xE8` | `i32` | Sub weapon ID |
+
+### Game state
+
+| Address | Type | Field |
+|---------|------|-------|
+| `base + 0x17E9F9C` | `i32` | GameMenuStatus (enum 0–18) |
+| `base + 0x1764670` | `i32` | Current mission ID |
+| `base + 0x1764674` | `*const i8` | Current mission name string |
+| `base + 0x14B9181` | `*const i8` | gStr — game location string |
+| `base + 0x14B91AD` | `*const i8` | gStr2 — game location string 2 |
+| `base + 0x14B91A8` | `*const i8` | gStr4 — mission identifier ("P118", "EV60", etc.) |
+
+### Camera
+
+Static pointer: `base + 0x17EA1D0` (cCameraGame::Instance).
+
+| Offset | Type | Field |
+|--------|------|-------|
+| `0x200` | `[f32; 16]` | View-projection matrix |
+
+### Animation (Raiden)
+
+3-level pointer chain: `base + 0x019C14C4 → +0x788 → +0x618`
+
+| Level | Type | Field |
+|-------|------|-------|
+| Final | `i32` | rAnim — Raiden's current animation ID |
+
+## Segment Tracking
+
+### Start conditions
+
+Position-gated: `START_CONDITIONS` table in `segment.rs`. Each mission has a spawn position with ±0.1m (XY) / ±1.0m (Y) tolerance.
+
+### Finish conditions (ASL-based)
+
+Derived from [livesplit_asl_mgrr](https://github.com/hau5test/livesplit_asl_mgrr) reference. Use gStr/gStr2/rAnim — no InMenu waiting:
+
+| Mission | Trigger |
+|---------|---------|
+| R-00 | `gstr2: "" → "BEACH"` && `gstr == ""` |
+| R-01 | `gstr: "MISTRAL03" → "MIST_RESU"` |
+| R-02 | `gstr: "EVENT2"` + `rAnim` transition to 43 |
+| R-03 | `gstr: "FINISH_QT" → "MON_RESUL"` |
+| R-04 | `gstr: "QTE" → "SUN_RESUL"` |
+| R-05 | `gstr: "STREET" → ""` |
+| R-06 | `gstr: "BOSS" → "BOSS_END"` |
+| R-07 | `rAnim: 70 → 297` (Armstrong QTE) |
+
+### Database
+
+SQLite at `%LOCALAPPDATA%\drmod\runs.db`.
+
+**Tables:**
+```sql
+CREATE TABLE runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at TEXT NOT NULL
+);
+
+CREATE TABLE segments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    mission_id INTEGER NOT NULL,
+    mission_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL
+);
+
+CREATE TABLE segment_positions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    segment_id INTEGER NOT NULL,
+    pos_x REAL NOT NULL,
+    pos_y REAL NOT NULL,
+    pos_z REAL NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    FOREIGN KEY (segment_id) REFERENCES segments(id) ON DELETE CASCADE
+);
+```
+
+- On flush: only the best (minimum `duration_ms`) segment per `mission_id` is kept
+- WAL mode + NORMAL synchronous for fast bulk inserts
+- Ghost replay reads best segment positions via `load_best_ghost()`
 
 ## Building and Running
 
@@ -86,58 +194,48 @@ cargo run --release -- -n "Custom Window Name.exe"
 | `hudhook` (0.9.0) | DirectX hooking and injection |
 | `imgui` (0.12.0) | ImGui bindings for UI rendering |
 | `windows` (0.62.2) | Windows API (UI windows, module loading) |
-| `rusqlite` (0.40.1, bundled) | SQLite for persisting run data (startup times, future: config, stats) |
+| `rusqlite` (0.40.1, bundled) | SQLite for persisting run data |
 | `chrono` (0.4.45) | Time formatting for run timestamps |
+| `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol |
+| `drmod-protocol` | Shared types for client-server communication |
 
 ### Notes
 
 - **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since addresses are computed once in `new()` and never mutated.
-- All static addresses (`0x177B4A4`, `0x17E9F9C`, `0x17EA100`) are calculated once at init time, not per-frame, for performance.
-- `ref/mgr-plugin-sdk/` (git submodule) — C++ SDK with 529 reverse-engineered game headers. `game/SDK_ANALYSIS.md` has the analysis.
-- `ref/livesplit_asl_mgrr/` (git submodule) — эталонный автосплиттер LiveSplit ASL для сверки чекпойнтов.
-- `ref/MGR-RedTrainer/` (git submodule) — референсный трейнер на C++.
-- `ref/mmultiplayer/` (git submodule) — референсный мультиплеерный мод Mirror's Edge.
-- Weapon type IDs are raw `int` values — the SDK has no enum mapping weapon names to IDs. IDs must be discovered through runtime experimentation.
-- Custom weapon ID → name mapping (in `custom_weapon_name()`): `0` → `None`, `2` → `Polearm`, `3` → `Sai`, `4` → `Pincer`. Unknown IDs show as `Unknown`.
-- The `.CT` file in the root (`METAL GEAR RISING REVENGEANCE (1).CT`) is a Cheat Engine table, used to discover memory offsets.
-- Error handling uses Windows `MessageBoxW` for user-facing errors
-- The `show_msgbox` function encodes text as UTF-16 for the Windows API
-- Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against)
+- All static addresses are calculated once at init time, not per-frame.
+- **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window, Numpad keys (save/teleport/+10Y), saved position display. Release builds keep only Multiplayer and Settings windows.
+- Error handling uses Windows `MessageBoxW` for user-facing errors.
+- Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
 
-### Run Persistence (SQLite)
+### Reference Projects
 
-On DLL load, a SQLite database is created/opened at `%LOCALAPPDATA%\drmod\runs.db`. The directory is auto-created on first run.
+In `ref/` as git submodules (read-only):
 
-**Schema:**
-```sql
-CREATE TABLE IF NOT EXISTS runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    started_at TEXT NOT NULL
-);
-```
-
-**Behavior:**
-- `init_db()` in `lib.rs` runs once in `HelloHud::new()` — reads the previous run's `started_at`, inserts the current `chrono::Local::now()` timestamp
-- UI displays `Current run:` and `Previous run:` (or `N/A` if no prior run or DB unavailable)
-- All errors are silently handled — if `LOCALAPPDATA` is unset, directory creation fails, or SQLite fails, the fields gracefully fall back to showing only the current time and `N/A` for previous
+| Project | Source | For |
+|---------|--------|-----|
+| `mgr-plugin-sdk` | [Frouk3/mgr-plugin-sdk](https://github.com/Frouk3/mgr-plugin-sdk) | 529 reverse-engineered game headers (GPLv3) |
+| `livesplit_asl_mgrr` | [hau5test/livesplit_asl_mgrr](https://github.com/hau5test/livesplit_asl_mgrr) | Reference autosplitter for checkpoint verification |
+| `MGR-RedTrainer` | [Baromir19/MGR-RedTrainer](https://github.com/Baromir19/MGR-RedTrainer) | Reference trainer (C++) |
+| `mmultiplayer` | [softsoundd/mmultiplayer](https://github.com/softsoundd/mmultiplayer) | Reference multiplayer mod for Mirror's Edge |
 
 ### Input Handling
 
 The overlay supports keyboard input via hudhook's built-in WndProc hook — it intercepts `WM_KEYDOWN`/`WM_KEYUP` messages from the game window and feeds them to imgui-rs through `Io::add_key_event()`.
 
-**Key detection** (in `HelloHud::render()`):
-- `ui.is_key_down(Key::*)` — клавиша зажата
-- `ui.is_key_pressed_no_repeat(Key::*)` — однократное нажатие
-- `ui.is_key_pressed(Key::*)` — нажатие с автоповтором
+**Debug bindings** (`#[cfg(debug_assertions)]` only):
 
-All `imgui::Key` variants (including `Key::Keypad0`–`Key::Keypad9`) are available. See `Cargo registry imgui-0.12.0/src/input/keyboard.rs` for the full enum.
-
-**Current bindings:**
 | Key | Action |
 |-----|--------|
-| `NumPad0` | Toggle `test_flag` (debug/development use only) |
-| `NumPad1` | +10m к Y-координате игрока (прямая запись в память) |
+| `NumPad1` | +10m to player Y coordinate (direct memory write) |
 | `NumPad2` | Save current position |
 | `NumPad3` | Teleport to saved position |
 
 Memory writes use raw `*mut f32` pointers — since the DLL is injected, it has direct access to game memory.
+
+### Multiplayer Protocol
+
+- **TCP** (port 5222): JSON messages with `\0` delimiter — connect, disconnect, player list
+- **UDP** (port 5222): Binary `PositionPacket` (28 bytes) — position + mission_id + HP, sent every frame
+- Client: blocking TCP in separate `std::thread`, non-blocking UDP in render frame
+- Server: tokio-based, relays UDP to all clients in the same room
+- Room concept: lobbies, no mission filtering on server side
