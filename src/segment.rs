@@ -270,6 +270,14 @@ pub fn finish_segment(conn: &Connection, seg: &ActiveSegment, positions: &[(Vec3
         }
         let _ = conn.execute("COMMIT", []);
     }
+
+    // Keep only the best (fastest) segment per mission_id
+    let _ = conn.execute(
+        "DELETE FROM segments WHERE mission_id = ?1 AND id != (
+            SELECT id FROM segments WHERE mission_id = ?1 ORDER BY duration_ms ASC LIMIT 1
+        )",
+        [seg.mission_id],
+    );
 }
 
 pub fn load_best_ghost(conn: &Connection, mission_id: i32) -> (Option<i64>, Vec<(Vec3, i64)>) {
