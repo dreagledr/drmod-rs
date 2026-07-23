@@ -329,7 +329,7 @@ impl HelloHud {
                 self.active_segment = None;
             }
             segment::SegmentAction::End => {
-                if let (Some(seg), Some(ref conn)) =
+                if let (Some(seg), Some(conn)) =
                     (self.active_segment.as_ref(), self.db_conn.as_ref())
                 {
                     segment::finish_segment(conn, seg, &self.position_buffer);
@@ -368,12 +368,11 @@ impl HelloHud {
         }
 
         // --- POSITION BUFFER PUSH ---
-        if state.player_found {
-            if let (Some(ref seg), Some(pos)) = (self.active_segment.as_ref(), state.position) {
+        if state.player_found
+            && let (Some(seg), Some(pos)) = (self.active_segment.as_ref(), state.position) {
                 let dur = seg.start_instant.elapsed().as_millis() as i64;
                 self.position_buffer.push((pos, dur));
             }
-        }
 
         self.segment_was_active = self.active_segment.is_some();
 
@@ -420,16 +419,10 @@ impl ImguiRenderLoop for HelloHud {
 
         // ── Ghost cylinder (red, semi-transparent) ──────────────────
         if self.settings.show_best_ghost
-            && self.active_segment.is_some()
+            && let Some(seg) = self.active_segment.as_ref()
             && !self.ghost_positions.is_empty()
         {
-            let current_ms = self
-                .active_segment
-                .as_ref()
-                .unwrap()
-                .start_instant
-                .elapsed()
-                .as_millis() as i64;
+            let current_ms = seg.start_instant.elapsed().as_millis() as i64;
             let idx = self
                 .ghost_positions
                 .partition_point(|&(_, dur)| dur <= current_ms);
@@ -548,7 +541,7 @@ impl ImguiRenderLoop for HelloHud {
                 }
             });
 
-            if let (Some(pos), Some(ref seg)) = (pos_opt, self.active_segment.as_ref()) {
+            if let (Some(pos), Some(seg)) = (pos_opt, self.active_segment.as_ref()) {
                 let changed =
                     self.last_sent_pos != Some(pos) || self.last_sent_mission_id != seg.mission_id;
                 if changed {
@@ -640,8 +633,7 @@ impl ImguiRenderLoop for HelloHud {
             && self.active_segment.is_some()
             && !self.ghost_positions.is_empty()
             && !self.ghost_label.is_empty()
-        {
-            if let (Some(camera_addr), Some(ref seg)) =
+            && let (Some(camera_addr), Some(seg)) =
                 (self.camera_ptr_addr, self.active_segment.as_ref())
             {
                 let current_ms = seg.start_instant.elapsed().as_millis() as i64;
@@ -660,7 +652,6 @@ impl ImguiRenderLoop for HelloHud {
                     );
                 }
             }
-        }
 
         // --- ОТРИСОВКА ЧУЖИХ ИГРОКОВ (2D маркеры) ---
         if let (Some(nc), Some(camera_addr), Some(seg)) = (

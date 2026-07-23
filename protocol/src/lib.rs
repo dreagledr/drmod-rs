@@ -177,9 +177,9 @@ pub enum UdpPacket {
 
 /// Парсит UDP-датаграмму: читает первый байт-дискриминатор, возвращает вариант.
 pub fn parse_udp(data: &[u8]) -> Option<UdpPacket> {
-    match data.first()? {
-        &PKT_POSITION => PositionPacket::from_wire(data).map(UdpPacket::Position),
-        &PKT_SKELETON => SkeletonPacket::from_wire(data).map(UdpPacket::Skeleton),
+    match *data.first()? {
+        PKT_POSITION => PositionPacket::from_wire(data).map(UdpPacket::Position),
+        PKT_SKELETON => SkeletonPacket::from_wire(data).map(UdpPacket::Skeleton),
         _ => None,
     }
 }

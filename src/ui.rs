@@ -270,17 +270,14 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
             ui.input_text("Room", &mut hud.room_name).build();
 
             if hud.net_client.is_none() {
-                if ui.button("Connect") {
-                    match net::NetClient::new(
+                if ui.button("Connect")
+                    && let Ok(nc) = net::NetClient::new(
                         &hud.server_addr,
                         &hud.player_name,
                         &hud.room_name,
-                    ) {
-                        Ok(nc) => {
-                            hud.net_client = Some(nc);
-                        }
-                        Err(_) => {}
-                    }
+                    )
+                {
+                    hud.net_client = Some(nc);
                 }
             } else {
                 if ui.button("Disconnect") {
@@ -308,7 +305,7 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
 
                 for rp in &nc.remote_players {
                     let mission = format!("0x{:04X}", rp.mission_id);
-                    let active = if hud.active_segment.as_ref().map_or(false, |s| {
+                    let active = if hud.active_segment.as_ref().is_some_and(|s| {
                         s.mission_id == rp.mission_id
                     }) {
                         " [active]"

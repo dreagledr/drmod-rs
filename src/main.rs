@@ -40,7 +40,7 @@ fn main() {
         Err(e) => {
             show_msgbox(&format!(
                 "Не смогли найти {}. Убедитесь что игра запущена.\n{}",
-                &title, e
+                title, e
             ));
             return;
         }
@@ -82,7 +82,7 @@ fn parse_name_args(mut args: env::Args) -> std::result::Result<String, String> {
         }
     }
 
-    return Ok(DEFAULT_TITLE.to_string());
+    Ok(DEFAULT_TITLE.to_string())
 }
 
 fn show_msgbox(text: &str) {

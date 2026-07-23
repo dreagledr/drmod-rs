@@ -87,42 +87,36 @@ impl NetClient {
                 .spawn(move || {
                     let mut byte = [0u8; 1];
                     let mut buf = Vec::new();
-                    loop {
-                        match tcp_clone.read_exact(&mut byte) {
-                            Ok(()) => {
-                                if byte[0] == 0 {
-                                    if let Ok(msg) = serde_json::from_slice::<TcpMessage>(&buf) {
-                                        let event = match msg {
-                                            TcpMessage::IdAssigned { id } => {
-                                                Some(TcpEvent::IdAssigned(id))
-                                            }
-                                            TcpMessage::PlayerConnected {
-                                                id,
-                                                name,
-                                                mission_id,
-                                            } => Some(TcpEvent::PlayerConnected {
-                                                id,
-                                                name,
-                                                mission_id,
-                                            }),
-                                            TcpMessage::PlayerDisconnected { id } => {
-                                                Some(TcpEvent::PlayerDisconnected(id))
-                                            }
-                                            TcpMessage::Pong => Some(TcpEvent::Pong),
-                                            _ => None, // Connect/Disconnect/Ping — клиент не принимает
-                                        };
-                                        if let Some(event) = event {
-                                            if tx.send(event).is_err() {
-                                                break; // главный поток закрылся
-                                            }
-                                        }
+                    while let Ok(()) = tcp_clone.read_exact(&mut byte) {
+                        if byte[0] == 0 {
+                            if let Ok(msg) = serde_json::from_slice::<TcpMessage>(&buf) {
+                                let event = match msg {
+                                    TcpMessage::IdAssigned { id } => {
+                                        Some(TcpEvent::IdAssigned(id))
                                     }
-                                    buf.clear();
-                                } else {
-                                    buf.push(byte[0]);
-                                }
+                                    TcpMessage::PlayerConnected {
+                                        id,
+                                        name,
+                                        mission_id,
+                                    } => Some(TcpEvent::PlayerConnected {
+                                        id,
+                                        name,
+                                        mission_id,
+                                    }),
+                                    TcpMessage::PlayerDisconnected { id } => {
+                                        Some(TcpEvent::PlayerDisconnected(id))
+                                    }
+                                    TcpMessage::Pong => Some(TcpEvent::Pong),
+                                    _ => None,
+                                };
+                                if let Some(event) = event
+                                    && tx.send(event).is_err() {
+                                        break;
+                                    }
                             }
-                            Err(_) => break, // соединение разорвано
+                            buf.clear();
+                        } else {
+                            buf.push(byte[0]);
                         }
                     }
                 })

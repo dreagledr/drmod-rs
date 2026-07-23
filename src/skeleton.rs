@@ -134,7 +134,7 @@ pub fn draw_skeleton_overlay(ui: &Ui, bones: &[BonePos], camera_ptr: *const u8, 
     }
 
     for (i, proj_opt) in projections.iter().enumerate() {
-        if bones[i].index % 5 != 0 {
+        if !bones[i].index.is_multiple_of(5) {
             continue;
         }
         if let Some(([sx, sy], _dist)) = proj_opt {

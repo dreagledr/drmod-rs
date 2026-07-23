@@ -106,6 +106,7 @@ pub struct ActiveSegment {
 /// Старт R-00: позиционный (gStr2 пока не читаем).
 /// Финиши: ASL-сплиты через gStr/gStr2/rAnim (строгие, без fallback).
 /// Сброс: `MainMenuLoad`.
+#[allow(clippy::too_many_arguments)]
 pub fn segment_action(
     mission_id: i32,
     mission_name: &str,
@@ -168,12 +169,11 @@ pub fn segment_action(
                     return SegmentAction::End;
                 }
             }
-            0x0710 => {
+            0x0710
                 // R-07 finish: rAnim 70 → 297 (Armstrong QTE)
-                if r_anim == 297 && prev_r_anim == 70 {
+                if r_anim == 297 && prev_r_anim == 70 => {
                     return SegmentAction::End;
                 }
-            }
             _ => {}
         }
 
@@ -185,9 +185,9 @@ pub fn segment_action(
         return SegmentAction::None;
     }
 
-    if let Some(pos) = pos {
-        if let Some(&(_, start_pos)) = START_CONDITIONS.iter().find(|&&(id, _)| id == mission_id) {
-            if (pos.x - start_pos.x).abs() <= 0.1
+    if let Some(pos) = pos
+        && let Some(&(_, start_pos)) = START_CONDITIONS.iter().find(|&&(id, _)| id == mission_id)
+            && (pos.x - start_pos.x).abs() <= 0.1
                 && (pos.y - start_pos.y).abs() <= 1.0
                 && (pos.z - start_pos.z).abs() <= 0.1
             {
@@ -195,8 +195,6 @@ pub fn segment_action(
                     mission_id,
                 };
             }
-        }
-    }
 
     SegmentAction::None
 }
@@ -307,10 +305,8 @@ pub fn load_best_ghost(conn: &Connection, mission_id: i32) -> (Option<i64>, Vec<
     }) else {
         return (Some(best_ms), positions);
     };
-    for row in rows {
-        if let Ok(pos) = row {
-            positions.push(pos);
-        }
+    for pos in rows.flatten() {
+        positions.push(pos);
     }
     (Some(best_ms), positions)
 }
