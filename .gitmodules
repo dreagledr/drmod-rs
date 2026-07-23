@@ -1,0 +1,12 @@
+[submodule "ref/MGR-RedTrainer"]
+	path = ref/MGR-RedTrainer
+	url = https://github.com/Baromir19/MGR-RedTrainer.git
+[submodule "ref/mgr-plugin-sdk"]
+	path = ref/mgr-plugin-sdk
+	url = https://github.com/Frouk3/mgr-plugin-sdk.git
+[submodule "ref/mmultiplayer"]
+	path = ref/mmultiplayer
+	url = https://github.com/softsoundd/mmultiplayer.git
+[submodule "ref/livesplit_asl_mgrr"]
+	path = ref/livesplit_asl_mgrr
+	url = https://github.com/hau5test/livesplit_asl_mgrr.git

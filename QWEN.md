@@ -70,6 +70,10 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 ## Development
 
+### Commit Rules
+
+- **Перед каждым коммитом** проверять актуальность `QWEN.md`: если изменения затрагивают архитектуру, зависимости, новые модули, референсы, или любую информацию из этого файла — обновить соответствующие секции.
+
 ### Language & Edition
 
 - Rust 2024 edition
@@ -89,7 +93,10 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 - **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since addresses are computed once in `new()` and never mutated.
 - All static addresses (`0x177B4A4`, `0x17E9F9C`, `0x17EA100`) are calculated once at init time, not per-frame, for performance.
-- The `mgr-plugin-sdk/` directory contains a C++ SDK with 529 reverse-engineered game headers. `game/SDK_ANALYSIS.md` has the analysis.
+- `ref/mgr-plugin-sdk/` (git submodule) — C++ SDK with 529 reverse-engineered game headers. `game/SDK_ANALYSIS.md` has the analysis.
+- `ref/livesplit_asl_mgrr/` (git submodule) — эталонный автосплиттер LiveSplit ASL для сверки чекпойнтов.
+- `ref/MGR-RedTrainer/` (git submodule) — референсный трейнер на C++.
+- `ref/mmultiplayer/` (git submodule) — референсный мультиплеерный мод Mirror's Edge.
 - Weapon type IDs are raw `int` values — the SDK has no enum mapping weapon names to IDs. IDs must be discovered through runtime experimentation.
 - Custom weapon ID → name mapping (in `custom_weapon_name()`): `0` → `None`, `2` → `Polearm`, `3` → `Sai`, `4` → `Pincer`. Unknown IDs show as `Unknown`.
 - The `.CT` file in the root (`METAL GEAR RISING REVENGEANCE (1).CT`) is a Cheat Engine table, used to discover memory offsets.
