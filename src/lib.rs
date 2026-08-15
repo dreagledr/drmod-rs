@@ -9,6 +9,7 @@ mod d3d_render;
 mod game;
 mod net;
 mod overlay;
+mod replay;
 mod segment;
 mod settings;
 mod skeleton;
@@ -102,6 +103,24 @@ struct HelloHud {
     dummy: CylinderRenderer,
     remote_sphere: SphereRenderer,
     pub(crate) cached_player_obj_ptr: *mut u8,
+    // Raw input (Record/Replay)
+    pub(crate) key_input_addr: Option<NonNull<u8>>,
+    pub(crate) mouse_input_addr: Option<NonNull<u8>>,
+    // Хук cInput::updateInputUnit (подача ввода: подмена InputUnit[0])
+    pub(crate) input_hook: Option<hudhook::mh::MhHook>,
+    // Инжекция ввода (debug-кнопки)
+    #[cfg(debug_assertions)]
+    pub(crate) inject_w: bool,
+    #[cfg(debug_assertions)]
+    pub(crate) inject_camera: bool,
+    #[cfg(debug_assertions)]
+    pub(crate) inject_jump_frames: u32,
+    #[cfg(debug_assertions)]
+    pub(crate) inject_light_frames: u32,
+    #[cfg(debug_assertions)]
+    pub(crate) inject_heavy_frames: u32,
+    #[cfg(debug_assertions)]
+    pub(crate) script_frames: u32,
     pub(crate) d3d_frame_count: u32,
     pub(crate) d3d_last_error: String,
     // Multiplayer
@@ -146,6 +165,18 @@ impl HelloHud {
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA1D0) })
         };
 
+        // Сырой ввод: cInput::ms_KeyInput / cInput::ms_MouseInput (SDK, Hw.h)
+        let key_input_addr = if base_addr == 0 {
+            None
+        } else {
+            NonNull::new(unsafe { (base_addr as *mut u8).add(replay::KEY_INPUT) })
+        };
+        let mouse_input_addr = if base_addr == 0 {
+            None
+        } else {
+            NonNull::new(unsafe { (base_addr as *mut u8).add(replay::MOUSE_INPUT) })
+        };
+
         // rAnim: 3-level pointer chain (ASL: 0x019C14C4 → +0x788 → +0x618)
         let r_anim_ptr = if base_addr == 0 {
             None
@@ -162,6 +193,16 @@ impl HelloHud {
                 }
             }
         };
+
+        // Хук cInput::updateInputUnit — подача ввода: после вызова оригинала
+        // перезаписываем глобальный InputUnit[0] (реальный источник игрока).
+        let input_hook = Self::create_input_hook(base_addr);
+
+        replay::log_line(&format!(
+            "=== drmod init === base=0x{:08X} input_hook={}",
+            base_addr,
+            if input_hook.is_some() { "OK" } else { "FAIL" }
+        ));
 
         Self {
             current_run_start,
@@ -187,6 +228,21 @@ impl HelloHud {
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
             cached_player_obj_ptr: std::ptr::null_mut(),
+            key_input_addr,
+            mouse_input_addr,
+            input_hook,
+            #[cfg(debug_assertions)]
+            inject_w: false,
+            #[cfg(debug_assertions)]
+            inject_camera: false,
+            #[cfg(debug_assertions)]
+            inject_jump_frames: 0,
+            #[cfg(debug_assertions)]
+            inject_light_frames: 0,
+            #[cfg(debug_assertions)]
+            inject_heavy_frames: 0,
+            #[cfg(debug_assertions)]
+            script_frames: 0,
             d3d_frame_count: 0,
             d3d_last_error: String::new(),
             net_client: None,
@@ -199,6 +255,46 @@ impl HelloHud {
             viewport: [0.0; 4],
         }
     }
+
+    /// Устанавливает MinHook на `cInput::updateInputUnit` (0x9DAFE0):
+    /// после вызова оригинала детур перезаписывает InputUnit игрока.
+    /// Возвращает хук для удержания (хранится в HelloHud).
+    fn create_input_hook(base_addr: usize) -> Option<hudhook::mh::MhHook> {
+        use core::ffi::c_void;
+        use hudhook::mh::{MH_ApplyQueued, MhHook};
+
+        if base_addr == 0 {
+            replay::log_line("create_input_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + replay::UPDATE_INPUT_UNIT) as *mut c_void;
+        let detour = replay::update_input_unit_detour as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, detour) } {
+            Ok(h) => h,
+            Err(e) => {
+                replay::log_line(&format!(
+                    "create_input_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "C" fn(*mut replay::InputUnit, i32) =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = replay::set_original_update_input_unit(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            replay::log_line(&format!("create_input_hook: queue_enable FAIL err={:?}", e));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        replay::log_line(&format!(
+            "create_input_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
     fn read_game_state(&mut self) -> ui::UiState {
         let mut state = ui::UiState {
             mission_id: 0,
@@ -377,6 +473,161 @@ impl HelloHud {
         self.segment_was_active = self.active_segment.is_some();
 
         state
+    }
+
+    /// Читает сырой ввод клавиатуры: (m_aKeysDown, m_aKeysPressed).
+    pub(crate) fn read_keys(&self) -> ([u32; 6], [u32; 6]) {
+        match self.key_input_addr {
+            Some(addr) => {
+                let k: replay::KeyInput = unsafe { addr.as_ptr().cast::<replay::KeyInput>().read() };
+                (k.keys_down, k.keys_pressed)
+            }
+            None => Default::default(),
+        }
+    }
+
+    /// Читает сырое состояние мыши (кнопки + позиция).
+    pub(crate) fn read_mouse(&self) -> replay::MouseState {
+        match self.mouse_input_addr {
+            Some(addr) => {
+                let base = addr.as_ptr();
+                unsafe {
+                    replay::MouseState {
+                        buttons: *(base.cast::<i32>()),
+                        buttons_pressed: *(base.add(0x04).cast::<i32>()),
+                        position: *(base.add(0x10).cast::<[f32; 2]>()),
+                        last_position: *(base.add(0x20).cast::<[f32; 2]>()),
+                    }
+                }
+            }
+            None => replay::MouseState::default(),
+        }
+    }
+
+    /// Читает нормализованный ввод игрока (Pl0000::m_CurrentInput).
+    pub(crate) fn read_current_input(&self) -> replay::InputUnit {
+        if self.cached_player_obj_ptr.is_null() {
+            return replay::InputUnit::default();
+        }
+        unsafe {
+            self.cached_player_obj_ptr
+                .add(replay::CURRENT_INPUT_OFFSET)
+                .cast::<replay::InputUnit>()
+                .read()
+        }
+    }
+
+    /// Читает глобальный InputUnit[0] (base+0x177B850) — реальный источник
+    /// входа игрока (Pl0000::updateInput копирует его в m_CurrentInput).
+    pub(crate) fn read_global_input_unit(&self) -> replay::InputUnit {
+        if self.base_addr == 0 {
+            return replay::InputUnit::default();
+        }
+        unsafe {
+            ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const replay::InputUnit).read()
+        }
+    }
+
+    /// Читает полный снимок нормализованного ввода игрока (Pl0000) — InputUnit
+    /// по 0xCF8 + m_fInputDirection и m_nButton* по подтверждённым SDK-смещениям.
+    pub(crate) fn read_pl_input(&self) -> replay::PlInputSnapshot {
+        if self.cached_player_obj_ptr.is_null() {
+            return replay::PlInputSnapshot::default();
+        }
+        let p = self.cached_player_obj_ptr;
+        unsafe {
+            replay::PlInputSnapshot {
+                input: p.add(replay::CURRENT_INPUT_OFFSET).cast::<replay::InputUnit>().read(),
+                input_mag_sq: *(p.add(replay::PL_INPUT_MAG_SQ) as *const f32),
+                input_direction: *(p.add(replay::PL_INPUT_DIR) as *const f32),
+                button_jump: *(p.add(replay::PL_BUTTON_JUMP) as *const i32),
+                button_light_attack: *(p.add(replay::PL_BUTTON_LIGHT_ATTACK) as *const i32),
+                button_heavy_attack: *(p.add(replay::PL_BUTTON_HEAVY_ATTACK) as *const i32),
+                button_action: *(p.add(replay::PL_BUTTON_ACTION) as *const i32),
+                button_ninjarun: *(p.add(replay::PL_BUTTON_NINJARUN) as *const i32),
+                button_blademode: *(p.add(replay::PL_BUTTON_BLADEMODE) as *const i32),
+                button_use_item: *(p.add(replay::PL_BUTTON_USEITEM) as *const i32),
+            }
+        }
+    }
+
+    /// Этап 1 (debug): инжекция ввода через override хука updateInputUnit.
+    /// Все действия пишутся в глобальный InputUnit[0] — реальный источник
+    /// входа игрока (прямая запись в поля Pl0000 в Present не работает:
+    /// поздно — после handleActions). Биты — см. `replay::input_bits`.
+    #[cfg(debug_assertions)]
+    pub(crate) fn update_input_injection(&mut self) {
+        // Скрипт-последовательность (NumPad4): бег ~1 сек → прыжок на бегу →
+        // лёгкий удар → поворот камеры. Тайминги в кадрах (60 FPS).
+        const SCRIPT_RUN_END: u32 = 60; // бег первые 60 кадров (~1 сек)
+        const SCRIPT_JUMP_AT: u32 = 45; // прыжок на 45-м кадре (на бегу)
+        const SCRIPT_ATTACK_AT: u32 = 85; // лёгкий удар на 85-м кадре (после)
+        const SCRIPT_CAMERA_AT: u32 = 95; // поворот камеры с 95-го кадра
+        const SCRIPT_TOTAL: u32 = 130; // конец скрипта
+
+        let script_active = self.script_frames > 0;
+        let jump_active = self.inject_jump_frames > 0;
+        let light_active = self.inject_light_frames > 0;
+        let heavy_active = self.inject_heavy_frames > 0;
+        let active = script_active
+            || self.inject_w
+            || self.inject_camera
+            || jump_active
+            || light_active
+            || heavy_active;
+
+        let mut ov = replay::InputOverride {
+            active,
+            ..Default::default()
+        };
+
+        if script_active {
+            let t = self.script_frames;
+            if t <= SCRIPT_RUN_END {
+                ov.buttons_down |= replay::input_bits::FORWARD;
+                ov.left_stick = [0.0, -1000.0];
+            }
+            if (SCRIPT_JUMP_AT..SCRIPT_JUMP_AT + 2).contains(&t) {
+                ov.buttons_down |= replay::input_bits::JUMP;
+                ov.buttons_pressed |= replay::input_bits::JUMP;
+            }
+            if (SCRIPT_ATTACK_AT..SCRIPT_ATTACK_AT + 2).contains(&t) {
+                ov.buttons_down |= replay::input_bits::LIGHT_ATTACK;
+                ov.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
+            }
+            if (SCRIPT_CAMERA_AT..SCRIPT_TOTAL).contains(&t) {
+                // Поворот камеры вправо (мышь = right_stick, дельта в пикселях)
+                ov.right_stick = [300.0, 0.0];
+            }
+            self.script_frames += 1;
+            if self.script_frames > SCRIPT_TOTAL {
+                self.script_frames = 0;
+            }
+        }
+
+        if self.inject_w {
+            ov.buttons_down |= replay::input_bits::FORWARD;
+            ov.left_stick = [0.0, -1000.0];
+        }
+        if jump_active {
+            ov.buttons_down |= replay::input_bits::JUMP;
+            ov.buttons_pressed |= replay::input_bits::JUMP;
+            self.inject_jump_frames -= 1;
+        }
+        if light_active {
+            ov.buttons_down |= replay::input_bits::LIGHT_ATTACK;
+            ov.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
+            self.inject_light_frames -= 1;
+        }
+        if heavy_active {
+            ov.buttons_down |= replay::input_bits::HEAVY_ATTACK;
+            ov.buttons_pressed |= replay::input_bits::HEAVY_ATTACK;
+            self.inject_heavy_frames -= 1;
+        }
+        if self.inject_camera {
+            ov.right_stick = [500.0, 0.0];
+        }
+        replay::set_input_override(ov);
     }
 }
 
@@ -582,6 +833,77 @@ impl ImguiRenderLoop for HelloHud {
         }
         // ─────────────────────────────────────────────────────────────
 
+        // Этап 1 (debug): инжекция ввода через override g_InputUnit0 —
+        // выполняется каждый кадр, чтобы debug-панель показывала состояние
+        #[cfg(debug_assertions)]
+        self.update_input_injection();
+
+        // Диагностика: дамп m_CurrentInput игрока, позиции и g_unit0.
+        // Логируется при КАЖДОМ изменении кнопок (down/pressed) — чтобы
+        // поймать однократные фронты (прыжок/атаки), плюс heartbeat каждые
+        // 120 кадров (чтобы видеть движение и стики даже без кнопок).
+        #[cfg(debug_assertions)]
+        {
+            let ci = self.read_current_input();
+            let changed = replay::cur_in_changed(ci.buttons_down, ci.buttons_pressed);
+            if changed || self.d3d_frame_count.is_multiple_of(120) {
+                let (px, py, pz) = if self.cached_player_obj_ptr.is_null() {
+                    (0.0, 0.0, 0.0)
+                } else {
+                    unsafe {
+                        (
+                            *(self.cached_player_obj_ptr.add(0x50) as *const f32),
+                            *(self.cached_player_obj_ptr.add(0x54) as *const f32),
+                            *(self.cached_player_obj_ptr.add(0x58) as *const f32),
+                        )
+                    }
+                };
+                let ov = replay::input_override();
+                // Глобальный InputUnit[0] (0x01AEB850 = base+0x177B850) —
+                // реальный источник входа игрока.
+                let g = if self.base_addr != 0 {
+                    let u = unsafe {
+                        ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const replay::InputUnit)
+                            .read()
+                    };
+                    (u.buttons_down, u.buttons_pressed, u.left_stick, u.valid_input)
+                } else {
+                    (0, 0, [0.0, 0.0], 0)
+                };
+                // Семантические кнопки Pl0000 + сырые клавиши/мышь —
+                // для сопоставления «физическая клавиша → бит в cur_in».
+                let pl = self.read_pl_input();
+                let mouse_btns = self.read_mouse().buttons;
+                let keys_down = self.read_keys().0;
+                let space = keys_down[1] & 0x8000_0000 != 0;
+                let w_down = keys_down[2] & 0x100 != 0;
+                replay::log_line(&format!(
+                    "frame: player=0x{:08X} cur_in down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) dir={:.2} jump={} mouse={:X} space={} w={} pos=({:.2},{:.2},{:.2}) ov_active={} g_unit0: down={:08X} pressed={:08X} L=({:.2},{:.2}) valid={}",
+                    self.cached_player_obj_ptr as usize,
+                    ci.buttons_down,
+                    ci.buttons_pressed,
+                    ci.left_stick[0],
+                    ci.left_stick[1],
+                    ci.right_stick[0],
+                    ci.right_stick[1],
+                    pl.input_direction,
+                    pl.button_jump,
+                    mouse_btns,
+                    space,
+                    w_down,
+                    px,
+                    py,
+                    pz,
+                    ov.active,
+                    g.0,
+                    g.1,
+                    g.2[0],
+                    g.2[1],
+                    g.3
+                ));
+            }
+        }
+
         let ui_state = self.read_game_state();
         #[cfg(not(debug_assertions))]
         let _ = &ui_state; // suppress unused warning in release
@@ -611,6 +933,10 @@ impl ImguiRenderLoop for HelloHud {
                     *(p.add(0x54) as *mut f32) = sy;
                     *(p.add(0x58) as *mut f32) = sz;
                 }
+            }
+            // NumPad4 — скрипт: бег ~1 сек → прыжок на бегу → лёгкий удар
+            if ui.is_key_pressed_no_repeat(Key::Keypad4) {
+                self.script_frames = 1;
             }
         }
 

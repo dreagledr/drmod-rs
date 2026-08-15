@@ -2,6 +2,8 @@
 
 Дизайн-документ системы записи и воспроизведения игрового ввода для Metal Gear Rising: Revengeance.
 
+> **Проверенные гипотезы и грабли (рантайм-верификация):** [REPLAY_FINDINGS.md](REPLAY_FINDINGS.md) — подтверждённые/опровергнутые гипотезы об устройстве ввода и технические ловушки (релокация базы, VirtualQuery/MEM_COMMIT, execute-протекты, call-скан, счётчики логов и т.д.). Обновлять при каждом рантайм-тесте.
+
 > Все адреса и смещения ниже взяты из read-only референса `ref/mgr-plugin-sdk` (файлы `game/Hw.h`, `game/Pl0000.h`, `shared/Events.h`). Смещения, помеченные как «вычислено из SDK», требуют рантайм-верификации (см. Этап 0). Адреса вида `base + N` отсчитываются от модуля игры (`GetModuleHandleA(null)`), как и в остальном коде drmod-rs.
 
 ---
@@ -52,6 +54,43 @@
 Методы-помощники (для справки, при прямой записи не обязательны):
 `isKeyDown(int vKey)` @ `0x9D93A0`, `isKeyPressed` @ `0x9D9400`, `isKeyReleased` @ `0x9D9460`,
 `setKeyDown(int vKey, BOOL)` @ `0x9D9620`, `setKeyPressed(int vKey)` @ `0x9D9650`.
+
+**Маппинг клавиш (эмпирический, проверен в Этапе 0).** `m_aKeysDown` хранит **не VK-коды**, а игровые коды клавиш. Для обычных клавиш (ASCII-диапазон: буквы, цифры, Space):
+
+```
+code = VK ^ 0x1F        // инверсия младших 5 бит
+index = code >> 5       // 0..5 — элемент m_aKeysDown
+bit   = 1 << (code & 31)
+```
+
+| Клавиша | VK | Игровой код | Бит в `m_aKeysDown` |
+|---------|-----|-------------|----------------------|
+| W | `0x57` | `0x48` | `keys[2] |= 0x00000100` |
+| A | `0x41` | `0x5E` | `keys[2] |= 0x40000000` |
+| S | `0x53` | `0x4C` | `keys[2] |= 0x00001000` |
+| D | `0x44` | `0x5B` | `keys[2] |= 0x08000000` |
+| Space | `0x20` | `0x3F` | `keys[1] |= 0x80000000` |
+| 1 | `0x31` | `0x2E` | `keys[1] |= 0x00004000` |
+
+Спец-клавиши (модификаторы, Esc, стрелки, F, Numpad) кодируются **отдельным enum** в диапазоне `0x80+` — XOR-формула для них не работает:
+
+| Клавиша | Игровой код | Бит в `m_aKeysDown` |
+|---------|-------------|----------------------|
+| Enter | `0x15` | `keys[0] |= 0x00200000` |
+| Tab | `0x16` | `keys[0] |= 0x00400000` |
+| Shift | `0x80` | `keys[4] |= 0x00000001` |
+| Alt | `0x82` | `keys[4] |= 0x00000004` |
+| Ctrl | `0x84` | `keys[4] |= 0x00000010` |
+| Esc | `0x8E` | `keys[4] |= 0x00004000` |
+| ↑ (Up) | `0x90` | `keys[4] |= 0x00010000` |
+| → (Right) | `0x91` | `keys[4] |= 0x00020000` |
+| ← (Left) | `0x92` | `keys[4] |= 0x00040000` |
+| ↓ (Down) | `0x93` | `keys[4] |= 0x00080000` |
+| F1…F12 | `0x9F…0x94` (`0xA0 − n`) | `keys[4]` |
+| Numpad Enter | `0xAA` | `keys[5] |= 0x00000400` |
+| Numpad 0…9 | `0xB9…0xB0` (`0xB9 − n`) | `keys[5]` |
+
+Проверено: WASD, 1, Space, Enter, Tab, Shift, Ctrl, Alt, Esc, все стрелки, F1–F3, Numpad 0–2, Numpad Enter. F4–F12 и Numpad 3–9 — по экстраполяции (`Fn = 0xA0 − n`, `Numpad n = 0xB9 − n`); неизвестные коды в debug-панели показываются как `0xXX`. Для Record/Replay маппинг не нужен (битмаски копируются как есть), для конструирования ввода — см. `replay::vk_to_key_code` / `replay::key_code_name` (`src/replay.rs`).
 
 **Мышь** — `cInput::ms_MouseInput = base + 0x177B798` (тип `MouseInput`):
 
@@ -216,40 +255,35 @@ pub enum ReplayMode {
     Playback,
 }
 
+/// Один кадр записи: полный нормализованный InputUnit (0x30 байт) + таймстамп.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct ReplayFrame {
     pub duration_ms: i64,
-    pub keys_down: [u32; 6],
-    pub keys_pressed: [u32; 6],
-    pub mouse_buttons: i32,
-    pub mouse_pressed: i32,
-    pub mouse_x: f32,
-    pub mouse_y: f32,
-    pub mouse_last_x: f32,
-    pub mouse_last_y: f32,
+    pub input: InputUnit, // buttons_down/pressed/released/alternated + стики + триггеры + valid
 }
 ```
 
-Размер кадра ≈ **80 байт**. При 60 FPS одна минута ≈ 288 КБ — приемлемо для SQLite.
+Размер кадра ≈ **56 байт** (`i64` + `InputUnit` 0x30). При 60 FPS одна минута ≈ 200 КБ.
+
+**Источник записи** — `g_InputUnit0` (`base + 0x177B850`), читается **внутри детура `updateInputUnit`** (после вызова оригинала, до override): в `Present` unit уже сброшен (`valid=0`), там читать нельзя.
+
+**Воспроизведение** — обратно через `InputOverride` (полный `InputUnit`), детур пишет в `g_InputUnit0`.
+
+**Ключевое:** записываем/воспроизводим **сырые значения** `InputUnit` целиком — маппинг битов для Replay не нужен (семантика нужна только debug-кнопкам). Неизвестные биты (блейд-мод, нинзяран, action, lock-on, под-оружие) воспроизводятся автоматически, т.к. копируется вся битмаска.
 
 Константы адресов:
 
 ```rust
-const KEY_INPUT: usize = 0x177B7C0;      // cInput::ms_KeyInput
-const MOUSE_INPUT: usize = 0x177B798;    // cInput::ms_MouseInput
-const UPDATE_KEYBOARD: usize = 0x14CDDE8; // ms_bUpdateKeyboard
-const UPDATE_MOUSE: usize = 0x19D07F8;    // ms_bUpdateMouse
+const UPDATE_INPUT_UNIT: usize = 0x9DAFE0;    // cInput::updateInputUnit (точка хука)
+const GLOBAL_INPUT_UNIT0: usize = 0x177B850;  // g_InputUnit0 (источник входа игрока)
 ```
 
-Методы (в `HelloHud`, по паттерну существующего `read_game_state()`):
+Методы (уже реализованы в `src/replay.rs` / `HelloHud`):
 
 ```rust
-fn read_keys(&self) -> ([u32; 6], [u32; 6]);   // (down, pressed)
-fn write_keys(&self, down: [u32; 6], pressed: [u32; 6]);
-fn read_mouse(&self) -> MouseState;
-fn write_mouse(&self, m: &MouseState);
-fn set_input_autoupdate(&self, enabled: bool); // ms_bUpdateKeyboard/ms_bUpdateMouse
+fn read_global_input_unit(&self) -> InputUnit;   // чтение g_InputUnit0
+fn set_input_override(ov: InputOverride);        // подача ввода (пишет в g_InputUnit0)
 ```
 
 ### 4.2. Схема SQLite (дополняет `runs.db`)
@@ -269,14 +303,7 @@ CREATE TABLE replay_frames (
     replay_id INTEGER NOT NULL,
     frame_index INTEGER NOT NULL,
     duration_ms INTEGER NOT NULL,
-    keys_down BLOB NOT NULL,     -- 24 байта [u32; 6]
-    keys_pressed BLOB NOT NULL,  -- 24 байта [u32; 6]
-    mouse_buttons INTEGER NOT NULL,
-    mouse_pressed INTEGER NOT NULL,
-    mouse_x REAL NOT NULL,
-    mouse_y REAL NOT NULL,
-    mouse_last_x REAL NOT NULL,
-    mouse_last_y REAL NOT NULL,
+    input_unit BLOB NOT NULL,     -- 48 байт (0x30) — InputUnit целиком
     FOREIGN KEY (replay_id) REFERENCES replays(id) ON DELETE CASCADE
 );
 
@@ -288,50 +315,68 @@ CREATE INDEX idx_replay_frames_replay ON replay_frames(replay_id, frame_index);
 ### 4.3. Интеграция в `HelloHud` (`src/lib.rs`)
 
 - Поле `replay_mode: ReplayMode`, буфер `replay_buffer: Vec<ReplayFrame>`, загруженные кадры `replay_frames: Vec<ReplayFrame>`, `replay_start: Instant`.
-- **Запись:** при `active_segment.is_some()` в `render()` (параллельно `position_buffer`) каждый кадр читать сырой ввод и пушить `ReplayFrame` с `duration_ms` от `seg.start_instant`.
+- **Запись:** внутри детура `updateInputUnit` (после вызова оригинала, когда override **выключен**) читать реальный `InputUnit` и пушить `ReplayFrame` с `duration_ms` от `seg.start_instant`. Читать в `Present` нельзя — unit сброшен.
 - **Сохранение:** при `SegmentAction::End` — вставить запись в `replays`, затем bulk insert кадров в `replay_frames` (по аналогии с `finish_segment`).
-- **Воспроизведение:** при старте сегмента (или по кнопке) загрузить кадры последней записи по `mission_id`, выставить `ReplayMode::Playback`, вызвать `set_input_autoupdate(false)`.
-- **Применение кадра:** каждый кадр по `duration_ms` через `partition_point` (как ghost) — найти кадр, чей `duration_ms <= elapsed`, и записать его в `ms_KeyInput`/`ms_MouseInput`.
-- **Остановка:** по достижении конца записи (или по кнопке) — `set_input_autoupdate(true)`, `ReplayMode::Idle`.
+- **Воспроизведение:** при старте сегмента (или по кнопке) загрузить кадры последней записи по `mission_id`, выставить `ReplayMode::Playback`.
+- **Применение кадра:** каждый кадр по `duration_ms` через `partition_point` (как ghost) — найти кадр, чей `duration_ms <= elapsed`, и записать его полный `InputUnit` через `set_input_override`. Флаги `ms_bUpdateKeyboard`/`ms_bUpdateMouse` **не нужны** — override пишет в правильной фазе кадра.
+- **Остановка:** по достижении конца записи (или по кнопке) — снять override, `ReplayMode::Idle`.
 
 ---
 
 ## 5. Этапы реализации
 
-### Этап 0 — PoC чтения ввода
+### Этап 0 — PoC чтения ввода ✅ выполнено (2026-08-15)
 
-1. Добавить в `HelloHud` поля-адреса `ms_KeyInput` / `ms_MouseInput` и методы `read_keys()` / `read_mouse()`.
+1. Добавить в `HelloHud` поля-адреса `ms_KeyInput` / `ms_MouseInput` и методы `read_keys()` / `read_mouse()`. ✅
 2. В debug-панели (только `#[cfg(debug_assertions)]`) вывести:
-   - `m_aKeysDown[0..6]` и `m_aKeysPressed[0..6]` как hex-битмаски;
-   - `m_nMouseButtons`, `m_MousePosition`.
-3. **Проверка:** нажимать реальные клавиши/мышь — биты должны совпадать с VK-кодами. Сверить, что `m_aKeysDown`/`m_aKeysPressed` ведут себя как ожидается (Down — удержание, Pressed — фронт).
-4. Опционально: вывести `m_CurrentInput` (InputUnit) игрока по смещению `~0xCF8`, чтобы верифицировать смещения §2.2 (при нажатии — биты в `m_nButtonsDown`/`m_nButtonsPressed`).
+   - `m_aKeysDown[0..6]` и `m_aKeysPressed[0..6]` как hex-битмаски; ✅
+   - `m_nMouseButtons`, `m_MousePosition`. ✅
+3. **Проверка:** нажимать реальные клавиши/мышь — биты должны совпадать с VK-кодами. Сверить, что `m_aKeysDown`/`m_aKeysPressed` ведут себя как ожидается (Down — удержание, Pressed — фронт). ✅ **Результат:** биты НЕ совпадают с VK — игра хранит игровые коды клавиш. Маппинг найден эмпирически и задокументирован в §2.1 (`code = VK ^ 0x1F` для ASCII-клавиш + отдельный enum спец-клавиш). Down/Pressed/Released ведут себя корректно.
+4. Опционально: вывести `m_CurrentInput` (InputUnit) игрока по смещению `~0xCF8`, чтобы верифицировать смещения §2.2 (при нажатии — биты в `m_nButtonsDown`/`m_nButtonsPressed`). ✅ выведено в debug-панели; смещение требует сверки бит при нажатии (открытый вопрос).
 
-### Этап 1 — PoC записи ввода в память
+### Этап 1 — Подача ввода ✅ выполнено (2026-08-15)
 
-1. Проверить **гипотезу флага**: выставить `ms_bUpdateKeyboard = false` (`base+0x14CDDE8`), затем записать бит клавиши «вперёд» (W) в `m_aKeysDown[0]` — проверить, что персонаж движется.
-2. Если гипотеза неверна (игра всё равно перечитывает устройство) — исследовать порядок обновления:
-   - писать после обновления игры (через `OnUpdateEvent` AddBefore, если допустим hooking);
-   - либо писать в `ms_InputKeys` (сырое DirectInput-состояние, `char[256]`);
-   - либо перейти к нормализованному вводу + хук `updateInput` (§3.2).
-3. Debug-кнопки для ручного теста: «зажать W», «прыжок» (через `m_aKeysPressed`), «повернуть камеру» (через `m_MousePosition`).
-4. **Проверка:** персонаж бежит/прыгает/камера крутится без реального ввода; после `ms_bUpdateKeyboard = true` реальный ввод возвращается.
+**Рабочий механизм:** override глобального `InputUnit[0]` (`base + 0x177B850`) в хуке `cInput::updateInputUnit` (0x9DAFE0, MinHook).
+
+Цепочка ввода:
+```
+DirectInput → updateInputUnit (заполняет 4 глобальных InputUnit) → Pl0000::updateInput
+  (копирует g_InputUnit0 → m_CurrentInput 0xCF8 → m_nButton*) → handleActions (движение/атаки)
+```
+
+Прямая запись в `Present` не работает (поздно — после `handleActions`); прямая запись в сырые кэши (`ms_KeyInput`/`ms_InputKeys`/`ms_MouseStateInput`) не работает (игрок их не читает). Подробности — в [REPLAY_FINDINGS.md](REPLAY_FINDINGS.md).
+
+**Реализация:** `InputOverride{active, buttons_down, buttons_pressed, left_stick, right_stick}` → `replay::set_input_override` → детур `update_input_unit_detour` вызывает оригинал, затем для `user_index == 0` перезаписывает `g_InputUnit0` нашими значениями. Debug-кнопки («Зажать W», «Прыжок», «Лёгкая атака», «Тяжёлая атака», «Крутить камеру») + скрипт NumPad4 (бег → прыжок → удар → поворот камеры).
+
+**Биты действий в `InputUnit.buttons_down`/`buttons_pressed` (эмпирически, сверено с сырыми клавишами/мышью):**
+
+| Действие | Клавиша | Бит |
+|----------|---------|-----|
+| Вперёд | W | `0x400000` (бит 22) + `left_stick = [0, -1000]` |
+| Прыжок | Space | `0x1` (бит 0) |
+| Лёгкая атака | ЛКМ (`mouse=1`) | `0x40` (бит 6) |
+| Тяжёлая атака | ПКМ (`mouse=2`) | `0x80` (бит 7) |
+| Камера | мышь | `right_stick` (дельта мыши, до ~±2000) |
+
+Константы — `replay::input_bits` (`src/replay.rs`).
+
+**Проверено:** персонаж бежит/прыгает/атакует/камера крутится без реального ввода; после снятия override реальный ввод возвращается.
 
 ### Этап 2 — Модуль записи (Record)
 
-1. Создать `src/replay.rs`: `ReplayMode`, `ReplayFrame`, `MouseState`, функции чтения/записи.
-2. Подключить `mod replay;` в `src/lib.rs`; добавить поля в `HelloHud` (`replay_mode`, `replay_buffer`).
-3. Каждый кадр при `active_segment.is_some()` пушить `ReplayFrame` (duration_ms + сырой ввод).
-4. Добавить таблицы `replays`/`replay_frames` (WAL уже включён в `init_db`).
-5. При `SegmentAction::End` — bulk insert кадров в `replay_frames` + строка в `replays`.
-6. **Проверка:** завершить сегмент → в БД появились `replays` и `replay_frames` с корректным числом кадров.
+1. Добавить в `src/replay.rs`: `ReplayMode`, `ReplayFrame { duration_ms, input: InputUnit }`.
+2. **Расширить `InputOverride` до полного `InputUnit`** (сейчас только `buttons_down`/`pressed`/`left_stick`/`right_stick`; добавить `buttons_released`, `buttons_alternated`, `left_trigger`, `right_trigger`, `valid_input`, `repeat_count`) — нужно для точной записи и воспроизведения.
+3. **Точка записи:** в детуре `update_input_unit_detour` (после вызова оригинала, при **выключенном** override) читать реальный `InputUnit` и пушить `ReplayFrame` с `duration_ms` от `seg.start_instant`. В `Present` читать нельзя — unit сброшен (`valid=0`).
+4. Добавить таблицы `replays`/`replay_frames` (`input_unit BLOB`, 48 байт). WAL уже включён в `init_db`.
+5. При `SegmentAction::End` — bulk insert кадров в `replay_frames` + строка в `replays` (паттерн `segment::finish_segment`).
+6. **Проверка:** завершить сегмент → в БД появились `replays` и `replay_frames` с корректным числом кадров; кадры содержат ненулевые `buttons_down`/стики при реальном вводе.
 
 ### Этап 3 — Модуль воспроизведения (Playback)
 
 1. Загрузка кадров последней записи по `mission_id` (`ORDER BY id DESC LIMIT 1`, затем `SELECT ... WHERE replay_id = ? ORDER BY frame_index`).
-2. Применение кадра по `duration_ms` через `partition_point` (паттерн ghost в `lib.rs::render_3d`).
-3. На время воспроизведения `set_input_autoupdate(false)`; в конце — `true`.
-4. **Проверка:** воспроизвести сегмент — персонаж повторяет движения (визуально, рядом с ghost-цилиндром).
+2. Каждый кадр по `duration_ms` через `partition_point` (паттерн ghost в `lib.rs::render_3d`) — найти кадр, чей `duration_ms <= elapsed`, и записать его **полный `InputUnit`** через `set_input_override`. Флаги `ms_bUpdateKeyboard`/`ms_bUpdateMouse` **не нужны** — override пишет в правильной фазе кадра.
+3. Остановка по достижении конца записи — снять override, `ReplayMode::Idle`.
+4. **Проверка:** воспроизвести сегмент — персонаж повторяет движения/атаки/камеру (визуально, рядом с ghost-цилиндром).
 
 ### Этап 4 — UI
 

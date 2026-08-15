@@ -2,6 +2,8 @@ use crate::game;
 use crate::net;
 #[cfg(debug_assertions)]
 use crate::overlay;
+#[cfg(debug_assertions)]
+use crate::replay;
 use crate::segment;
 use crate::HelloHud;
 use imgui::*;
@@ -33,7 +35,8 @@ pub struct UiState {
 #[cfg(debug_assertions)]
 pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
     ui.window("DrmodDebug")
-        .size([320., 600.], Condition::Always)
+        .size([380., 720.], Condition::Always)
+        .scroll_bar(true)
         .build(|| {
             if let Some(ref seg) = hud.active_segment {
                 let elapsed_ms = seg.start_instant.elapsed().as_millis() as u64;
@@ -109,7 +112,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             ui.text(format!("Static Ptr Addr: 0x{:08X}", state.static_ptr_value));
 
             // --- SEGMENT DEBUG ---
-            if hud.active_segment.is_some() {
+            if let Some(seg) = hud.active_segment.as_ref() {
                 let action_name = match state.segment_action {
                     segment::SegmentAction::None => "None",
                     segment::SegmentAction::Start { .. } => "Start",
@@ -120,7 +123,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                     [0.5, 0.8, 1.0, 1.0],
                     format!(
                         "SEGDEBUG: seg.mission={} cur.mission={} status={} ({}) => {}",
-                        hud.active_segment.as_ref().unwrap().mission_id,
+                        seg.mission_id,
                         state.mission_id,
                         state.menu_status.name(),
                         state.menu_status as i32,
@@ -140,6 +143,143 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                 ui.text("NumPad2: Save position");
                 ui.text("NumPad3: Teleport");
             }
+
+            // --- СЫРОЙ ВВОД (Record/Replay, этап 0) ---
+            ui.separator();
+            ui.text("Raw input:");
+            match hud.key_input_addr {
+                None => {
+                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "key_input: N/A");
+                }
+                Some(_) => {
+                    let (keys_down, keys_pressed) = hud.read_keys();
+                    for i in 0..6 {
+                        ui.text(format!(
+                            "Keys[{}]: down={:08X} pressed={:08X}",
+                            i, keys_down[i], keys_pressed[i]
+                        ));
+                    }
+                    // Расшифровка битмасок в имена клавиш
+                    let mut down: Vec<String> = Vec::new();
+                    let mut pressed: Vec<String> = Vec::new();
+                    for (i, (d, p)) in keys_down.iter().zip(keys_pressed.iter()).enumerate() {
+                        for bit in 0..32 {
+                            let mask = 1u32 << bit;
+                            let code = i as u32 * 32 + bit;
+                            if d & mask != 0 {
+                                down.push(format!("0x{:02X}", code));
+                            }
+                            if p & mask != 0 {
+                                pressed.push(format!("0x{:02X}", code));
+                            }
+                        }
+                    }
+                    let down_text = if down.is_empty() {
+                        "-".to_string()
+                    } else {
+                        down.join(" ")
+                    };
+                    let pressed_text = if pressed.is_empty() {
+                        "-".to_string()
+                    } else {
+                        pressed.join(" ")
+                    };
+                    ui.text(format!("Down: {}", down_text));
+                    ui.text(format!("Pressed: {}", pressed_text));
+                }
+            }
+            match hud.mouse_input_addr {
+                None => {
+                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "mouse_input: N/A");
+                }
+                Some(_) => {
+                    let m = hud.read_mouse();
+                    ui.text(format!(
+                        "Mouse: buttons={:08X} pressed={:08X} pos=({:.0}, {:.0}) last=({:.0}, {:.0})",
+                        m.buttons,
+                        m.buttons_pressed,
+                        m.position[0],
+                        m.position[1],
+                        m.last_position[0],
+                        m.last_position[1]
+                    ));
+                }
+            }
+            if state.player_found {
+                let pl = hud.read_pl_input();
+                ui.text(format!(
+                    "Pl0000 Input: down={:08X} pressed={:08X} LStick=({:.2}, {:.2}) valid={}",
+                    pl.input.buttons_down,
+                    pl.input.buttons_pressed,
+                    pl.input.left_stick[0],
+                    pl.input.left_stick[1],
+                    pl.input.valid_input
+                ));
+                ui.text(format!(
+                    "dir={:.4} mag2={:.2} jump={} light={} heavy={} action={} ninja={} blade={} item={}",
+                    pl.input_direction,
+                    pl.input_mag_sq,
+                    pl.button_jump,
+                    pl.button_light_attack,
+                    pl.button_heavy_attack,
+                    pl.button_action,
+                    pl.button_ninjarun,
+                    pl.button_blademode,
+                    pl.button_use_item
+                ));
+            }
+            // Глобальный InputUnit[0] — реальный источник входа игрока
+            let gu = hud.read_global_input_unit();
+            ui.text(format!(
+                "g_unit0: down={:08X} pressed={:08X} LStick=({:.2}, {:.2}) RStick=({:.2}, {:.2}) valid={}",
+                gu.buttons_down,
+                gu.buttons_pressed,
+                gu.left_stick[0],
+                gu.left_stick[1],
+                gu.right_stick[0],
+                gu.right_stick[1],
+                gu.valid_input
+            ));
+
+            // --- ПОДАЧА ВВОДА (override g_InputUnit0) ---
+            ui.separator();
+            ui.text("Input override:");
+            ui.checkbox("Зажать W", &mut hud.inject_w);
+            if ui.button("Прыжок (Space)") {
+                hud.inject_jump_frames = 2;
+            }
+            if ui.button("Лёгкая атака (ЛКМ)") {
+                hud.inject_light_frames = 2;
+            }
+            if ui.button("Тяжёлая атака (ПКМ)") {
+                hud.inject_heavy_frames = 2;
+            }
+            ui.checkbox("Крутить камеру (мышь)", &mut hud.inject_camera);
+            ui.text_colored(
+                [0.5, 1.0, 0.5, 1.0],
+                "NumPad4: бег→прыжок→удар→поворот камеры",
+            );
+
+            // Статус хука updateInputUnit и текущего override
+            match &hud.input_hook {
+                Some(_) => {
+                    ui.text_colored([0.0, 1.0, 0.0, 1.0], "hook updateInputUnit: OK");
+                }
+                None => {
+                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "hook updateInputUnit: N/A");
+                }
+            }
+            let ov = replay::input_override();
+            ui.text(format!(
+                "Override: active={} down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2})",
+                ov.active,
+                ov.buttons_down,
+                ov.buttons_pressed,
+                ov.left_stick[0],
+                ov.left_stick[1],
+                ov.right_stick[0],
+                ov.right_stick[1]
+            ));
 
             ui.separator();
             ui.text("Position:");
