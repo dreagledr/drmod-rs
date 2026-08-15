@@ -273,12 +273,28 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             ui.text(format!(
                 "Override: active={} down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2})",
                 ov.active,
-                ov.buttons_down,
-                ov.buttons_pressed,
-                ov.left_stick[0],
-                ov.left_stick[1],
-                ov.right_stick[0],
-                ov.right_stick[1]
+                ov.input.buttons_down,
+                ov.input.buttons_pressed,
+                ov.input.left_stick[0],
+                ov.input.left_stick[1],
+                ov.input.right_stick[0],
+                ov.input.right_stick[1]
+            ));
+
+            // Этап 1.5: короткая запись/воспроизведение по нумпаду (без сегментов/БД)
+            ui.text_colored(
+                [0.5, 1.0, 0.5, 1.0],
+                "NumPad5: запись (toggle)  NumPad6: воспроизведение (toggle)",
+            );
+            ui.text(format!(
+                "short record: {}  frames: {}",
+                replay::is_bare_recording(),
+                replay::bare_recording_frame_count()
+            ));
+            ui.text(format!(
+                "short playback: {}  frames: {}",
+                hud.bare_playback,
+                hud.bare_playback_frames.len()
             ));
 
             ui.separator();

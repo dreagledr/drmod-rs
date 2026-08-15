@@ -108,6 +108,13 @@ struct HelloHud {
     pub(crate) mouse_input_addr: Option<NonNull<u8>>,
     // Хук cInput::updateInputUnit (подача ввода: подмена InputUnit[0])
     pub(crate) input_hook: Option<hudhook::mh::MhHook>,
+    // Короткая запись/воспроизведение по нумпаду (smoke-тест InputUnit, Этап 1.5).
+    #[cfg(debug_assertions)]
+    pub(crate) bare_playback: bool,
+    #[cfg(debug_assertions)]
+    pub(crate) bare_playback_frames: Vec<replay::ReplayFrame>,
+    #[cfg(debug_assertions)]
+    pub(crate) bare_playback_start: Option<Instant>,
     // Инжекция ввода (debug-кнопки)
     #[cfg(debug_assertions)]
     pub(crate) inject_w: bool,
@@ -231,6 +238,12 @@ impl HelloHud {
             key_input_addr,
             mouse_input_addr,
             input_hook,
+            #[cfg(debug_assertions)]
+            bare_playback: false,
+            #[cfg(debug_assertions)]
+            bare_playback_frames: Vec::new(),
+            #[cfg(debug_assertions)]
+            bare_playback_start: None,
             #[cfg(debug_assertions)]
             inject_w: false,
             #[cfg(debug_assertions)]
@@ -557,6 +570,12 @@ impl HelloHud {
     /// поздно — после handleActions). Биты — см. `replay::input_bits`.
     #[cfg(debug_assertions)]
     pub(crate) fn update_input_injection(&mut self) {
+        // Во время воспроизведения override управляется исключительно playback —
+        // debug-инъекция не должна затирать применяемый кадр.
+        if self.bare_playback {
+            return;
+        }
+
         // Скрипт-последовательность (NumPad4): бег ~1 сек → прыжок на бегу →
         // лёгкий удар → поворот камеры. Тайминги в кадрах (60 FPS).
         const SCRIPT_RUN_END: u32 = 60; // бег первые 60 кадров (~1 сек)
@@ -576,28 +595,28 @@ impl HelloHud {
             || light_active
             || heavy_active;
 
-        let mut ov = replay::InputOverride {
-            active,
+        let mut unit = replay::InputUnit {
+            valid_input: 1,
             ..Default::default()
         };
 
         if script_active {
             let t = self.script_frames;
             if t <= SCRIPT_RUN_END {
-                ov.buttons_down |= replay::input_bits::FORWARD;
-                ov.left_stick = [0.0, -1000.0];
+                unit.buttons_down |= replay::input_bits::FORWARD;
+                unit.left_stick = [0.0, -1000.0];
             }
             if (SCRIPT_JUMP_AT..SCRIPT_JUMP_AT + 2).contains(&t) {
-                ov.buttons_down |= replay::input_bits::JUMP;
-                ov.buttons_pressed |= replay::input_bits::JUMP;
+                unit.buttons_down |= replay::input_bits::JUMP;
+                unit.buttons_pressed |= replay::input_bits::JUMP;
             }
             if (SCRIPT_ATTACK_AT..SCRIPT_ATTACK_AT + 2).contains(&t) {
-                ov.buttons_down |= replay::input_bits::LIGHT_ATTACK;
-                ov.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
+                unit.buttons_down |= replay::input_bits::LIGHT_ATTACK;
+                unit.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
             }
             if (SCRIPT_CAMERA_AT..SCRIPT_TOTAL).contains(&t) {
                 // Поворот камеры вправо (мышь = right_stick, дельта в пикселях)
-                ov.right_stick = [300.0, 0.0];
+                unit.right_stick = [300.0, 0.0];
             }
             self.script_frames += 1;
             if self.script_frames > SCRIPT_TOTAL {
@@ -606,28 +625,72 @@ impl HelloHud {
         }
 
         if self.inject_w {
-            ov.buttons_down |= replay::input_bits::FORWARD;
-            ov.left_stick = [0.0, -1000.0];
+            unit.buttons_down |= replay::input_bits::FORWARD;
+            unit.left_stick = [0.0, -1000.0];
         }
         if jump_active {
-            ov.buttons_down |= replay::input_bits::JUMP;
-            ov.buttons_pressed |= replay::input_bits::JUMP;
+            unit.buttons_down |= replay::input_bits::JUMP;
+            unit.buttons_pressed |= replay::input_bits::JUMP;
             self.inject_jump_frames -= 1;
         }
         if light_active {
-            ov.buttons_down |= replay::input_bits::LIGHT_ATTACK;
-            ov.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
+            unit.buttons_down |= replay::input_bits::LIGHT_ATTACK;
+            unit.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
             self.inject_light_frames -= 1;
         }
         if heavy_active {
-            ov.buttons_down |= replay::input_bits::HEAVY_ATTACK;
-            ov.buttons_pressed |= replay::input_bits::HEAVY_ATTACK;
+            unit.buttons_down |= replay::input_bits::HEAVY_ATTACK;
+            unit.buttons_pressed |= replay::input_bits::HEAVY_ATTACK;
             self.inject_heavy_frames -= 1;
         }
         if self.inject_camera {
-            ov.right_stick = [500.0, 0.0];
+            unit.right_stick = [500.0, 0.0];
         }
-        replay::set_input_override(ov);
+        replay::set_input_override(replay::InputOverride {
+            active,
+            input: unit,
+        });
+    }
+
+    /// Переключает короткую запись по NumPad5 (Этап 1.5). При стопе кладёт
+    /// накопленные кадры в `bare_playback_frames`; при старте снимает активное
+    /// воспроизведение, чтобы запись и воспроизведение не пересекались.
+    #[cfg(debug_assertions)]
+    pub(crate) fn toggle_bare_record(&mut self) {
+        if replay::is_bare_recording() {
+            let frames = replay::stop_bare_recording().unwrap_or_default();
+            self.bare_playback_frames = frames;
+        } else {
+            self.stop_bare_playback();
+            replay::start_bare_recording();
+        }
+    }
+
+    /// Переключает воспроизведение короткой записи по NumPad6 (Этап 1.5).
+    /// Стартует, только если есть кадры; при старте останавливает активную
+    /// запись, чтобы не захватывать новый ввод поверх воспроизведения.
+    #[cfg(debug_assertions)]
+    pub(crate) fn toggle_bare_playback(&mut self) {
+        if self.bare_playback {
+            self.stop_bare_playback();
+        } else if !self.bare_playback_frames.is_empty() {
+            replay::stop_bare_recording();
+            replay::set_input_override(replay::InputOverride::default());
+            self.bare_playback = true;
+            self.bare_playback_start = Some(Instant::now());
+        }
+    }
+
+    /// Останавливает воспроизведение короткой записи: снимает override.
+    /// Кадры сохраняются, чтобы запись можно было проиграть повторно.
+    #[cfg(debug_assertions)]
+    pub(crate) fn stop_bare_playback(&mut self) {
+        if !self.bare_playback {
+            return;
+        }
+        replay::set_input_override(replay::InputOverride::default());
+        self.bare_playback = false;
+        self.bare_playback_start = None;
     }
 }
 
@@ -908,6 +971,28 @@ impl ImguiRenderLoop for HelloHud {
         #[cfg(not(debug_assertions))]
         let _ = &ui_state; // suppress unused warning in release
 
+        // --- BARE PLAYBACK (Этап 1.5): короткая запись по нумпаду, без сегмента ---
+        #[cfg(debug_assertions)]
+        if self.bare_playback
+            && let Some(start) = self.bare_playback_start
+        {
+            let current_ms = start.elapsed().as_millis() as i64;
+            let idx = self
+                .bare_playback_frames
+                .partition_point(|f| f.duration_ms <= current_ms);
+            if idx > 0 {
+                let input = self.bare_playback_frames[idx - 1].input;
+                replay::set_input_override(replay::InputOverride {
+                    active: true,
+                    input,
+                });
+                if idx >= self.bare_playback_frames.len() {
+                    // Конец записи — снять override, оставить кадры для повтора.
+                    self.stop_bare_playback();
+                }
+            }
+        }
+
         // Key handlers (NumPad1/2/3) — debug only
         #[cfg(debug_assertions)]
         if !self.cached_player_obj_ptr.is_null() {
@@ -937,6 +1022,17 @@ impl ImguiRenderLoop for HelloHud {
             // NumPad4 — скрипт: бег ~1 сек → прыжок на бегу → лёгкий удар
             if ui.is_key_pressed_no_repeat(Key::Keypad4) {
                 self.script_frames = 1;
+            }
+        }
+
+        // NumPad5/6 — короткая запись/воспроизведение ввода (Этап 1.5, debug).
+        #[cfg(debug_assertions)]
+        {
+            if ui.is_key_pressed_no_repeat(Key::Keypad5) {
+                self.toggle_bare_record();
+            }
+            if ui.is_key_pressed_no_repeat(Key::Keypad6) {
+                self.toggle_bare_playback();
             }
         }
 

@@ -138,24 +138,32 @@ pub struct PlInputSnapshot {
 
 /// Значения, подменяющие ввод игрока в хуке `updateInputUnit`.
 /// `active = false` — реальный ввод проходит без изменений.
+/// `input` — полный InputUnit, который записывается в `g_InputUnit0`.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct InputOverride {
     pub active: bool,
-    pub buttons_down: u32,
-    pub buttons_pressed: u32,
-    pub left_stick: [f32; 2],
-    pub right_stick: [f32; 2],
+    pub input: InputUnit,
 }
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
+#[cfg(debug_assertions)]
+use std::time::Instant;
 
 const INPUT_OVERRIDE_INIT: InputOverride = InputOverride {
     active: false,
-    buttons_down: 0,
-    buttons_pressed: 0,
-    left_stick: [0.0; 2],
-    right_stick: [0.0; 2],
+    input: InputUnit {
+        buttons_down: 0,
+        buttons_pressed: 0,
+        buttons_released: 0,
+        buttons_alternated: 0,
+        left_stick: [0.0; 2],
+        right_stick: [0.0; 2],
+        left_trigger: 0.0,
+        right_trigger: 0.0,
+        valid_input: 0,
+        repeat_count: 0,
+    },
 };
 
 static INPUT_OVERRIDE: Mutex<InputOverride> = Mutex::new(INPUT_OVERRIDE_INIT);
@@ -180,20 +188,20 @@ pub fn cur_in_changed(down: u32, pressed: u32) -> bool {
 pub fn set_input_override(ov: InputOverride) {
     if let Ok(mut guard) = INPUT_OVERRIDE.lock() {
         let changed = guard.active != ov.active
-            || guard.left_stick != ov.left_stick
-            || guard.right_stick != ov.right_stick
-            || guard.buttons_down != ov.buttons_down
-            || guard.buttons_pressed != ov.buttons_pressed;
+            || guard.input.left_stick != ov.input.left_stick
+            || guard.input.right_stick != ov.input.right_stick
+            || guard.input.buttons_down != ov.input.buttons_down
+            || guard.input.buttons_pressed != ov.input.buttons_pressed;
         if changed {
             log_line(&format!(
                 "set_override: active={} down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2})",
                 ov.active,
-                ov.buttons_down,
-                ov.buttons_pressed,
-                ov.left_stick[0],
-                ov.left_stick[1],
-                ov.right_stick[0],
-                ov.right_stick[1]
+                ov.input.buttons_down,
+                ov.input.buttons_pressed,
+                ov.input.left_stick[0],
+                ov.input.left_stick[1],
+                ov.input.right_stick[0],
+                ov.input.right_stick[1]
             ));
         }
         *guard = ov;
@@ -241,20 +249,48 @@ pub fn log_line(line: &str) {
     );
 }
 
-/// Детур `cInput::updateInputUnit` (__cdecl). Вызывает оригинал (игра строит
-/// InputUnit из реального ввода), затем перезаписывает кнопки/стики нашими
-/// значениями, если override активен. Перезапись только для `user_index == 0`
-/// (глобальный InputUnit[0] — источник входа игрока).
+/// Детур `cInput::updateInputUnit` (__cdecl). Читает реальный ввод ДО вызова
+/// оригинала (unit уже заполнен реальным вводом, а оригинал сбрасывает его),
+/// затем вызывает оригинал и перезаписывает unit нашими значениями, если
+/// override активен. Запись/перезапись только для `user_index == 0`.
 pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_index: i32) {
+    let n = DETOUR_COUNT.fetch_add(1, Ordering::Relaxed);
+    let sample = n.is_multiple_of(60);
+
+    if user_index == 0 {
+        let override_active = INPUT_OVERRIDE.lock().map(|g| g.active).unwrap_or(false);
+        if !override_active {
+            // Запись реального ввода ДО оригинала: здесь unit ещё содержит
+            // реальный ввод (заполняется до updateInputUnit), а оригинал
+            // сбрасывает его (после оригинала unit уже valid=0).
+            if sample {
+                let u = unsafe { &*unit };
+                log_line(&format!(
+                    "detour: ui={} unit=0x{:08X} before_orig down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) valid={}",
+                    user_index,
+                    unit as usize,
+                    u.buttons_down,
+                    u.buttons_pressed,
+                    u.left_stick[0],
+                    u.left_stick[1],
+                    u.right_stick[0],
+                    u.right_stick[1],
+                    u.valid_input
+                ));
+            }
+            #[cfg(debug_assertions)]
+            record_bare_frame(unsafe { &*unit });
+        }
+    }
+
     if let Some(&orig) = ORIG_UPDATE_INPUT_UNIT.get() {
         unsafe { orig(unit, user_index) };
     }
-    let n = DETOUR_COUNT.fetch_add(1, Ordering::Relaxed);
-    let sample = n.is_multiple_of(60);
+
     if sample {
         let u = unsafe { &*unit };
         log_line(&format!(
-            "detour: ui={} unit=0x{:08X} before down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) valid={}",
+            "detour: ui={} unit=0x{:08X} after_orig down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) valid={}",
             user_index,
             unit as usize,
             u.buttons_down,
@@ -266,6 +302,7 @@ pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_ind
             u.valid_input
         ));
     }
+
     if user_index != 0 {
         return;
     }
@@ -273,15 +310,7 @@ pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_ind
         && guard.active
     {
         let u = unsafe { &mut *unit };
-        u.buttons_down = guard.buttons_down;
-        u.buttons_pressed = guard.buttons_pressed;
-        u.buttons_released = 0;
-        u.buttons_alternated = 0;
-        u.left_stick = guard.left_stick;
-        u.right_stick = guard.right_stick;
-        u.left_trigger = 0.0;
-        u.right_trigger = 0.0;
-        u.valid_input = 1;
+        *u = guard.input;
         if sample {
             log_line(&format!(
                 "detour: unit=0x{:08X} AFTER  down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) valid={}",
@@ -296,4 +325,86 @@ pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_ind
             ));
         }
     }
+}
+
+/// Один кадр записи: полный InputUnit + таймстамп от старта записи.
+#[cfg(debug_assertions)]
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ReplayFrame {
+    pub duration_ms: i64,
+    pub input: InputUnit,
+}
+
+/// Короткая запись по нумпаду (smoke-тест InputUnit, Этап 1.5) — без сегментов
+/// и без SQLite. Кадры пишутся в память, воспроизводятся через `set_input_override`.
+#[cfg(debug_assertions)]
+struct BareRecording {
+    active: bool,
+    start: Option<Instant>,
+    frames: Vec<ReplayFrame>,
+}
+
+#[cfg(debug_assertions)]
+static BARE_RECORDING: Mutex<BareRecording> = Mutex::new(BareRecording {
+    active: false,
+    start: None,
+    frames: Vec::new(),
+});
+
+/// Начинает короткую запись (NumPad5). Очищает буфер и фиксирует момент старта.
+#[cfg(debug_assertions)]
+pub fn start_bare_recording() {
+    let Ok(mut st) = BARE_RECORDING.lock() else {
+        return;
+    };
+    st.active = true;
+    st.start = Some(Instant::now());
+    st.frames.clear();
+}
+
+/// Останавливает короткую запись и возвращает накопленные кадры.
+/// Возвращает `None`, если запись не была активна.
+#[cfg(debug_assertions)]
+pub fn stop_bare_recording() -> Option<Vec<ReplayFrame>> {
+    let Ok(mut st) = BARE_RECORDING.lock() else {
+        return None;
+    };
+    if !st.active {
+        return None;
+    }
+    st.active = false;
+    Some(std::mem::take(&mut st.frames))
+}
+
+/// Активна ли короткая запись.
+#[cfg(debug_assertions)]
+pub fn is_bare_recording() -> bool {
+    BARE_RECORDING.lock().map(|g| g.active).unwrap_or(false)
+}
+
+/// Число накопленных кадров в буфере короткой записи.
+#[cfg(debug_assertions)]
+pub fn bare_recording_frame_count() -> usize {
+    BARE_RECORDING.lock().map(|g| g.frames.len()).unwrap_or(0)
+}
+
+/// Пушит один кадр реального ввода в буфер короткой записи.
+/// Вызывается из детура ДО вызова оригинала (unit ещё содержит реальный ввод).
+#[cfg(debug_assertions)]
+fn record_bare_frame(unit: &InputUnit) {
+    let Ok(mut st) = BARE_RECORDING.lock() else {
+        return;
+    };
+    if !st.active {
+        return;
+    }
+    let duration_ms = st
+        .start
+        .map(|t| t.elapsed().as_millis() as i64)
+        .unwrap_or(0);
+    st.frames.push(ReplayFrame {
+        duration_ms,
+        input: *unit,
+    });
 }

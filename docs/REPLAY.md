@@ -362,6 +362,26 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 
 **Проверено:** персонаж бежит/прыгает/атакует/камера крутится без реального ввода; после снятия override реальный ввод возвращается.
 
+### Этап 1.5 — Smoke-тест Record→Playback (проверка механизма InputUnit) ✅ выполнено (2026-08-15)
+
+**Назначение:** проверить саму цепочку `InputUnit` — запись реального ввода в детуре (при override=off) → воспроизведение через `set_input_override` (override=on) — **без привязки к сегментам и без SQLite**. Короткий фрагмент ввода записывается в память и сразу проигрывается.
+
+**Клавиши (debug-сборка):**
+
+| Клавиша | Действие |
+|---------|----------|
+| NumPad5 | переключение записи (1-е нажатие — старт, 2-е — стоп) |
+| NumPad6 | переключение воспроизведения (старт/стоп; по концу записи — авто-стоп) |
+
+**Реализация:**
+1. В `src/replay.rs` — буфер короткой записи `BareRecording { active, start, frames }` (static `Mutex`, независим от БД): `start_bare_recording()` / `stop_bare_recording()` / `is_bare_recording()` / `bare_recording_frame_count()`, приватный `record_bare_frame()`.
+2. `InputOverride` расширен до полного `InputUnit`: `{ active, input }`, детур делает `*unit = guard.input` (полная запись).
+3. В детуре `update_input_unit_detour` запись читается **до** вызова оригинала (unit ещё содержит реальный ввод — оригинал сбрасывает его в ноль), override пишется **после** оригинала.
+4. В `src/lib.rs` (`HelloHud`) — поля `bare_playback` / `bare_playback_frames` / `bare_playback_start`; методы `toggle_bare_record` / `toggle_bare_playback` / `stop_bare_playback`; в `render()` применение кадра по `partition_point` от `bare_playback_start.elapsed()`. `update_input_injection` делает early-return при `bare_playback`.
+5. В `src/ui.rs` (debug-панель) — подсказка клавиш и статус `short record` / `short playback`.
+
+**Как проверить:** в игре (debug-сборка) NumPad5 → подвигаться/прыгнуть/атаковать/покрутить камеру ~2–3 с → NumPad5 → NumPad6 — персонаж должен повторить ввод; NumPad6 — стоп. Запись ловит только реальный ввод (override выключен), буфер без авто-лимита.
+
 ### Этап 2 — Модуль записи (Record)
 
 1. Добавить в `src/replay.rs`: `ReplayMode`, `ReplayFrame { duration_ms, input: InputUnit }`.
