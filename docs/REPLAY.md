@@ -178,7 +178,8 @@ bit   = 1 << (code & 31)
 - `cInput::updateInputUnit(InputUnit*, int userIndex)` — `base + 0x9DAFE0`.
 - `cInput::updateControllerStateInput(ControllerState*, int)` — `base + 0x9DA900`.
 - `cInput::setInputUnitButtons(InputUnit*, u32)` — `base + 0x9DA210`.
-- `cInput::isKeybindDown(eSaveKeybind)` — `base + 0x61D280` (маппинг keybind→VK).
+- `cInput::isKeybindDown(eSaveKeybind)` — `base + 0x61D280` (удержание keybind; hold-действия: blade mode).
+- `cInput::isKeybindPressed(eSaveKeybind)` — `base + 0x61D2D0` (фронт keybind; toggle-действия: ripper).
 
 События SDK (`shared/Events.h`, для возможного hooking в будущем, в MVP не используются):
 
@@ -198,9 +199,29 @@ bit   = 1 << (code & 31)
 
 Позиция/скорость (`base+0x50/54/58`, `BehaviorAppBase::m_vecVelocity`, `rAnim`) — это **результат** движения, а не ввод; подходит для ghost-трека, но не воспроизводит атаки/QTE/блейд-мод.
 
+### 2.5. Ripper / Blade Mode (обнаружено дизассемблированием, 2026-08-16)
+
+Ripper и blade mode **не идут через `InputUnit`** — они активируются в `handleActions` через keybind-проверки, читающие сырой ввод напрямую из DirectInput (`GetDeviceState`). Поэтому override `InputUnit` их не воспроизводит.
+
+- **Ripper** (toggle, клавиша R / L3+R3) — условие: `canActivateRipperMode() && isKeybindPressed(KEYBIND_RIPPERMODE=11)` (call site `enableRipperMode` 0x785190 → RVA 0x8106BD).
+- **Blade mode** (hold, удержание) — через `isKeybindDown(KEYBIND_BLADEMODE=8)`.
+
+**Не работает:** запись в `ms_KeyInput`/`ms_InputKeys` (перезаписываются DirectInput), `SendInput` (не читается `GetAsyncKeyState`).
+
+**Работает:** прямой вызов `enableRipperMode()` @ 0x785190 / `disableRipperMode(false)` @ 0x7D9590 (`__thiscall`) — но **без условий и анимаций**; и ✅ **хук `isKeybindPressed` (0x61D2D0)** + **хук `isKeybindDown` (0x61D280)** — детур возвращает `1` для нужного keybind, `handleActions` запускает штатную цепочку (условия + анимации). Подробности и дизассемблер — [REPLAY_FINDINGS.md](REPLAY_FINDINGS.md).
+
+**Интеграция в Record/Playback (2026-08-16).** Запись уже сохраняет результат ripper/blade в `ReplayFrame.state` (`ripper_enabled` @ 0x3184, `blade_mode_type` @ 0x40C8 — см. §4.2). При воспроизведении эти хуки подаются в playback-цикле `lib.rs` (debug) через ту же keybind-эмуляцию (`RIPPER_FRAMES`/`BLADE_HOLD`), что и NumPad7/8:
+
+- **Ripper (toggle):** детектируется перепад `ripper_enabled` между кадрами записи (`frame[K] != frame[K-1]`) → `set_ripper_frames(1)` — один фронт `isKeybindPressed(11)`, игра сама тоглит вкл/выкл по текущему состоянию.
+- **Blade mode (hold):** `blade_mode_type != 0` → `set_blade_hold(bool)` на каждом кадре — удержание `isKeybindDown(8)`.
+
+Эмуляция задаётся в `render(K)` и применяется детуром на тике `K+1`, то есть синхронно с override `InputUnit` (тот же сдвиг +1 кадр, что и движение). Сброс — `replay::clear_keybind_emulation()` при остановке воспроизведения, старте записи и входе в loading (чтобы hold blade не «зависал»). Фронт/удержание логируются в `debug.log` (`playback: ripper edge …`, `playback: blade hold …`).
+
 ---
 
 ## 3. Способы подачи ввода (ответ на вопрос 2 — «как скормить ввод игре»)
+
+> ⚠️ Ниже — исторический анализ способов подачи. Рантайм-верификация показала: движение подаётся через **хук `updateInputUnit` + `g_InputUnit0`** (не §3.1/§3.2), а ripper/blade — через **хуки `isKeybindPressed`/`isKeybindDown`** (см. §2.5 и `REPLAY_FINDINGS.md`).
 
 ### 3.1. Прямая запись в сырой ввод (рекомендовано)
 

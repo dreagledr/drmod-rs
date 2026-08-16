@@ -10,6 +10,24 @@
 pub const KEY_INPUT: usize = 0x177B7C0;
 /// cInput::ms_MouseInput — сырой ввод мыши (вспомогательный кэш).
 pub const MOUSE_INPUT: usize = 0x177B798;
+/// cInput::ms_aControllers — массив ControllerState[4] (XInput-кэш).
+#[allow(dead_code)]
+pub const CONTROLLERS: usize = 0x19D05F0;
+/// Pl0000::enableRipperMode — включает Ripper Mode (обход ввода).
+pub const ENABLE_RIPPER_MODE: usize = 0x785190;
+/// Pl0000::disableRipperMode(bool) — выключает Ripper Mode.
+pub const DISABLE_RIPPER_MODE: usize = 0x7D9590;
+/// cInput::isKeybindDown(eSaveKeybind) — проверка удержания keybind (hold,
+/// для blade mode). Активация ripper её НЕ использует.
+pub const IS_KEYBIND_DOWN: usize = 0x61D280;
+/// cInput::isKeybindPressed(eSaveKeybind) — проверка фронта нажатия keybind
+/// (для toggle-действий: ripper). Активация ripper использует именно её:
+/// в дизассемблере `push 0x0B; call 0x61D2D0`.
+pub const IS_KEYBIND_PRESSED: usize = 0x61D2D0;
+/// eSaveKeybind::KEYBIND_RIPPERMODE (индекс в enum, см. Hw.h).
+pub const KEYBIND_RIPPERMODE: i32 = 11;
+/// eSaveKeybind::KEYBIND_BLADEMODE.
+pub const KEYBIND_BLADEMODE: i32 = 8;
 /// cInput::updateInputUnit(InputUnit*, int userIndex) — функция, которую игра
 /// вызывает каждый тик для заполнения глобального InputUnit из DirectInput.
 /// Хук перехватывает её и перезаписывает unit[0] после вызова оригинала.
@@ -145,7 +163,7 @@ pub struct InputOverride {
     pub input: InputUnit,
 }
 
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 const INPUT_OVERRIDE_INIT: InputOverride = InputOverride {
@@ -167,7 +185,72 @@ const INPUT_OVERRIDE_INIT: InputOverride = InputOverride {
 static INPUT_OVERRIDE: Mutex<InputOverride> = Mutex::new(INPUT_OVERRIDE_INIT);
 static ORIG_UPDATE_INPUT_UNIT: OnceLock<unsafe extern "C" fn(*mut InputUnit, i32)> =
     OnceLock::new();
-static DETOUR_COUNT: AtomicU32 = AtomicU32::new(0);
+static ORIG_IS_KEYBIND_PRESSED: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
+static ORIG_IS_KEYBIND_DOWN: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
+/// Базовый адрес модуля игры (устанавливается в `HelloHud::new`) — нужен
+/// в детуре для прямой записи в сырые структуры ввода.
+static BASE_ADDR: OnceLock<usize> = OnceLock::new();
+/// Остаток кадров эмуляции клавиши R (ripper) в детуре.
+static RIPPER_FRAMES: AtomicU32 = AtomicU32::new(0);
+/// Флаг удержания blade mode (isKeybindDown, hold) в детуре.
+static BLADE_HOLD: AtomicU32 = AtomicU32::new(0);
+
+/// Запоминает базовый адрес модуля для использования в детуре.
+pub fn set_base_addr(addr: usize) -> Result<(), ()> {
+    BASE_ADDR.set(addr).map_err(|_| ())
+}
+
+/// Взводит эмуляцию клавиши R (ripper) на `n` кадров — сырой ввод, который
+/// читается `isKeybindDown(KEYBIND_RIPPERMODE)`, а не `InputUnit`.
+pub fn set_ripper_frames(n: u32) {
+    RIPPER_FRAMES.store(n, Ordering::Relaxed);
+}
+
+/// Сколько кадров эмуляции R осталось (для debug-панели).
+pub fn ripper_frames() -> u32 {
+    RIPPER_FRAMES.load(Ordering::Relaxed)
+}
+
+/// Взводит/снимает удержание blade mode (isKeybindDown, hold-действие).
+pub fn set_blade_hold(on: bool) {
+    BLADE_HOLD.store(if on { 1 } else { 0 }, Ordering::Relaxed);
+}
+
+/// Удерживается ли blade mode сейчас (для debug-панели).
+pub fn blade_hold() -> bool {
+    BLADE_HOLD.load(Ordering::Relaxed) != 0
+}
+
+/// Сбрасывает keybind-эмуляцию (ripper/blade) — вызывается при остановке
+/// воспроизведения, старте записи и входе в loading, чтобы hold-действие
+/// (blade) и однокадровый фронт (ripper) не «зависали» и не подмешивались
+/// в реальный ввод.
+#[cfg(debug_assertions)]
+pub fn clear_keybind_emulation() {
+    RIPPER_FRAMES.store(0, Ordering::Relaxed);
+    BLADE_HOLD.store(0, Ordering::Relaxed);
+}
+
+/// Включает Ripper Mode напрямую (обход ввода) — `Pl0000::enableRipperMode`
+/// (`__thiscall`, `this` = указатель на объект игрока).
+pub fn enable_ripper(player: *mut u8) {
+    let Some(&base) = BASE_ADDR.get() else {
+        return;
+    };
+    type Fn = unsafe extern "thiscall" fn(*mut u8);
+    let f: Fn = unsafe { std::mem::transmute((base + ENABLE_RIPPER_MODE) as *const ()) };
+    unsafe { f(player) };
+}
+
+/// Выключает Ripper Mode (`Pl0000::disableRipperMode(bool)`, `__thiscall`).
+pub fn disable_ripper(player: *mut u8) {
+    let Some(&base) = BASE_ADDR.get() else {
+        return;
+    };
+    type Fn = unsafe extern "thiscall" fn(*mut u8, bool);
+    let f: Fn = unsafe { std::mem::transmute((base + DISABLE_RIPPER_MODE) as *const ()) };
+    unsafe { f(player, false) };
+}
 /// Последнее значение m_CurrentInput.buttons_down<<32 | buttons_pressed —
 /// для ловли фронтов (pressed/down) при реальном вводе.
 static LAST_CUR_IN: AtomicU64 = AtomicU64::new(0);
@@ -218,15 +301,37 @@ pub fn set_original_update_input_unit(
     ORIG_UPDATE_INPUT_UNIT.set(orig).map_err(|_| ())
 }
 
+/// Сохраняет trampoline оригинальной `isKeybindPressed` после создания хука.
+pub fn set_original_is_keybind_pressed(orig: unsafe extern "C" fn(i32) -> i32) -> Result<(), ()> {
+    ORIG_IS_KEYBIND_PRESSED.set(orig).map_err(|_| ())
+}
+
+/// Сохраняет trampoline оригинальной `isKeybindDown` после создания хука.
+pub fn set_original_is_keybind_down(orig: unsafe extern "C" fn(i32) -> i32) -> Result<(), ()> {
+    ORIG_IS_KEYBIND_DOWN.set(orig).map_err(|_| ())
+}
+
 static LOG_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Re-entrancy guard для `log_line`. Если сам `log_line` падает (chrono или
+/// файловый I/O при рестарте игры), VEH-обработчик вызовет `log_line` повторно
+/// и получится бесконечная рекурсия исключений (stack overflow). Флаг запрещает
+/// повторный вход: после первого фолта он остаётся взведённым, и `log_line`
+/// деградирует в no-op.
+static LOG_REENTRY: AtomicBool = AtomicBool::new(false);
 
 /// Дописывает строку в `%LOCALAPPDATA%\drmod\debug.log` с таймстампом.
 /// Используется для отладки хука ввода (детур/override).
 pub fn log_line(line: &str) {
+    if LOG_REENTRY.swap(true, Ordering::SeqCst) {
+        return;
+    }
     let Ok(_guard) = LOG_MUTEX.lock() else {
+        LOG_REENTRY.store(false, Ordering::SeqCst);
         return;
     };
     let Ok(localappdata) = std::env::var("LOCALAPPDATA") else {
+        LOG_REENTRY.store(false, Ordering::SeqCst);
         return;
     };
     let path = format!("{}\\drmod\\debug.log", localappdata);
@@ -235,6 +340,7 @@ pub fn log_line(line: &str) {
         .append(true)
         .open(&path)
     else {
+        LOG_REENTRY.store(false, Ordering::SeqCst);
         return;
     };
     let _ = std::io::Write::write_fmt(
@@ -245,6 +351,7 @@ pub fn log_line(line: &str) {
             line
         ),
     );
+    LOG_REENTRY.store(false, Ordering::SeqCst);
 }
 
 /// Буфер отдельного лога состояния (velocity/rotation/heading/ripper/blade/...).
@@ -314,80 +421,55 @@ fn flush_state_log() {
     }
 }
 
-/// Детур `cInput::updateInputUnit` (__cdecl). Читает реальный ввод ДО вызова
-/// оригинала (unit уже заполнен реальным вводом, а оригинал сбрасывает его),
-/// затем вызывает оригинал и перезаписывает unit нашими значениями, если
-/// override активен. Запись/перезапись только для `user_index == 0`.
+/// Детур `cInput::updateInputUnit` (__cdecl). Вызывает оригинал, затем для
+/// `user_index == 0` перезаписывает unit нашим override (подача ввода).
+///
+/// Детур вызывается игрой несколько раз за кадр и должен быть ЛЁГКИМ: только
+/// чтение/запись атомиков. Никакого `log_line` (chrono + файловый I/O) — при
+/// рестарте это даёт рекурсию access violation (см. docs/REPLAY_FINDINGS.md).
 pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_index: i32) {
-    let n = DETOUR_COUNT.fetch_add(1, Ordering::Relaxed);
-    let sample = n.is_multiple_of(60);
-
-    if user_index == 0 {
-        let override_active = INPUT_OVERRIDE.lock().map(|g| g.active).unwrap_or(false);
-        if !override_active {
-            // Запись реального ввода ДО оригинала: здесь unit ещё содержит
-            // реальный ввод (заполняется до updateInputUnit), а оригинал
-            // сбрасывает его (после оригинала unit уже valid=0).
-            if sample {
-                let u = unsafe { &*unit };
-                log_line(&format!(
-                    "detour: ui={} unit=0x{:08X} before_orig down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) valid={}",
-                    user_index,
-                    unit as usize,
-                    u.buttons_down,
-                    u.buttons_pressed,
-                    u.left_stick[0],
-                    u.left_stick[1],
-                    u.right_stick[0],
-                    u.right_stick[1],
-                    u.valid_input
-                ));
-            }
-        }
-    }
-
     if let Some(&orig) = ORIG_UPDATE_INPUT_UNIT.get() {
         unsafe { orig(unit, user_index) };
-    }
-
-    if sample {
-        let u = unsafe { &*unit };
-        log_line(&format!(
-            "detour: ui={} unit=0x{:08X} after_orig down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) valid={}",
-            user_index,
-            unit as usize,
-            u.buttons_down,
-            u.buttons_pressed,
-            u.left_stick[0],
-            u.left_stick[1],
-            u.right_stick[0],
-            u.right_stick[1],
-            u.valid_input
-        ));
     }
 
     if user_index != 0 {
         return;
     }
+
     if let Ok(guard) = INPUT_OVERRIDE.lock()
         && guard.active
     {
-        let u = unsafe { &mut *unit };
-        *u = guard.input;
-        if sample {
-            log_line(&format!(
-                "detour: unit=0x{:08X} AFTER  down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) valid={}",
-                unit as usize,
-                u.buttons_down,
-                u.buttons_pressed,
-                u.left_stick[0],
-                u.left_stick[1],
-                u.right_stick[0],
-                u.right_stick[1],
-                u.valid_input
-            ));
-        }
+        unsafe { *unit = guard.input };
     }
+}
+
+/// Детур `cInput::isKeybindPressed` (__cdecl, 0x61D2D0). Для `KEYBIND_RIPPERMODE`
+/// возвращает 1 (нажат фронт), пока эмуляция R активна (`RIPPER_FRAMES > 0`) —
+/// тогда `handleActions` запускает штатную активацию/деактивацию ripper
+/// с проверками условий и анимациями. Остальные keybind'ы идут в оригинал.
+pub unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
+    if keybind == KEYBIND_RIPPERMODE && RIPPER_FRAMES.load(Ordering::Relaxed) > 0 {
+        RIPPER_FRAMES.fetch_sub(1, Ordering::Relaxed);
+        return 1;
+    }
+
+    if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
+        return unsafe { orig(keybind) };
+    }
+    0
+}
+
+/// Детур `cInput::isKeybindDown` (__cdecl, 0x61D280). Для `KEYBIND_BLADEMODE`
+/// возвращает 1 (удержание), пока `BLADE_HOLD` взведён — blade mode это
+/// hold-действие, активируется удержанием клавиши через handleActions.
+pub unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
+    if keybind == KEYBIND_BLADEMODE && BLADE_HOLD.load(Ordering::Relaxed) != 0 {
+        return 1;
+    }
+    if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
+        return unsafe { orig(keybind) };
+    }
+    0
 }
 
 /// Полное состояние персонажа на кадр — позиция, поворот, скорость, HP,

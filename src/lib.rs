@@ -114,6 +114,10 @@ struct HelloHud {
     pub(crate) mouse_input_addr: Option<NonNull<u8>>,
     // Хук cInput::updateInputUnit (подача ввода: подмена InputUnit[0])
     pub(crate) input_hook: Option<hudhook::mh::MhHook>,
+    // Хук cInput::isKeybindPressed (эмуляция toggle-действий: ripper)
+    pub(crate) keybind_hook: Option<hudhook::mh::MhHook>,
+    // Хук cInput::isKeybindDown (эмуляция hold-действий: blade mode)
+    pub(crate) keybind_down_hook: Option<hudhook::mh::MhHook>,
     // Полное логирование состояния при записи/воспроизведении (NumPad5/6).
     // Буферы копятся в памяти, флашатся в БД по завершении (bulk insert).
     #[cfg(debug_assertions)]
@@ -197,6 +201,12 @@ fn in_bare_trigger(pos: Option<segment::Vec3>) -> bool {
         && (p.z - BARE_START_TRIGGER.z).abs() <= 0.1
 }
 
+/// Re-entrancy guard для VEH-обработчика. Если исключение случается внутри
+/// самого обработчика (например, в `log_line`/`format!` при рестарте), повторный
+/// вход не логирует — иначе рекурсия диспетчера исключений → stack overflow.
+#[cfg(debug_assertions)]
+static IN_VEH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// VEH-обработчик исключений — логирует код и адрес креша в debug.log.
 /// Вызывается первым при любом SEH-исключении (access violation и т.п.),
 /// возвращает EXCEPTION_CONTINUE_SEARCH, чтобы игра обработала его дальше.
@@ -214,6 +224,11 @@ unsafe extern "system" fn veh_handler(
     if code == 0x406D1388 || code == 0x40010006 {
         return windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH;
     }
+    // Повторный вход (исключение внутри log_line/format! при рестарте) — не
+    // логируем, чтобы диспетчер исключений не зациклился.
+    if IN_VEH.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH;
+    }
     let fault = record.ExceptionAddress as usize;
     let access = if record.NumberParameters >= 2 {
         record.ExceptionInformation[1]
@@ -224,6 +239,7 @@ unsafe extern "system" fn veh_handler(
         "EXCEPTION: code=0x{:08X} fault=0x{:08X} access=0x{:08X}",
         code, fault, access
     ));
+    IN_VEH.store(false, std::sync::atomic::Ordering::SeqCst);
     windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH
 }
 
@@ -236,7 +252,7 @@ unsafe extern "system" fn veh_handler(
 fn is_readable_ptr(addr: usize) -> bool {
     use windows::Win32::System::Memory::{
         VirtualQuery, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-        PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE,
+        PAGE_GUARD, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE,
     };
 
     const PAGE_READABLE: PAGE_PROTECTION_FLAGS = PAGE_PROTECTION_FLAGS(
@@ -251,7 +267,12 @@ fn is_readable_ptr(addr: usize) -> bool {
             std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
         )
     };
-    ok != 0 && (mbi.Protect & PAGE_READABLE).0 != 0
+    // PAGE_GUARD (0x100) — комбинированный флаг: чтение guard-страницы даёт
+    // STATUS_GUARD_PAGE_VIOLATION, хотя бит «readable» в protect может стоять.
+    // Исключаем (см. docs/REPLAY_FINDINGS.md №3).
+    ok != 0
+        && (mbi.Protect & PAGE_READABLE).0 != 0
+        && (mbi.Protect & PAGE_GUARD).0 == 0
 }
 
 impl HelloHud {
@@ -272,6 +293,10 @@ impl HelloHud {
         }
         .map(|h| h.0 as usize)
         .unwrap_or(0);
+
+        // Детур updateInputUnit использует базовый адрес для прямой записи
+        // в сырые структуры ввода (эмуляция клавиши R / ripper).
+        let _ = replay::set_base_addr(base_addr);
 
         let static_ptr_addr = if base_addr == 0 {
             None
@@ -311,14 +336,22 @@ impl HelloHud {
         // перезаписываем глобальный InputUnit[0] (реальный источник игрока).
         let input_hook = Self::create_input_hook(base_addr);
 
+        // Хук cInput::isKeybindPressed — эмуляция toggle-действий (ripper).
+        let keybind_hook = Self::create_keybind_hook(base_addr);
+
+        // Хук cInput::isKeybindDown — эмуляция hold-действий (blade mode).
+        let keybind_down_hook = Self::create_keybind_down_hook(base_addr);
+
         // Отдельный лог состояния (velocity/rotation/heading/ripper/...),
         // перезатирается при старте мода — см. `replay::init_state_log`.
         replay::init_state_log();
 
         replay::log_line(&format!(
-            "=== drmod init === base=0x{:08X} input_hook={}",
+            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={}",
             base_addr,
-            if input_hook.is_some() { "OK" } else { "FAIL" }
+            if input_hook.is_some() { "OK" } else { "FAIL" },
+            if keybind_hook.is_some() { "OK" } else { "FAIL" },
+            if keybind_down_hook.is_some() { "OK" } else { "FAIL" }
         ));
 
         Self {
@@ -347,6 +380,8 @@ impl HelloHud {
             key_input_addr,
             mouse_input_addr,
             input_hook,
+            keybind_hook,
+            keybind_down_hook,
             #[cfg(debug_assertions)]
             record_armed: false,
             #[cfg(debug_assertions)]
@@ -439,6 +474,83 @@ impl HelloHud {
         let _ = unsafe { MH_ApplyQueued() };
         replay::log_line(&format!(
             "create_input_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// Устанавливает MinHook на `cInput::isKeybindPressed` (0x61D2D0):
+    /// подменяет результат для toggle-действий (ripper), чтобы handleActions
+    /// запускал их штатным путём (с условиями и анимациями).
+    fn create_keybind_hook(base_addr: usize) -> Option<hudhook::mh::MhHook> {
+        use core::ffi::c_void;
+        use hudhook::mh::{MH_ApplyQueued, MhHook};
+
+        if base_addr == 0 {
+            replay::log_line("create_keybind_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + replay::IS_KEYBIND_PRESSED) as *mut c_void;
+        let detour = replay::is_keybind_pressed_detour as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, detour) } {
+            Ok(h) => h,
+            Err(e) => {
+                replay::log_line(&format!(
+                    "create_keybind_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "C" fn(i32) -> i32 =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = replay::set_original_is_keybind_pressed(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            replay::log_line(&format!("create_keybind_hook: queue_enable FAIL err={:?}", e));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        replay::log_line(&format!(
+            "create_keybind_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// Устанавливает MinHook на `cInput::isKeybindDown` (0x61D280):
+    /// подменяет результат для hold-действий (blade mode).
+    fn create_keybind_down_hook(base_addr: usize) -> Option<hudhook::mh::MhHook> {
+        use core::ffi::c_void;
+        use hudhook::mh::{MH_ApplyQueued, MhHook};
+
+        if base_addr == 0 {
+            replay::log_line("create_keybind_down_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + replay::IS_KEYBIND_DOWN) as *mut c_void;
+        let detour = replay::is_keybind_down_detour as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, detour) } {
+            Ok(h) => h,
+            Err(e) => {
+                replay::log_line(&format!(
+                    "create_keybind_down_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "C" fn(i32) -> i32 =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = replay::set_original_is_keybind_down(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            replay::log_line(&format!("create_keybind_down_hook: queue_enable FAIL err={:?}", e));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        replay::log_line(&format!(
+            "create_keybind_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
             target as usize,
             hook.trampoline() as usize
         ));
@@ -585,7 +697,9 @@ impl HelloHud {
             // Указатель на PlayerManagerImplement перечитываем каждый кадр —
             // он пересоздаётся при рестарте (кэшировать нельзя).
             let pm_ptr = unsafe { *(pm_addr.as_ptr() as *const *mut u8) };
-            if !pm_ptr.is_null() {
+            // При быстром рестарте указатель может стать dangling (не null) —
+            // гейтим через is_readable_ptr, как и объект игрока.
+            if !pm_ptr.is_null() && is_readable_ptr(pm_ptr as usize) {
                 state.main_weapon = unsafe { *(pm_ptr.add(0xE0) as *const i32) };
                 state.custom_weapon = unsafe { *(pm_ptr.add(0xE4) as *const i32) };
                 state.sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
@@ -933,6 +1047,8 @@ impl HelloHud {
             self.stop_record();
             self.record_armed = false;
             replay::set_input_override(replay::InputOverride::default());
+            // Снять остатки ручной keybind-эмуляции (NumPad7/8) до старта.
+            replay::clear_keybind_emulation();
             self.playback_armed = true;
         }
     }
@@ -976,6 +1092,9 @@ impl HelloHud {
     #[cfg(debug_assertions)]
     fn stop_playback(&mut self) {
         replay::set_input_override(replay::InputOverride::default());
+        // Снять keybind-эмуляцию (ripper/blade): иначе удержание blade
+        // останется активным и будет подмешиваться в реальный ввод.
+        replay::clear_keybind_emulation();
         let was_active = self.playback_active;
         self.playback_active = false;
         self.playback_frame_idx = 0;
@@ -1021,6 +1140,9 @@ impl HelloHud {
         if self.record_armed {
             self.record_armed = false;
             replay::log_line("deferred: trigger -> start recording");
+            // Запись ловит только реальный ввод — сбрасываем keybind-эмуляцию,
+            // чтобы остатки ручного NumPad7/8 не подмешались в кадры.
+            replay::clear_keybind_emulation();
             self.record_active = true;
             self.record_frames.clear();
             self.record_start = Some(Instant::now());
@@ -1032,6 +1154,7 @@ impl HelloHud {
             self.playback_armed = false;
             replay::log_line("deferred: trigger -> start playback");
             replay::set_input_override(replay::InputOverride::default());
+            replay::clear_keybind_emulation();
             self.playback_active = true;
             self.playback_frame_idx = 0;
             self.playback_log.clear();
@@ -1052,6 +1175,10 @@ impl HelloHud {
             replay::log_line("loading: stop active playback");
             self.stop_playback();
         }
+        // Сбрасываем keybind-эмуляцию (ripper/blade): иначе при рестарте
+        // детуры isKeybindPressed/isKeybindDown возвращают 1 на пересоздающемся
+        // игроке → handleActions падает (access violation).
+        replay::clear_keybind_emulation();
     }
 }
 
@@ -1414,10 +1541,41 @@ impl ImguiRenderLoop for HelloHud {
         #[cfg(debug_assertions)]
         if self.playback_active {
             if self.playback_frame_idx < self.playback_frames.len() {
-                let input = self.playback_frames[self.playback_frame_idx].input;
+                let frame = self.playback_frames[self.playback_frame_idx];
+
+                // Ripper/blade не идут через InputUnit — handleActions читает их
+                // из DirectInput напрямую через isKeybindPressed(11)/isKeybindDown(8).
+                // Подаём их через keybind-эмуляцию, выводя фронт/удержание из
+                // записанного состояния: ripper — перепад ripper_enabled,
+                // blade — blade_mode_type != 0 (hold). Задание в render(K)
+                // применяется на тике K+1, т.е. синхронно с override InputUnit.
+                let prev_ripper = if self.playback_frame_idx > 0 {
+                    self.playback_frames[self.playback_frame_idx - 1].state.ripper_enabled
+                } else {
+                    0
+                };
+                if frame.state.ripper_enabled != prev_ripper {
+                    replay::set_ripper_frames(1);
+                    replay::log_line(&format!(
+                        "playback: ripper edge {} -> {} at frame {}",
+                        prev_ripper,
+                        frame.state.ripper_enabled,
+                        self.playback_frame_idx
+                    ));
+                }
+                let blade_on = frame.state.blade_mode_type != 0;
+                if blade_on != replay::blade_hold() {
+                    replay::set_blade_hold(blade_on);
+                    replay::log_line(&format!(
+                        "playback: blade hold {} at frame {}",
+                        if blade_on { "ON" } else { "OFF" },
+                        self.playback_frame_idx
+                    ));
+                }
+
                 replay::set_input_override(replay::InputOverride {
                     active: true,
-                    input,
+                    input: frame.input,
                 });
                 self.playback_frame_idx += 1;
                 self.playback_log.push(replay::ReplayFrame {
@@ -1472,6 +1630,33 @@ impl ImguiRenderLoop for HelloHud {
             }
             if ui.is_key_pressed_no_repeat(Key::Keypad6) {
                 self.toggle_playback();
+            }
+            // NumPad7 — эмуляция клавиши R (ripper) через хук isKeybindPressed:
+            // handleActions видит "R нажата" и запускает штатную активацию.
+            if ui.is_key_pressed_no_repeat(Key::Keypad7) {
+                replay::set_ripper_frames(1);
+                replay::log_line("NumPad7: emulate R (ripper) 1 frame via isKeybindPressed");
+            }
+            // NumPad8 — toggle удержания blade mode через isKeybindDown (hold).
+            if ui.is_key_pressed_no_repeat(Key::Keypad8) {
+                let on = !replay::blade_hold();
+                replay::set_blade_hold(on);
+                replay::log_line(&format!(
+                    "NumPad8: blade_hold {}",
+                    if on { "ON" } else { "OFF" }
+                ));
+            }
+            // NumPad9 / NumPad0 — прямой вызов enableRipperMode()/disableRipperMode()
+            // (обход ввода: игра читает DirectInput GetDeviceState напрямую).
+            if !self.cached_player_obj_ptr.is_null() {
+                if ui.is_key_pressed_no_repeat(Key::Keypad9) {
+                    replay::enable_ripper(self.cached_player_obj_ptr);
+                    replay::log_line("NumPad9: enableRipperMode()");
+                }
+                if ui.is_key_pressed_no_repeat(Key::Keypad0) {
+                    replay::disable_ripper(self.cached_player_obj_ptr);
+                    replay::log_line("NumPad0: disableRipperMode()");
+                }
             }
         }
 

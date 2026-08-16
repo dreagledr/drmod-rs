@@ -255,10 +255,30 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                 hud.inject_heavy_frames = 2;
             }
             ui.checkbox("Крутить камеру (мышь)", &mut hud.inject_camera);
+            if ui.button("Ripper (R)") {
+                replay::set_ripper_frames(1);
+            }
+            ui.text(format!("ripper_emul frames left: {}", replay::ripper_frames()));
             ui.text_colored(
                 [0.5, 1.0, 0.5, 1.0],
                 "NumPad4: бег→прыжок→удар→поворот камеры",
             );
+            ui.text_colored(
+                [0.5, 1.0, 0.5, 1.0],
+                "NumPad7: эмуляция R (ripper) через isKeybindPressed, 1 кадр",
+            );
+            ui.text_colored(
+                [0.5, 1.0, 0.5, 1.0],
+                "NumPad8: blade mode (hold) toggle",
+            );
+            ui.text_colored(
+                [0.5, 1.0, 0.5, 1.0],
+                "NumPad9: enableRipperMode()  NumPad0: disableRipperMode()",
+            );
+            ui.text(format!(
+                "blade hold: {}",
+                replay::blade_hold()
+            ));
 
             // Статус хука updateInputUnit и текущего override
             match &hud.input_hook {
@@ -267,6 +287,22 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                 }
                 None => {
                     ui.text_colored([1.0, 0.5, 0.0, 1.0], "hook updateInputUnit: N/A");
+                }
+            }
+            match &hud.keybind_hook {
+                Some(_) => {
+                    ui.text_colored([0.0, 1.0, 0.0, 1.0], "hook isKeybindPressed: OK");
+                }
+                None => {
+                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "hook isKeybindPressed: N/A");
+                }
+            }
+            match &hud.keybind_down_hook {
+                Some(_) => {
+                    ui.text_colored([0.0, 1.0, 0.0, 1.0], "hook isKeybindDown: OK");
+                }
+                None => {
+                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "hook isKeybindDown: N/A");
                 }
             }
             let ov = replay::input_override();

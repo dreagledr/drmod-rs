@@ -39,6 +39,10 @@ DirectInput → cInput::updateInputUnit (0x9DAFE0, заполняет 4 глоб
 | `base + 0x177B850` | `g_InputUnit0` — реальный источник входа игрока | `InputUnit` (0x30) |
 | `base + 0x177B880` / `0x177B8B0` / `0x177B8E0` | `g_InputUnit1..3` (шаг 0x30, меню/UI) | `InputUnit` |
 | `base + 0x9DAFE0` | `cInput::updateInputUnit(InputUnit*, int userIndex)` — заполняет unit из DirectInput, точка хука | cdecl |
+| `base + 0x61D280` | `cInput::isKeybindDown(eSaveKeybind)` — удержание keybind (blade mode) | cdecl |
+| `base + 0x61D2D0` | `cInput::isKeybindPressed(eSaveKeybind)` — фронт keybind (ripper) | cdecl |
+| `base + 0x785190` | `Pl0000::enableRipperMode()` — включение ripper (обход ввода, без условий) | thiscall |
+| `base + 0x7D9590` | `Pl0000::disableRipperMode(bool)` — выключение ripper | thiscall |
 | `base + 0xD4AFC0` | `resetInputUnit` — сбрасывает unit (вызывается из 0x98D900) | |
 | `base + 0x61D900` (= 0x98D900) | глобальный апдейт ввода: reset всех 4 unit + `0xD4A270` | |
 | `base + 0x177B7C0` | `ms_KeyInput` (сырой кэш клавиш — вспомогательный, игроком не читается) | `KeyInput` |
@@ -92,6 +96,41 @@ DirectInput → cInput::updateInputUnit (0x9DAFE0, заполняет 4 глоб
 | `+0x28` | `valid_input` (i32) |
 | `+0x2C` | `repeat_count` (i32) |
 
+## Ripper / Blade Mode (✅ решено, 2026-08-16, дизассемблирование)
+
+Ripper и blade mode активируются **не через `InputUnit`**, а через keybind-проверки в `handleActions`, которые читают сырой ввод **напрямую из DirectInput** (`GetDeviceState`), а не из кэшей `ms_KeyInput`/`ms_InputKeys` и не из системной очереди (`GetAsyncKeyState`).
+
+**Две функции-близнеца** (обе `__cdecl`, `(eSaveKeybind) -> BOOL`, читают `ms_aKeyMap` @ `base+0x14CD838` → `ms_KeyInput` @ `base+0x177B7C0`):
+
+| Функция | Адрес | Читает | Назначение |
+|---------|-------|--------|------------|
+| `isKeybindDown` | `base + 0x61D280` | `isKeyDown` @ 0x9D93A0 (удержание) | hold-действия: **blade mode** (`KEYBIND_BLADEMODE`=8) |
+| `isKeybindPressed` | `base + 0x61D2D0` | `isKeyPressed` @ 0x9D9400 (фронт) | toggle-действия: **ripper** (`KEYBIND_RIPPERMODE`=11) |
+
+**Условие активации ripper (дизассемблер, call site `enableRipperMode` 0x785190 → RVA 0x8106BD):**
+```asm
+mov  edx, [eax+0x344]   ; vtable[209] = canActivateRipperMode()
+call edx
+test eax, eax
+jz   skip               ; !canActivateRipperMode() → skip
+push 0x0B               ; KEYBIND_RIPPERMODE = 11
+call 0x61D2D0           ; isKeybindPressed(11)
+test eax, eax
+jz   skip               ; фронт R не нажат → skip
+call 0x785190           ; enableRipperMode()
+```
+То есть `canActivateRipperMode() && isKeybindPressed(11)`. Плюс второй безусловный путь (`[base+0x1B5A094] & 0x800`) — скриптовая активация.
+
+**Что НЕ работает** (проверено рантаймом):
+- запись в `ms_KeyInput`/`ms_InputKeys` (NumPad7 v1) — кэши перезаписываются DirectInput;
+- `SendInput` (системная очередь) — `isKeybindDown/Pressed` не читают `GetAsyncKeyState`.
+
+**Что работает:**
+- прямой вызов `enableRipperMode()` @ `0x785190` / `disableRipperMode(false)` @ `0x7D9590` (`__thiscall`) — но **без условий и анимаций** (мгновенно, без fade) — только fallback;
+- ✅ **хук `isKeybindPressed` (0x61D2D0)** для ripper + **хук `isKeybindDown` (0x61D280)** для blade — детур возвращает `1` для нужного keybind → `handleActions` запускает штатную цепочку (условия + анимации).
+
+**Реализация** (`src/replay.rs`, debug): `is_keybind_pressed_detour` (RIPPERMODE, счётчик `RIPPER_FRAMES`) + `is_keybind_down_detour` (BLADEMODE, флаг `BLADE_HOLD`). NumPad7 = фронт ripper, NumPad8 = toggle blade-удержания.
+
 ## Опровергнутые гипотезы (не тратить время повторно)
 
 | # | Гипотеза | Результат |
@@ -101,7 +140,7 @@ DirectInput → cInput::updateInputUnit (0x9DAFE0, заполняет 4 глоб
 | 3 | `ms_MouseStateInput` (DIMOUSESTATE2) — путь мыши игрока | ❌ dx/dy всегда 0, кэш не используется игроком |
 | 4 | `m_CurrentInput` по 0xCF8 — «мусор, смещение неверно» | ❌ **ошибка интерпретации**: 0xCF8 верно; `L=(0,-1000)` при W — нормальный left_stick (масштаб 1000). «valid чередуется» — из-за чтения в Present в неправильной фазе |
 | 5 | Хук `updateInputUnit` + перезапись стика двигает игрока | ❌ (в раннем тесте) — нужны **правильные значения** (биты `buttons_down` + стики), а не только стик; писать на `user_index == 0` |
-| 6 | Хук `isKeybindDown` (0x61D2D0) — точка движения | ❌ Вызывается только с `k=11` (RIPPERMODE); FORWARD (k=0) не запрашивается |
+| 6 | Хук `isKeybindDown` (0x61D2D0) — точка движения | ❌ 0x61D2D0 — это **`isKeybindPressed`** (фронт), а не `isKeybindDown`. Вызывается с `k=11` (RIPPERMODE); FORWARD (k=0) не запрашивается — это не путь движения |
 | 7 | 0xDCE1B0 — keybind-проверка движения | ❌ Принимает указатель; вызывается 3 раза за сессию — не путь движения |
 | 8 | vtable 241 Pl0000 (0xB804B0) — это `updateInput` | ❌ Это switch по rAnim (`mov eax,[ecx+0x618]; cmp eax,0x141; jmp [table]`, 321 кейс); SDK vtable-индексы неточны |
 
@@ -122,6 +161,7 @@ DirectInput → cInput::updateInputUnit (0x9DAFE0, заполняет 4 глоб
 13. **Dangling-указатель объекта игрока при рестарте/loading (креш).** В loading `static_ptr` (`base+0x177B4A4`) может указывать на освобождённую память (не `null`), и разыменование `cached_player_obj_ptr` даёт ACCESS_VIOLATION. В логе выглядит как обрыв через ~0.9 c после попадания в спавн-триггер. **Фикс:** читать объект игрока только при `player_readable` (`menu_status_valid && !is_loading()`), в loading обнулять `cached_player_obj_ptr` (`null_mut()`). Тот же гейт уже был у `gStr`/`rAnim`.
 14. **Воспроизведение по `dt` не работает.** Поиск кадра через `partition_point(duration_ms <= elapsed)` теряет однокадровые фронты `pressed`/`released` (квантование `as_millis()` + фазовый сдвиг «запись в детуре / подача в render») — прыжки/атаки пропадают. **Фикс:** `ReplayFrame{frame_index, input}` + подача строго по индексу (1 кадр на вызов render). Игра залочена на 60 FPS, render ≈ игровой тик 1:1.
 15. **Кэшированные указатели `rAnim` / `PlayerManager` при рестарте (креш).** `r_anim_ptr` (цепочка `base+0x019C14C4 → +0x788 → +0x618`) и `player_manager_addr` (`*(base+0x17EA100)`) вычислялись ОДИН РАЗ в `HelloHud::new()` и больше не пересчитывались. При **быстром** рестарте `menu_status` остаётся `InGame` (не проходит через loading), но объект игрока и `PlayerManagerImplement` пересоздаются → кэшированные указатели указывают на освобождённую память → ACCESS_VIOLATION. В логе: `access=0x35351A98` = старый `player(0x35351480) + 0x618` (rAnim). **Фикс:** `rAnim` читать из `cached_player_obj_ptr + 0x618` (rAnim лежит в `Pl0000` — подтверждено disasm `mov eax,[ecx+0x618]`, FINDINGS №8); `PlayerManagerImplement` deref каждый кадр; плюс `VirtualQuery`-гейт `is_readable_ptr` на адрес игрока (освобождённая страница → `Protect=0` → пропуск чтения).
+16. **`log_line` в hot-path детуре при рестарте → рекурсия access violation (креш).** Детур `updateInputUnit` вызывается игрой несколько раз за кадр и содержал `log_line` (chrono `Local::now()` + файловый I/O). При рестарте (статусы `InGame(1) → PauseMenu(3) → None(16)` и теардаун миссии) `log_line` сам падает (`access=0x77F6D3C8`, детерминированный системный адрес), VEH-обработчик вызывает `log_line` снова → рекурсия диспетчера исключений. В логе — **~сотни одинаковых `EXCEPTION`** за ~15 мс. **Фикс:** (a) детур `update_input_unit_detour` переписан на **чистые атомики/запись** — без `log_line` и диагностических чтений `*unit`; (b) `log_line` получил re-entrancy guard (`LOG_REENTRY`) — после первого фолта деградирует в no-op; (c) VEH-обработчик получил re-entrancy guard (`IN_VEH`) — не логирует при повторном входе; (d) `is_readable_ptr` теперь исключает `PAGE_GUARD` (см. №3), `pm_ptr` (PlayerManager) гейтится через `is_readable_ptr`.
 
 ## Логи отладки
 
