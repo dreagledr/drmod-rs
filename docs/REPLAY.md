@@ -255,20 +255,23 @@ pub enum ReplayMode {
     Playback,
 }
 
-/// Один кадр записи: полный нормализованный InputUnit (0x30 байт) + номер кадра.
+/// Один кадр записи: полный InputUnit (m_CurrentInput) + полное состояние
+/// персонажа и камеры + номер кадра.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct ReplayFrame {
     pub frame_index: u32,
-    pub input: InputUnit, // buttons_down/pressed/released/alternated + стики + триггеры + valid
+    pub input: InputUnit,       // m_CurrentInput (0xCF8)
+    pub state: PlayerState,     // позиция/поворот/скорость/HP/состояния
+    pub camera: CameraState,    // позиция камеры + view-proj матрица
 }
 ```
 
-Размер кадра ≈ **52 байт** (`u32` + `InputUnit` 0x30). При 60 FPS одна минута ≈ 187 КБ.
+Размер кадра ≈ **216 байт** (`u32` + `InputUnit` 0x30 + `PlayerState` 0x58 + `CameraState` 0x4C). При 60 FPS одна минута ≈ 760 КБ.
 
-**Источник записи** — `g_InputUnit0` (`base + 0x177B850`), читается **внутри детура `updateInputUnit`** (после вызова оригинала, до override): в `Present` unit уже сброшен (`valid=0`), там читать нельзя.
+**Источник записи** — `m_CurrentInput` (`Pl0000 + 0xCF8`) + полное состояние из `cached_player_obj_ptr` и камеры, читается **в `render()`** (после `read_game_state()`): глобальный `g_InputUnit0` в `Present` сброшен (`valid=0`), а `m_CurrentInput` — персистентная копия, стабильно читается в render. Захват симметричен для записи и воспроизведения.
 
-**Воспроизведение** — обратно через `InputOverride` (полный `InputUnit`), детур пишет в `g_InputUnit0`.
+**Воспроизведение** — обратно через `InputOverride` (полный `InputUnit`), детур пишет в `g_InputUnit0`; результат (состояние) также захватывается в `playback_log`.
 
 **Ключевое:** записываем/воспроизводим **сырые значения** `InputUnit` целиком — маппинг битов для Replay не нужен (семантика нужна только debug-кнопкам). Неизвестные биты (блейд-мод, нинзяран, action, lock-on, под-оружие) воспроизводятся автоматически, т.к. копируется вся битмаска.
 
@@ -288,29 +291,54 @@ fn set_input_override(ov: InputOverride);        // подача ввода (п�
 
 ### 4.2. Схема SQLite (дополняет `runs.db`)
 
+Полное состояние пишется в **отдельные таблицы** для записи и воспроизведения, под общим `replay_runs.id`:
+
 ```sql
-CREATE TABLE replays (
+CREATE TABLE replay_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                 -- 'record' | 'playback'
     mission_id INTEGER NOT NULL,
     mission_name TEXT NOT NULL,
     started_at TEXT NOT NULL,
     frame_count INTEGER NOT NULL,
-    duration_ms INTEGER NOT NULL
+    duration_ms INTEGER NOT NULL,
+    source_replay_id INTEGER            -- для playback: id исходной записи
 );
 
-CREATE TABLE replay_frames (
+CREATE TABLE replay_record_frames (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     replay_id INTEGER NOT NULL,
     frame_index INTEGER NOT NULL,
     duration_ms INTEGER NOT NULL,
-    input_unit BLOB NOT NULL,     -- 48 байт (0x30) — InputUnit целиком
-    FOREIGN KEY (replay_id) REFERENCES replays(id) ON DELETE CASCADE
+    input_unit BLOB NOT NULL,           -- InputUnit (0x30)
+    state BLOB NOT NULL,                -- PlayerState (0x58)
+    camera BLOB NOT NULL,               -- CameraState (0x4C)
+    FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_replay_frames_replay ON replay_frames(replay_id, frame_index);
+CREATE TABLE replay_playback_frames (
+    -- та же форма, что у replay_record_frames
+);
+
+CREATE INDEX idx_replay_record_frames ON replay_record_frames(replay_id, frame_index);
+CREATE INDEX idx_replay_playback_frames ON replay_playback_frames(replay_id, frame_index);
 ```
 
-Создание таблиц — в `segment::create_segment_tables()` (или отдельной `replay::create_replay_tables()`). Bulk insert по паттерну `segment::finish_segment()`.
+**Смещения `PlayerState` (из SDK, требуют рантайм-верификации):**
+
+| Поле | Смещение | Источник |
+|------|----------|----------|
+| позиция | `0x50/54/58` | `cParts::m_vecTransPos` |
+| поворот (Euler) | `0x90/94/98` | `cParts::m_vecRotation` |
+| скорость (вертикальная) | `0x890/894/898` | `BehaviorAppBase::m_vecVelocity` — только Y; x/z всегда 0 |
+| HP / rAnim | `0x870` / `0x618` | подтверждено |
+| `m_CurrentInput` | `0xCF8` | подтверждено |
+| ripper | `0x3184` | `Pl0000::m_bRipperModeEnabled` |
+| blade mode type | `0x40C8` | `Pl0000::m_nBladeModeType` |
+
+`CameraState`: позиция камеры `+0x1B0`, view-proj матрица `+0x200` (углы извлекаются офлайн из матрицы).
+
+Создание таблиц — `replay::create_replay_tables()`, вызывается из `init_db()`. Флаш — `replay::flush_replay()` (bulk insert по паттерну `segment::finish_segment()`): буфер копится в памяти, в БД пишется одним `BEGIN`/`COMMIT` по завершении записи/воспроизведения.
 
 ### 4.3. Интеграция в `HelloHud` (`src/lib.rs`)
 
@@ -385,6 +413,13 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 **Как проверить:** в игре (debug-сборка) NumPad5 (arm) → рестарт R-01 → игрок на спавне попадает в триггер → запись авто-стартует; подвигаться/прыгнуть/атаковать ~2–3 с → NumPad5 (стоп). NumPad6 (arm) → рестарт → авто-старт воспроизведения — персонаж повторяет ввод; NumPad6 — стоп. Запись ловит только реальный ввод (override выключен), буфер без авто-лимита.
 
 ### Этап 2 — Модуль записи (Record)
+
+> **Частично выполнено (2026-08-16):** полное покадровое логирование состояния
+> реализовано на механизме NumPad5/6 (не через сегменты). Ввод читается из
+> `m_CurrentInput` (0xCF8) в `render()` вместе с полным состоянием (`PlayerState`)
+> и камерой (`CameraState`); буфер в памяти флашится в `replay_runs` +
+> `replay_record_frames`/`replay_playback_frames` по завершении. Пункты 4–5 ниже
+> (сегментная интеграция `SegmentAction::End`) — не сделаны.
 
 1. Добавить в `src/replay.rs`: `ReplayMode`, `ReplayFrame { frame_index, input: InputUnit }` (dt не воспроизводит геймплей — см. Этап 1.5).
 2. **Расширить `InputOverride` до полного `InputUnit`** (сейчас только `buttons_down`/`pressed`/`left_stick`/`right_stick`; добавить `buttons_released`, `buttons_alternated`, `left_trigger`, `right_trigger`, `valid_input`, `repeat_count`) — нужно для точной записи и воспроизведения.

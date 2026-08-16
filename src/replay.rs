@@ -247,6 +247,73 @@ pub fn log_line(line: &str) {
     );
 }
 
+/// Буфер отдельного лога состояния (velocity/rotation/heading/ripper/blade/...).
+/// Пишется пачками, чтобы не открывать файл 60 раз в секунду.
+static STATE_LOG_BUF: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static STATE_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+const STATE_LOG_FLUSH_EVERY: u32 = 60;
+
+/// Перезатирает `%LOCALAPPDATA%\drmod\state.log` при старте мода и очищает
+/// буфер — чтобы лог не рос между сессиями.
+pub fn init_state_log() {
+    let Ok(localappdata) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    let dir = format!("{}\\drmod", localappdata);
+    let _ = std::fs::create_dir_all(&dir);
+    let path = format!("{}\\state.log", dir);
+    if let Ok(mut f) = std::fs::File::create(&path) {
+        let _ = std::io::Write::write_fmt(
+            &mut f,
+            format_args!(
+                "[{}] state log started\r\nf=frame pos=(x,y,z) vel=(x,y,z, vertical-only) prev=(0x900, last pos) rot=(x,y,z) heading dir ripper blade ninja jump cam=(x,y,z)\r\n",
+                chrono::Local::now().format("%H:%M:%S%.3f")
+            ),
+        );
+    }
+    if let Ok(mut buf) = STATE_LOG_BUF.lock() {
+        buf.clear();
+    }
+    STATE_LOG_COUNT.store(0, Ordering::Relaxed);
+}
+
+/// Дописывает строку состояния в буфер; флашится в `state.log` каждые
+/// `STATE_LOG_FLUSH_EVERY` строк.
+pub fn log_state_line(line: &str) {
+    if let Ok(mut buf) = STATE_LOG_BUF.lock() {
+        buf.push(line.to_string());
+    }
+    if STATE_LOG_COUNT.fetch_add(1, Ordering::Relaxed) % STATE_LOG_FLUSH_EVERY
+        == STATE_LOG_FLUSH_EVERY - 1
+    {
+        flush_state_log();
+    }
+}
+
+/// Сбрасывает буфер состояния в `state.log` (append).
+fn flush_state_log() {
+    let Ok(localappdata) = std::env::var("LOCALAPPDATA") else {
+        return;
+    };
+    let path = format!("{}\\drmod\\state.log", localappdata);
+    let Ok(mut buf) = STATE_LOG_BUF.lock() else {
+        return;
+    };
+    if buf.is_empty() {
+        return;
+    }
+    let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    else {
+        return;
+    };
+    for line in buf.drain(..) {
+        let _ = std::io::Write::write_fmt(&mut f, format_args!("{}\r\n", line));
+    }
+}
+
 /// Детур `cInput::updateInputUnit` (__cdecl). Читает реальный ввод ДО вызова
 /// оригинала (unit уже заполнен реальным вводом, а оригинал сбрасывает его),
 /// затем вызывает оригинал и перезаписывает unit нашими значениями, если
@@ -276,8 +343,6 @@ pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_ind
                     u.valid_input
                 ));
             }
-            #[cfg(debug_assertions)]
-            record_bare_frame(unsafe { &*unit });
         }
     }
 
@@ -325,80 +390,193 @@ pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_ind
     }
 }
 
-/// Один кадр записи: полный InputUnit + порядковый номер кадра.
+/// Полное состояние персонажа на кадр — позиция, поворот, скорость, HP,
+/// анимация, оружие и активные состояния (прыжок/атаки/ниндзя/блейд/ripper).
+/// Смещения из SDK (`ref/mgr-plugin-sdk`): `cParts.h` (0x50, 0x90),
+/// `BehaviorAppBase.h` (0x890, якорь HP 0x870), `Pl0000.h` (0x3184, 0x40C8).
+/// Проверено рантаймом: rotation.y=head (0x90), ripper (0x3184), blade (0x40C8).
+/// velocity (0x890) — только вертикальная составляющая (прыжок/гравитация),
+/// x/z всегда 0: горизонтального поля скорости нет (движение кинематическое).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlayerState {
+    /// cParts::m_vecTransPos (+0x50)
+    pub pos: [f32; 3],
+    /// cParts::m_vecRotation (+0x90, Euler; меняется только Y = yaw = heading)
+    pub rotation: [f32; 3],
+    /// BehaviorAppBase::m_vecVelocity (+0x890) — вертикальная скорость (y);
+    /// x/z всегда 0 (горизонтальной скорости в этом поле нет).
+    pub velocity: [f32; 3],
+    /// m_nHealth (+0x870)
+    pub hp: i32,
+    /// m_nCurrentAction (+0x618)
+    pub r_anim: i32,
+    /// m_SwordState (+0x13FC)
+    pub sword_state: i32,
+    /// m_bSwordHidden (+0xB74)
+    pub sword_hidden: i32,
+    /// m_fInputDirection (+0xD2C)
+    pub input_direction: f32,
+    /// m_fDesiredHeading (+0xD30)
+    pub desired_heading: f32,
+    /// m_nButtonJump (+0xE18)
+    pub button_jump: i32,
+    /// m_nButtonLightAttack (+0xE20)
+    pub button_light_attack: i32,
+    /// m_nButtonHeavyAttack (+0xE24)
+    pub button_heavy_attack: i32,
+    /// m_nButtonNinjarun (+0xE48)
+    pub button_ninjarun: i32,
+    /// m_nButtonBlademode (+0xE50)
+    pub button_blademode: i32,
+    /// m_bRipperModeEnabled (+0x3184)
+    pub ripper_enabled: i32,
+    /// m_nBladeModeType (+0x40C8)
+    pub blade_mode_type: i32,
+}
+
+/// Состояние камеры на кадр: позиция + view-proj матрица (углы извлекаются
+/// офлайн из матрицы).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CameraState {
+    /// позиция камеры (camera + 0x1B0)
+    pub pos: [f32; 3],
+    /// view-proj матрица (camera + 0x200)
+    pub view_proj: [f32; 16],
+}
+
+/// Один кадр записи: полный InputUnit (m_CurrentInput) + полное состояние
+/// персонажа и камеры + порядковый номер кадра.
 /// Номер монотонно растёт от старта записи — воспроизведение подаёт кадры
 /// строго по индексу (1 кадр на тик), без dt-сопоставления.
-#[cfg(debug_assertions)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ReplayFrame {
     pub frame_index: u32,
+    /// m_CurrentInput (0xCF8) — копия g_InputUnit0, стабильно читается в render.
     pub input: InputUnit,
+    pub state: PlayerState,
+    pub camera: CameraState,
 }
 
-/// Короткая запись по нумпаду (smoke-тест InputUnit, Этап 1.5) — без сегментов
-/// и без SQLite. Кадры пишутся в память, воспроизводятся через `set_input_override`.
-#[cfg(debug_assertions)]
-struct BareRecording {
-    active: bool,
-    frames: Vec<ReplayFrame>,
+/// Сериализация `#[repr(C)]`-структуры в байты (для BLOB в SQLite).
+/// Структуры состоят из f32/i32/u32 — без padding, round-trip корректен.
+fn as_bytes<T>(v: &T) -> &[u8] {
+    unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
 }
 
-#[cfg(debug_assertions)]
-static BARE_RECORDING: Mutex<BareRecording> = Mutex::new(BareRecording {
-    active: false,
-    frames: Vec::new(),
-});
+use rusqlite::Connection;
 
-/// Начинает короткую запись (NumPad5). Очищает буфер.
-#[cfg(debug_assertions)]
-pub fn start_bare_recording() {
-    let Ok(mut st) = BARE_RECORDING.lock() else {
-        return;
-    };
-    st.active = true;
-    st.frames.clear();
+/// Метаданные одного прогона записи/воспроизведения (строка в `replay_runs`).
+pub struct ReplayRunMeta {
+    /// "record" | "playback"
+    pub kind: &'static str,
+    pub mission_id: i32,
+    pub mission_name: String,
+    pub started_at: String,
+    /// реальный elapsed от старта до стопа (мс)
+    pub duration_ms: i64,
+    /// для playback — id исходной записи
+    pub source_replay_id: Option<i64>,
 }
 
-/// Останавливает короткую запись и возвращает накопленные кадры.
-/// Возвращает `None`, если запись не была активна.
-#[cfg(debug_assertions)]
-pub fn stop_bare_recording() -> Option<Vec<ReplayFrame>> {
-    let Ok(mut st) = BARE_RECORDING.lock() else {
-        return None;
-    };
-    if !st.active {
-        return None;
+/// Создаёт таблицы Record/Replay (если их нет).
+pub fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS replay_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind TEXT NOT NULL,
+            mission_id INTEGER NOT NULL,
+            mission_name TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            frame_count INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            source_replay_id INTEGER
+        )",
+        (),
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS replay_record_frames (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_id INTEGER NOT NULL,
+            frame_index INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            input_unit BLOB NOT NULL,
+            state BLOB NOT NULL,
+            camera BLOB NOT NULL,
+            FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
+        )",
+        (),
+    )?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS replay_playback_frames (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            replay_id INTEGER NOT NULL,
+            frame_index INTEGER NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            input_unit BLOB NOT NULL,
+            state BLOB NOT NULL,
+            camera BLOB NOT NULL,
+            FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
+        )",
+        (),
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_replay_record_frames ON replay_record_frames(replay_id, frame_index)",
+        (),
+    )?;
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_replay_playback_frames ON replay_playback_frames(replay_id, frame_index)",
+        (),
+    )?;
+    Ok(())
+}
+
+/// Флашит накопленные кадры в БД одним bulk-insert: строка в `replay_runs`
+/// и кадры в `replay_record_frames`/`replay_playback_frames` (по `kind`).
+/// Паттерн — как `segment::finish_segment`. Возвращает id прогона.
+pub fn flush_replay(conn: &Connection, meta: &ReplayRunMeta, frames: &[ReplayFrame]) -> Option<i64> {
+    let frame_count = frames.len() as i64;
+    let _ = conn.execute(
+        "INSERT INTO replay_runs (kind, mission_id, mission_name, started_at, frame_count, duration_ms, source_replay_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            meta.kind,
+            meta.mission_id,
+            meta.mission_name,
+            meta.started_at,
+            frame_count,
+            meta.duration_ms,
+            meta.source_replay_id
+        ],
+    );
+    let replay_id = conn.last_insert_rowid();
+    if frames.is_empty() {
+        return Some(replay_id);
     }
-    st.active = false;
-    Some(std::mem::take(&mut st.frames))
-}
 
-/// Активна ли короткая запись.
-#[cfg(debug_assertions)]
-pub fn is_bare_recording() -> bool {
-    BARE_RECORDING.lock().map(|g| g.active).unwrap_or(false)
-}
-
-/// Число накопленных кадров в буфере короткой записи.
-#[cfg(debug_assertions)]
-pub fn bare_recording_frame_count() -> usize {
-    BARE_RECORDING.lock().map(|g| g.frames.len()).unwrap_or(0)
-}
-
-/// Пушит один кадр реального ввода в буфер короткой записи.
-/// Вызывается из детура ДО вызова оригинала (unit ещё содержит реальный ввод).
-#[cfg(debug_assertions)]
-fn record_bare_frame(unit: &InputUnit) {
-    let Ok(mut st) = BARE_RECORDING.lock() else {
-        return;
+    let sql = match meta.kind {
+        "record" => "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        _ => "INSERT INTO replay_playback_frames (replay_id, frame_index, duration_ms, input_unit, state, camera) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
     };
-    if !st.active {
-        return;
+
+    let _ = conn.execute("BEGIN", []);
+    let Ok(mut stmt) = conn.prepare(sql) else {
+        let _ = conn.execute("ROLLBACK", []);
+        return Some(replay_id);
+    };
+    for f in frames {
+        let dur = (f.frame_index as i64) * 1000 / 60;
+        let _ = stmt.execute(rusqlite::params![
+            replay_id,
+            f.frame_index as i64,
+            dur,
+            as_bytes(&f.input),
+            as_bytes(&f.state),
+            as_bytes(&f.camera)
+        ]);
     }
-    let frame_index = st.frames.len() as u32;
-    st.frames.push(ReplayFrame {
-        frame_index,
-        input: *unit,
-    });
+    let _ = conn.execute("COMMIT", []);
+    Some(replay_id)
 }

@@ -281,23 +281,26 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                 ov.input.right_stick[1]
             ));
 
-            // Этап 1.5: короткая запись/воспроизведение по нумпаду (без сегментов/БД)
+            // Record/Replay с полным логированием состояния (NumPad5/6, debug)
             ui.text_colored(
                 [0.5, 1.0, 0.5, 1.0],
                 "NumPad5: запись (arm→триггер)  NumPad6: воспроизведение (arm→триггер)",
             );
             ui.text(format!(
-                "short record: armed={} recording={}  frames: {}",
-                hud.bare_record_armed,
-                replay::is_bare_recording(),
-                replay::bare_recording_frame_count()
+                "record: armed={} active={} frames={} id={:?}",
+                hud.record_armed,
+                hud.record_active,
+                hud.record_frames.len(),
+                hud.last_record_id
             ));
             ui.text(format!(
-                "short playback: armed={} playing={}  frame: {}/{}",
-                hud.bare_playback_armed,
-                hud.bare_playback,
-                hud.bare_playback_frame_idx,
-                hud.bare_playback_frames.len()
+                "playback: armed={} active={} frame={}/{} log={} id={:?}",
+                hud.playback_armed,
+                hud.playback_active,
+                hud.playback_frame_idx,
+                hud.playback_frames.len(),
+                hud.playback_log.len(),
+                hud.last_playback_id
             ));
 
             ui.separator();
@@ -310,6 +313,38 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                 ui.text("X: Null");
                 ui.text("Y: Null");
                 ui.text("Z: Null");
+            }
+
+            // --- ПОЛНОЕ СОСТОЯНИЕ (верификация новых смещений SDK) ---
+            ui.separator();
+            ui.text("Full state (verify offsets):");
+            if let Some(ps) = hud.read_player_state() {
+                ui.text(format!(
+                    "vel: {:.3} {:.3} {:.3}",
+                    ps.velocity[0], ps.velocity[1], ps.velocity[2]
+                ));
+                ui.text(format!(
+                    "rot: {:.3} {:.3} {:.3}",
+                    ps.rotation[0], ps.rotation[1], ps.rotation[2]
+                ));
+                ui.text(format!(
+                    "heading: {:.3}  dir: {:.3}",
+                    ps.desired_heading, ps.input_direction
+                ));
+                ui.text(format!(
+                    "ripper: {}  blade: {}  ninja: {}  jump: {}",
+                    ps.ripper_enabled, ps.blade_mode_type, ps.button_ninjarun, ps.button_jump
+                ));
+            } else {
+                ui.text_colored([0.5, 0.5, 0.5, 1.0], "player state: N/A");
+            }
+            if let Some(cs) = hud.read_camera_state() {
+                ui.text(format!(
+                    "cam: {:.1} {:.1} {:.1}",
+                    cs.pos[0], cs.pos[1], cs.pos[2]
+                ));
+            } else {
+                ui.text_colored([0.5, 0.5, 0.5, 1.0], "camera state: N/A");
             }
 
             // Сохранённая позиция
