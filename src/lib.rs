@@ -332,23 +332,12 @@ impl HelloHud {
             r_anim: 0,
         };
 
-        if self.base_addr != 0 {
-            // --- MISSION ---
-            let mission_id_addr = self.base_addr + 0x1764670;
-            state.mission_id_raw = unsafe { *(mission_id_addr as *const i32) };
-            let (name_addr, eff_id) = if state.mission_id_raw != 0 {
-                (self.base_addr + 0x1764674, state.mission_id_raw)
-            } else {
-                (self.base_addr + 0x1766008, unsafe {
-                    *((self.base_addr + 0x1766004) as *const i32)
-                })
-            };
-            state.mission_id = eff_id;
-            state.mission_name = unsafe { std::ffi::CStr::from_ptr(name_addr as *const i8) }
-                .to_string_lossy()
-                .into_owned();
+        // Строки миссии (gStr) и анимация (rAnim) в loading уничтожаются —
+        // их нельзя читать, пока статус не станет валидным и не-загрузочным.
+        let mut player_readable = false;
 
-            // --- GAME MENU STATUS ---
+        if self.base_addr != 0 {
+            // --- GAME MENU STATUS (первым: от него зависит, можно ли читать остальное) ---
             let menu_status_addr = self.base_addr + 0x17E9F9C;
             state.menu_status_raw = unsafe { *(menu_status_addr as *const i32) };
             if (0..=18).contains(&state.menu_status_raw) {
@@ -357,26 +346,48 @@ impl HelloHud {
                 };
                 state.menu_status_valid = true;
             }
+            player_readable = state.menu_status_valid && !state.menu_status.is_loading();
+
+            // --- MISSION ---
+            if player_readable {
+                let mission_id_addr = self.base_addr + 0x1764670;
+                state.mission_id_raw = unsafe { *(mission_id_addr as *const i32) };
+                let (name_addr, eff_id) = if state.mission_id_raw != 0 {
+                    (self.base_addr + 0x1764674, state.mission_id_raw)
+                } else {
+                    (self.base_addr + 0x1766008, unsafe {
+                        *((self.base_addr + 0x1766004) as *const i32)
+                    })
+                };
+                state.mission_id = eff_id;
+                state.mission_name = unsafe { std::ffi::CStr::from_ptr(name_addr as *const i8) }
+                    .to_string_lossy()
+                    .into_owned();
+            }
 
             // --- gStr / gStr2 / gStr4 (ASL location strings) ---
-            state.gstr = unsafe {
-                std::ffi::CStr::from_ptr((self.base_addr + 0x14B9181) as *const i8)
+            if player_readable {
+                state.gstr = unsafe {
+                    std::ffi::CStr::from_ptr((self.base_addr + 0x14B9181) as *const i8)
+                }
+                .to_string_lossy()
+                .into_owned();
+                state.gstr2 = unsafe {
+                    std::ffi::CStr::from_ptr((self.base_addr + 0x14B91AD) as *const i8)
+                }
+                .to_string_lossy()
+                .into_owned();
+                state.gstr4 = unsafe {
+                    std::ffi::CStr::from_ptr((self.base_addr + 0x14B91A8) as *const i8)
+                }
+                .to_string_lossy()
+                .into_owned();
             }
-            .to_string_lossy()
-            .into_owned();
-            state.gstr2 = unsafe {
-                std::ffi::CStr::from_ptr((self.base_addr + 0x14B91AD) as *const i8)
-            }
-            .to_string_lossy()
-            .into_owned();
-            state.gstr4 = unsafe {
-                std::ffi::CStr::from_ptr((self.base_addr + 0x14B91A8) as *const i8)
-            }
-            .to_string_lossy()
-            .into_owned();
 
             // --- rAnim (Raiden animation, 3-level pointer chain) ---
-            if let Some(r_anim_ptr) = self.r_anim_ptr {
+            if player_readable
+                && let Some(r_anim_ptr) = self.r_anim_ptr
+            {
                 state.r_anim = unsafe { *(r_anim_ptr.as_ptr() as *const i32) };
             }
         }
@@ -409,25 +420,38 @@ impl HelloHud {
         }
 
         // --- SEGMENT ACTION ---
-        state.segment_action = segment::segment_action(
-            state.mission_id,
-            &state.mission_name,
-            state.position,
-            state.menu_status,
-            &state.gstr,
-            &self.prev_gstr,
-            &state.gstr2,
-            &self.prev_gstr2,
-            state.r_anim,
-            self.prev_r_anim,
-            self.active_segment.as_ref(),
-        );
+        if player_readable {
+            state.segment_action = segment::segment_action(
+                state.mission_id,
+                &state.mission_name,
+                state.position,
+                state.menu_status,
+                &state.gstr,
+                &self.prev_gstr,
+                &state.gstr2,
+                &self.prev_gstr2,
+                state.r_anim,
+                self.prev_r_anim,
+                self.active_segment.as_ref(),
+            );
 
-        // Update prev_ values for next frame
-        self.prev_gstr = state.gstr.clone();
-        self.prev_gstr2 = state.gstr2.clone();
-        self.prev_gstr4 = state.gstr4.clone();
-        self.prev_r_anim = state.r_anim;
+            // Update prev_ values for next frame
+            self.prev_gstr = state.gstr.clone();
+            self.prev_gstr2 = state.gstr2.clone();
+            self.prev_gstr4 = state.gstr4.clone();
+            self.prev_r_anim = state.r_anim;
+        } else {
+            // В загрузке gStr/rAnim заглушены — не двигаем prev_* и не даём
+            // ложных finish-переходов. Выход в меню по-прежнему сбрасывает сегмент.
+            state.segment_action =
+                if state.menu_status == game::GameMenuStatus::MainMenuLoad
+                    && self.active_segment.is_some()
+                {
+                    segment::SegmentAction::Reset
+                } else {
+                    segment::SegmentAction::None
+                };
+        }
 
         // --- APPLY SEGMENT ACTION ---
         match state.segment_action {
@@ -837,6 +861,13 @@ impl ImguiRenderLoop for HelloHud {
     }
 
     fn render(&mut self, ui: &mut Ui) {
+        // Сначала собираем состояние игры: read_game_state обновляет
+        // cached_player_obj_ptr (в loading игра обнуляет static_ptr → кэш = null),
+        // иначе диагностика ниже читает stale-указатель освобождённого игрока.
+        let ui_state = self.read_game_state();
+        #[cfg(not(debug_assertions))]
+        let _ = &ui_state; // suppress unused warning in release
+
         // ── Multiplayer network (выполняется каждый кадр, независимо от UI) ──
         if let Some(ref mut nc) = self.net_client {
             nc.poll_tcp();
@@ -966,10 +997,6 @@ impl ImguiRenderLoop for HelloHud {
                 ));
             }
         }
-
-        let ui_state = self.read_game_state();
-        #[cfg(not(debug_assertions))]
-        let _ = &ui_state; // suppress unused warning in release
 
         // --- BARE PLAYBACK (Этап 1.5): короткая запись по нумпаду, без сегмента ---
         #[cfg(debug_assertions)]

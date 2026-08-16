@@ -51,6 +51,19 @@ impl GameMenuStatus {
     pub fn is_in_game(self) -> bool {
         self == Self::InGame
     }
+
+    /// Состояния загрузки/переходов, в которых строка миссии (`gStr`) и
+    /// анимация (`rAnim`) уничтожаются/не инициализированы. Их чтение в этот
+    /// момент — access violation при рестарте.
+    pub fn is_loading(self) -> bool {
+        matches!(
+            self,
+            Self::MainMenuLoad
+                | Self::LoadingIntoBossMission
+                | Self::VRMissionListLoading
+                | Self::LoadingIntoMission
+        )
+    }
 }
 
 pub fn custom_weapon_name(id: i32) -> &'static str {
