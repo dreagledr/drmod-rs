@@ -147,8 +147,6 @@ pub struct InputOverride {
 
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-#[cfg(debug_assertions)]
-use std::time::Instant;
 
 const INPUT_OVERRIDE_INIT: InputOverride = InputOverride {
     active: false,
@@ -327,12 +325,14 @@ pub unsafe extern "C" fn update_input_unit_detour(unit: *mut InputUnit, user_ind
     }
 }
 
-/// Один кадр записи: полный InputUnit + таймстамп от старта записи.
+/// Один кадр записи: полный InputUnit + порядковый номер кадра.
+/// Номер монотонно растёт от старта записи — воспроизведение подаёт кадры
+/// строго по индексу (1 кадр на тик), без dt-сопоставления.
 #[cfg(debug_assertions)]
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ReplayFrame {
-    pub duration_ms: i64,
+    pub frame_index: u32,
     pub input: InputUnit,
 }
 
@@ -341,25 +341,22 @@ pub struct ReplayFrame {
 #[cfg(debug_assertions)]
 struct BareRecording {
     active: bool,
-    start: Option<Instant>,
     frames: Vec<ReplayFrame>,
 }
 
 #[cfg(debug_assertions)]
 static BARE_RECORDING: Mutex<BareRecording> = Mutex::new(BareRecording {
     active: false,
-    start: None,
     frames: Vec::new(),
 });
 
-/// Начинает короткую запись (NumPad5). Очищает буфер и фиксирует момент старта.
+/// Начинает короткую запись (NumPad5). Очищает буфер.
 #[cfg(debug_assertions)]
 pub fn start_bare_recording() {
     let Ok(mut st) = BARE_RECORDING.lock() else {
         return;
     };
     st.active = true;
-    st.start = Some(Instant::now());
     st.frames.clear();
 }
 
@@ -399,12 +396,9 @@ fn record_bare_frame(unit: &InputUnit) {
     if !st.active {
         return;
     }
-    let duration_ms = st
-        .start
-        .map(|t| t.elapsed().as_millis() as i64)
-        .unwrap_or(0);
+    let frame_index = st.frames.len() as u32;
     st.frames.push(ReplayFrame {
-        duration_ms,
+        frame_index,
         input: *unit,
     });
 }

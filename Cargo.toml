@@ -22,6 +22,7 @@ features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Direct3D9",
     "Win32_Graphics_Direct3D",
+    "Win32_System_Kernel",
 ]
 
 [profile.release]

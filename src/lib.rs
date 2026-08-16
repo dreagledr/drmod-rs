@@ -82,7 +82,10 @@ struct HelloHud {
     pub(crate) db_conn: Option<Connection>,
     pub(crate) base_addr: usize,
     pub(crate) static_ptr_addr: Option<NonNull<u8>>,
-    pub(crate) player_manager_addr: Option<NonNull<u8>>,
+    /// Статический адрес `base + 0x17EA100`, хранящий указатель на
+    /// PlayerManagerImplement. Сам указатель перечитывается каждый кадр —
+    /// при рестарте PlayerManagerImplement пересоздаётся, кэшировать его нельзя.
+    pub(crate) player_manager_ptr_addr: Option<NonNull<u8>>,
     pub(crate) camera_ptr_addr: Option<NonNull<u8>>,
     pub(crate) saved_position: Option<(f32, f32, f32)>,
     pub(crate) saved_bones: Option<Vec<BonePos>>,
@@ -95,7 +98,6 @@ struct HelloHud {
     prev_gstr2: String,
     prev_gstr4: String,
     prev_r_anim: i32,
-    r_anim_ptr: Option<NonNull<u8>>,
     pub(crate) ghost_positions: Vec<(segment::Vec3, i64)>,
     pub(crate) ghost_label: String,
     pub(crate) settings: settings::Settings,
@@ -114,7 +116,15 @@ struct HelloHud {
     #[cfg(debug_assertions)]
     pub(crate) bare_playback_frames: Vec<replay::ReplayFrame>,
     #[cfg(debug_assertions)]
-    pub(crate) bare_playback_start: Option<Instant>,
+    pub(crate) bare_playback_frame_idx: usize,
+    // Отложенный старт (arm): взведено клавишей, стартует по триггеру позиции.
+    #[cfg(debug_assertions)]
+    pub(crate) bare_record_armed: bool,
+    #[cfg(debug_assertions)]
+    pub(crate) bare_playback_armed: bool,
+    // Предыдущее состояние «игрок читаем» — для детекта перехода в loading.
+    #[cfg(debug_assertions)]
+    prev_player_readable: bool,
     // Инжекция ввода (debug-кнопки)
     #[cfg(debug_assertions)]
     pub(crate) inject_w: bool,
@@ -141,8 +151,86 @@ struct HelloHud {
     pub(crate) viewport: [f32; 4], // [X, Y, Width, Height] from D3D GetViewport
 }
 
+/// Триггер отложенного старта записи/воспроизведения (спавн R-01 beach).
+/// Зеркалит `segment::START_CONDITIONS` для `mission_id == 0x0118`.
+#[cfg(debug_assertions)]
+const BARE_START_TRIGGER: segment::Vec3 = segment::Vec3 {
+    x: -24.7,
+    y: 12.14,
+    z: 120.7,
+};
+
+/// Попадает ли позиция игрока в триггерную зону (допуск как в `segment_action`).
+#[cfg(debug_assertions)]
+fn in_bare_trigger(pos: Option<segment::Vec3>) -> bool {
+    let Some(p) = pos else {
+        return false;
+    };
+    (p.x - BARE_START_TRIGGER.x).abs() <= 0.1
+        && (p.y - BARE_START_TRIGGER.y).abs() <= 1.0
+        && (p.z - BARE_START_TRIGGER.z).abs() <= 0.1
+}
+
+/// VEH-обработчик исключений — логирует код и адрес креша в debug.log.
+/// Вызывается первым при любом SEH-исключении (access violation и т.п.),
+/// возвращает EXCEPTION_CONTINUE_SEARCH, чтобы игра обработала его дальше.
+#[cfg(debug_assertions)]
+unsafe extern "system" fn veh_handler(
+    info: *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
+) -> i32 {
+    let record = unsafe { &*(*info).ExceptionRecord };
+    let code = record.ExceptionCode.0 as u32;
+    let fault = record.ExceptionAddress as usize;
+    let access = if record.NumberParameters >= 2 {
+        record.ExceptionInformation[1]
+    } else {
+        usize::MAX
+    };
+    replay::log_line(&format!(
+        "EXCEPTION: code=0x{:08X} fault=0x{:08X} access=0x{:08X}",
+        code, fault, access
+    ));
+    windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH
+}
+
+/// Проверяет, что адрес указывает на committed и читаемую память.
+/// Защита от dangling-указателя объекта игрока при быстром рестарте:
+/// `static_ptr` (`base+0x177B4A4`) может указывать на память, освобождённую
+/// через `VirtualFree` (не `null`), не проходя через loading-состояние. В этом
+/// случае `VirtualQuery` вернёт `Protect = 0` (MEM_FREE/MEM_RESERVE), и чтение
+/// по такому адресу даёт ACCESS_VIOLATION.
+fn is_readable_ptr(addr: usize) -> bool {
+    use windows::Win32::System::Memory::{
+        VirtualQuery, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
+        PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE,
+    };
+
+    const PAGE_READABLE: PAGE_PROTECTION_FLAGS = PAGE_PROTECTION_FLAGS(
+        PAGE_READONLY.0 | PAGE_READWRITE.0 | PAGE_EXECUTE_READ.0 | PAGE_EXECUTE_READWRITE.0,
+    );
+
+    let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    let ok = unsafe {
+        VirtualQuery(
+            Some(addr as *const core::ffi::c_void),
+            &mut mbi,
+            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
+        )
+    };
+    ok != 0 && (mbi.Protect & PAGE_READABLE).0 != 0
+}
+
 impl HelloHud {
     fn new() -> Self {
+        // Логируем SEH-исключения (креши) в debug.log — диагностика.
+        #[cfg(debug_assertions)]
+        unsafe {
+            windows::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
+                1,
+                Some(veh_handler),
+            );
+        }
+
         let (current_run_start, prev_run_start, db_conn) = init_db();
 
         let base_addr = unsafe {
@@ -157,12 +245,13 @@ impl HelloHud {
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x177B4A4) })
         };
 
-        let player_manager_addr = if base_addr == 0 {
+        let player_manager_ptr_addr = if base_addr == 0 {
             None
         } else {
-            // base + 0x17EA100 содержит указатель на PlayerManagerImplement
-            let pm_ptr = unsafe { *((base_addr + 0x17EA100) as *const usize) };
-            NonNull::new(pm_ptr as *mut u8)
+            // base + 0x17EA100 — статический адрес, хранящий указатель на
+            // PlayerManagerImplement. Указатель читается каждый кадр в
+            // read_game_state (PlayerManagerImplement пересоздаётся при рестарте).
+            NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA100) })
         };
 
         let camera_ptr_addr = if base_addr == 0 {
@@ -184,23 +273,6 @@ impl HelloHud {
             NonNull::new(unsafe { (base_addr as *mut u8).add(replay::MOUSE_INPUT) })
         };
 
-        // rAnim: 3-level pointer chain (ASL: 0x019C14C4 → +0x788 → +0x618)
-        let r_anim_ptr = if base_addr == 0 {
-            None
-        } else {
-            let l1 = unsafe { *((base_addr + 0x019C14C4) as *const usize) };
-            if l1 == 0 {
-                None
-            } else {
-                let l2 = unsafe { *((l1 + 0x788) as *const usize) };
-                if l2 == 0 {
-                    None
-                } else {
-                    NonNull::new((l2 + 0x618) as *mut u8)
-                }
-            }
-        };
-
         // Хук cInput::updateInputUnit — подача ввода: после вызова оригинала
         // перезаписываем глобальный InputUnit[0] (реальный источник игрока).
         let input_hook = Self::create_input_hook(base_addr);
@@ -217,7 +289,7 @@ impl HelloHud {
             db_conn,
             base_addr,
             static_ptr_addr,
-            player_manager_addr,
+            player_manager_ptr_addr,
             camera_ptr_addr,
             saved_position: None,
             saved_bones: None,
@@ -228,7 +300,6 @@ impl HelloHud {
             prev_gstr2: String::new(),
             prev_gstr4: String::new(),
             prev_r_anim: 0,
-            r_anim_ptr,
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
             settings: settings::Settings::default(),
@@ -243,7 +314,13 @@ impl HelloHud {
             #[cfg(debug_assertions)]
             bare_playback_frames: Vec::new(),
             #[cfg(debug_assertions)]
-            bare_playback_start: None,
+            bare_playback_frame_idx: 0,
+            #[cfg(debug_assertions)]
+            bare_record_armed: false,
+            #[cfg(debug_assertions)]
+            bare_playback_armed: false,
+            #[cfg(debug_assertions)]
+            prev_player_readable: false,
             #[cfg(debug_assertions)]
             inject_w: false,
             #[cfg(debug_assertions)]
@@ -348,6 +425,22 @@ impl HelloHud {
             }
             player_readable = state.menu_status_valid && !state.menu_status.is_loading();
 
+            // Диагностика перехода в/из loading + остановка активной записи/
+            // воспроизведения при входе в loading (креш при рестарте).
+            #[cfg(debug_assertions)]
+            {
+                if player_readable != self.prev_player_readable {
+                    replay::log_line(&format!(
+                        "menu: player_readable {} -> {} (raw={})",
+                        self.prev_player_readable, player_readable, state.menu_status_raw
+                    ));
+                    if !player_readable {
+                        self.stop_bare_on_loading();
+                    }
+                    self.prev_player_readable = player_readable;
+                }
+            }
+
             // --- MISSION ---
             if player_readable {
                 let mission_id_addr = self.base_addr + 0x1764670;
@@ -383,21 +476,35 @@ impl HelloHud {
                 .to_string_lossy()
                 .into_owned();
             }
-
-            // --- rAnim (Raiden animation, 3-level pointer chain) ---
-            if player_readable
-                && let Some(r_anim_ptr) = self.r_anim_ptr
-            {
-                state.r_anim = unsafe { *(r_anim_ptr.as_ptr() as *const i32) };
-            }
         }
 
         // --- Pl0000 / Player ---
+        // Читаем объект игрока только когда он «читаем» (не loading): в loading
+        // статический указатель может указывать на освобождённую память
+        // (dangling, не null) — разыменование даёт access violation при рестарте.
         if let Some(static_ptr) = self.static_ptr_addr {
             state.static_ptr_value = static_ptr.as_ptr() as usize;
-            self.cached_player_obj_ptr = unsafe { *(static_ptr.as_ptr() as *const *mut u8) };
+            self.cached_player_obj_ptr = if player_readable {
+                unsafe { *(static_ptr.as_ptr() as *const *mut u8) }
+            } else {
+                std::ptr::null_mut()
+            };
+            // Защита от dangling: при быстром рестарте static_ptr может указывать
+            // на освобождённую память (не null), не проходя через loading-состояние.
+            // Обнуляем кэш, если страница игрока больше не committed/читаема.
+            if !self.cached_player_obj_ptr.is_null()
+                && !is_readable_ptr(self.cached_player_obj_ptr as usize)
+            {
+                self.cached_player_obj_ptr = std::ptr::null_mut();
+            }
             if !self.cached_player_obj_ptr.is_null() {
                 state.player_found = true;
+                // rAnim лежит в самом объекте Pl0000 по смещению 0x618
+                // (подтверждено disasm vtable 241: `mov eax,[ecx+0x618]`).
+                // Читаем из cached_player_obj_ptr, а не из отдельной
+                // кэшированной цепочки указателей — при рестарте цепочка
+                // становится dangling и даёт access violation.
+                state.r_anim = unsafe { *(self.cached_player_obj_ptr.add(0x618) as *const i32) };
                 state.sword_state =
                     unsafe { *(self.cached_player_obj_ptr.add(0x13FC) as *const i32) };
                 state.sword_hidden =
@@ -412,11 +519,17 @@ impl HelloHud {
         }
 
         // --- WEAPONS ---
-        if let Some(pm_addr) = self.player_manager_addr {
-            let pm_ptr = pm_addr.as_ptr();
-            state.main_weapon = unsafe { *(pm_ptr.add(0xE0) as *const i32) };
-            state.custom_weapon = unsafe { *(pm_ptr.add(0xE4) as *const i32) };
-            state.sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
+        if player_readable
+            && let Some(pm_addr) = self.player_manager_ptr_addr
+        {
+            // Указатель на PlayerManagerImplement перечитываем каждый кадр —
+            // он пересоздаётся при рестарте (кэшировать нельзя).
+            let pm_ptr = unsafe { *(pm_addr.as_ptr() as *const *mut u8) };
+            if !pm_ptr.is_null() {
+                state.main_weapon = unsafe { *(pm_ptr.add(0xE0) as *const i32) };
+                state.custom_weapon = unsafe { *(pm_ptr.add(0xE4) as *const i32) };
+                state.sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
+            }
         }
 
         // --- SEGMENT ACTION ---
@@ -676,32 +789,58 @@ impl HelloHud {
         });
     }
 
-    /// Переключает короткую запись по NumPad5 (Этап 1.5). При стопе кладёт
-    /// накопленные кадры в `bare_playback_frames`; при старте снимает активное
-    /// воспроизведение, чтобы запись и воспроизведение не пересекались.
+    /// Переключает короткую запись по NumPad5 (Этап 1.5, отложенный старт).
+    /// `recording → стоп` (кадры в `bare_playback_frames`), `armed → отмена`,
+    /// `idle → arm` (старт по триггеру позиции).
     #[cfg(debug_assertions)]
     pub(crate) fn toggle_bare_record(&mut self) {
         if replay::is_bare_recording() {
             let frames = replay::stop_bare_recording().unwrap_or_default();
             self.bare_playback_frames = frames;
+        } else if self.bare_record_armed {
+            self.bare_record_armed = false;
         } else {
             self.stop_bare_playback();
-            replay::start_bare_recording();
+            self.bare_playback_armed = false;
+            self.bare_record_armed = true;
         }
     }
 
-    /// Переключает воспроизведение короткой записи по NumPad6 (Этап 1.5).
-    /// Стартует, только если есть кадры; при старте останавливает активную
-    /// запись, чтобы не захватывать новый ввод поверх воспроизведения.
+    /// Переключает воспроизведение короткой записи по NumPad6 (отложенный старт).
+    /// `playing → стоп`, `armed → отмена`, `idle → arm` (старт по триггеру позиции;
+    /// требует непустые кадры).
     #[cfg(debug_assertions)]
     pub(crate) fn toggle_bare_playback(&mut self) {
         if self.bare_playback {
             self.stop_bare_playback();
+        } else if self.bare_playback_armed {
+            self.bare_playback_armed = false;
         } else if !self.bare_playback_frames.is_empty() {
             replay::stop_bare_recording();
+            self.bare_record_armed = false;
+            replay::set_input_override(replay::InputOverride::default());
+            self.bare_playback_armed = true;
+        }
+    }
+
+    /// Отложенный старт: если arm и игрок в триггере — запускает запись или
+    /// воспроизведение. Вызывается каждый кадр из `render()`.
+    #[cfg(debug_assertions)]
+    pub(crate) fn update_bare_deferred_start(&mut self, pos: Option<segment::Vec3>) {
+        if !in_bare_trigger(pos) {
+            return;
+        }
+        if self.bare_record_armed {
+            self.bare_record_armed = false;
+            replay::log_line("deferred: trigger -> start recording");
+            replay::start_bare_recording();
+        }
+        if self.bare_playback_armed {
+            self.bare_playback_armed = false;
+            replay::log_line("deferred: trigger -> start playback");
             replay::set_input_override(replay::InputOverride::default());
             self.bare_playback = true;
-            self.bare_playback_start = Some(Instant::now());
+            self.bare_playback_frame_idx = 0;
         }
     }
 
@@ -714,7 +853,22 @@ impl HelloHud {
         }
         replay::set_input_override(replay::InputOverride::default());
         self.bare_playback = false;
-        self.bare_playback_start = None;
+        self.bare_playback_frame_idx = 0;
+    }
+
+    /// Останавливает активную запись/воспроизведение при входе в loading.
+    /// Arm НЕ снимается — он должен пережить loading и сработать на спавне.
+    #[cfg(debug_assertions)]
+    fn stop_bare_on_loading(&mut self) {
+        if replay::is_bare_recording() {
+            replay::log_line("loading: stop active recording");
+            let frames = replay::stop_bare_recording().unwrap_or_default();
+            self.bare_playback_frames = frames;
+        }
+        if self.bare_playback {
+            replay::log_line("loading: stop active playback");
+            self.stop_bare_playback();
+        }
     }
 }
 
@@ -972,8 +1126,9 @@ impl ImguiRenderLoop for HelloHud {
                 let space = keys_down[1] & 0x8000_0000 != 0;
                 let w_down = keys_down[2] & 0x100 != 0;
                 replay::log_line(&format!(
-                    "frame: player=0x{:08X} cur_in down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) dir={:.2} jump={} mouse={:X} space={} w={} pos=({:.2},{:.2},{:.2}) ov_active={} g_unit0: down={:08X} pressed={:08X} L=({:.2},{:.2}) valid={}",
+                    "frame: player=0x{:08X} status_raw={} cur_in down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) dir={:.2} jump={} mouse={:X} space={} w={} pos=({:.2},{:.2},{:.2}) ov_active={} g_unit0: down={:08X} pressed={:08X} L=({:.2},{:.2}) valid={}",
                     self.cached_player_obj_ptr as usize,
+                    ui_state.menu_status_raw,
                     ci.buttons_down,
                     ci.buttons_pressed,
                     ci.left_stick[0],
@@ -998,25 +1153,29 @@ impl ImguiRenderLoop for HelloHud {
             }
         }
 
-        // --- BARE PLAYBACK (Этап 1.5): короткая запись по нумпаду, без сегмента ---
+        // --- ОТЛОЖЕННЫЙ СТАРТ (arm → триггер позиции) ---
+        // Запускается запись/воспроизведение, когда игрок попал в триггерную
+        // зону спавна. Перед блоком применения playback — чтобы кадр 0 подавался
+        // в том же render, где сработал триггер (симметрично записи в детуре).
         #[cfg(debug_assertions)]
-        if self.bare_playback
-            && let Some(start) = self.bare_playback_start
-        {
-            let current_ms = start.elapsed().as_millis() as i64;
-            let idx = self
-                .bare_playback_frames
-                .partition_point(|f| f.duration_ms <= current_ms);
-            if idx > 0 {
-                let input = self.bare_playback_frames[idx - 1].input;
+        self.update_bare_deferred_start(ui_state.position);
+
+        // --- BARE PLAYBACK (Этап 1.5): короткая запись по нумпаду, без сегмента ---
+        // Кадры подаются строго по индексу (1 кадр на вызов render), а не по dt —
+        // dt-сопоставление теряло однокадровые фронты pressed/released.
+        #[cfg(debug_assertions)]
+        if self.bare_playback {
+            if self.bare_playback_frame_idx < self.bare_playback_frames.len() {
+                let input =
+                    self.bare_playback_frames[self.bare_playback_frame_idx].input;
                 replay::set_input_override(replay::InputOverride {
                     active: true,
                     input,
                 });
-                if idx >= self.bare_playback_frames.len() {
-                    // Конец записи — снять override, оставить кадры для повтора.
-                    self.stop_bare_playback();
-                }
+                self.bare_playback_frame_idx += 1;
+            } else {
+                // Конец записи — снять override, оставить кадры для повтора.
+                self.stop_bare_playback();
             }
         }
 

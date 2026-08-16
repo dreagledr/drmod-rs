@@ -255,16 +255,16 @@ pub enum ReplayMode {
     Playback,
 }
 
-/// Один кадр записи: полный нормализованный InputUnit (0x30 байт) + таймстамп.
+/// Один кадр записи: полный нормализованный InputUnit (0x30 байт) + номер кадра.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct ReplayFrame {
-    pub duration_ms: i64,
+    pub frame_index: u32,
     pub input: InputUnit, // buttons_down/pressed/released/alternated + стики + триггеры + valid
 }
 ```
 
-Размер кадра ≈ **56 байт** (`i64` + `InputUnit` 0x30). При 60 FPS одна минута ≈ 200 КБ.
+Размер кадра ≈ **52 байт** (`u32` + `InputUnit` 0x30). При 60 FPS одна минута ≈ 187 КБ.
 
 **Источник записи** — `g_InputUnit0` (`base + 0x177B850`), читается **внутри детура `updateInputUnit`** (после вызова оригинала, до override): в `Present` unit уже сброшен (`valid=0`), там читать нельзя.
 
@@ -315,10 +315,10 @@ CREATE INDEX idx_replay_frames_replay ON replay_frames(replay_id, frame_index);
 ### 4.3. Интеграция в `HelloHud` (`src/lib.rs`)
 
 - Поле `replay_mode: ReplayMode`, буфер `replay_buffer: Vec<ReplayFrame>`, загруженные кадры `replay_frames: Vec<ReplayFrame>`, `replay_start: Instant`.
-- **Запись:** внутри детура `updateInputUnit` (после вызова оригинала, когда override **выключен**) читать реальный `InputUnit` и пушить `ReplayFrame` с `duration_ms` от `seg.start_instant`. Читать в `Present` нельзя — unit сброшен.
+- **Запись:** внутри детура `updateInputUnit` (после вызова оригинала, когда override **выключен**) читать реальный `InputUnit` и пушить `ReplayFrame` с `frame_index` (счётчик кадров от старта). Читать в `Present` нельзя — unit сброшен.
 - **Сохранение:** при `SegmentAction::End` — вставить запись в `replays`, затем bulk insert кадров в `replay_frames` (по аналогии с `finish_segment`).
 - **Воспроизведение:** при старте сегмента (или по кнопке) загрузить кадры последней записи по `mission_id`, выставить `ReplayMode::Playback`.
-- **Применение кадра:** каждый кадр по `duration_ms` через `partition_point` (как ghost) — найти кадр, чей `duration_ms <= elapsed`, и записать его полный `InputUnit` через `set_input_override`. Флаги `ms_bUpdateKeyboard`/`ms_bUpdateMouse` **не нужны** — override пишет в правильной фазе кадра.
+- **Применение кадра:** каждый кадр строго по `frame_index` (1 кадр на тик), а не по `duration_ms`/`partition_point` — dt-сопоставление теряет однокадровые фронты `pressed`/`released` (прыжок/атака). Флаги `ms_bUpdateKeyboard`/`ms_bUpdateMouse` **не нужны** — override пишет в правильной фазе кадра.
 - **Остановка:** по достижении конца записи (или по кнопке) — снять override, `ReplayMode::Idle`.
 
 ---
@@ -370,23 +370,25 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 
 | Клавиша | Действие |
 |---------|----------|
-| NumPad5 | переключение записи (1-е нажатие — старт, 2-е — стоп) |
-| NumPad6 | переключение воспроизведения (старт/стоп; по концу записи — авто-стоп) |
+| NumPad5 | запись: arm → авто-старт по триггеру → стоп (повторное нажатие в arm — отмена) |
+| NumPad6 | воспроизведение: arm → авто-старт по триггеру → стоп / авто-стоп в конце |
+
+**Отложенный старт:** NumPad5/6 взводит arm; запись/воспроизведение стартуют автоматически, когда игрок попадает в триггерную зону спавна R-01 beach (`-24.7, 12.14, 120.7`, допуск ±0.1 XY / ±1.0 Y). Триггер — хардкод `BARE_START_TRIGGER` в `src/lib.rs` (зеркалит `segment::START_CONDITIONS[0x0118]`). Это убирает ручной тайминг/дрейф: запись и воспроизведение стартуют в одной точке пространства.
 
 **Реализация:**
-1. В `src/replay.rs` — буфер короткой записи `BareRecording { active, start, frames }` (static `Mutex`, независим от БД): `start_bare_recording()` / `stop_bare_recording()` / `is_bare_recording()` / `bare_recording_frame_count()`, приватный `record_bare_frame()`.
+1. В `src/replay.rs` — буфер короткой записи `BareRecording { active, frames }` (static `Mutex`, независим от БД): `start_bare_recording()` / `stop_bare_recording()` / `is_bare_recording()` / `bare_recording_frame_count()`, приватный `record_bare_frame()`. Кадры пишутся с порядковым номером `frame_index` (`st.frames.len() as u32`), а не с `duration_ms`.
 2. `InputOverride` расширен до полного `InputUnit`: `{ active, input }`, детур делает `*unit = guard.input` (полная запись).
 3. В детуре `update_input_unit_detour` запись читается **до** вызова оригинала (unit ещё содержит реальный ввод — оригинал сбрасывает его в ноль), override пишется **после** оригинала.
-4. В `src/lib.rs` (`HelloHud`) — поля `bare_playback` / `bare_playback_frames` / `bare_playback_start`; методы `toggle_bare_record` / `toggle_bare_playback` / `stop_bare_playback`; в `render()` применение кадра по `partition_point` от `bare_playback_start.elapsed()`. `update_input_injection` делает early-return при `bare_playback`.
+4. В `src/lib.rs` (`HelloHud`) — поля `bare_playback` / `bare_playback_frames` / `bare_playback_frame_idx` / `bare_record_armed` / `bare_playback_armed`; методы `toggle_bare_record` / `toggle_bare_playback` (arm/стоп/отмена) / `update_bare_deferred_start` / `stop_bare_playback`; в `render()` сначала `update_bare_deferred_start` (arm → триггер), затем применение кадра строго по индексу (`bare_playback_frame_idx` растёт на 1 за кадр, без dt). `update_input_injection` делает early-return при `bare_playback`.
 5. В `src/ui.rs` (debug-панель) — подсказка клавиш и статус `short record` / `short playback`.
 
-**Как проверить:** в игре (debug-сборка) NumPad5 → подвигаться/прыгнуть/атаковать/покрутить камеру ~2–3 с → NumPad5 → NumPad6 — персонаж должен повторить ввод; NumPad6 — стоп. Запись ловит только реальный ввод (override выключен), буфер без авто-лимита.
+**Как проверить:** в игре (debug-сборка) NumPad5 (arm) → рестарт R-01 → игрок на спавне попадает в триггер → запись авто-стартует; подвигаться/прыгнуть/атаковать ~2–3 с → NumPad5 (стоп). NumPad6 (arm) → рестарт → авто-старт воспроизведения — персонаж повторяет ввод; NumPad6 — стоп. Запись ловит только реальный ввод (override выключен), буфер без авто-лимита.
 
 ### Этап 2 — Модуль записи (Record)
 
-1. Добавить в `src/replay.rs`: `ReplayMode`, `ReplayFrame { duration_ms, input: InputUnit }`.
+1. Добавить в `src/replay.rs`: `ReplayMode`, `ReplayFrame { frame_index, input: InputUnit }` (dt не воспроизводит геймплей — см. Этап 1.5).
 2. **Расширить `InputOverride` до полного `InputUnit`** (сейчас только `buttons_down`/`pressed`/`left_stick`/`right_stick`; добавить `buttons_released`, `buttons_alternated`, `left_trigger`, `right_trigger`, `valid_input`, `repeat_count`) — нужно для точной записи и воспроизведения.
-3. **Точка записи:** в детуре `update_input_unit_detour` (после вызова оригинала, при **выключенном** override) читать реальный `InputUnit` и пушить `ReplayFrame` с `duration_ms` от `seg.start_instant`. В `Present` читать нельзя — unit сброшен (`valid=0`).
+3. **Точка записи:** в детуре `update_input_unit_detour` (после вызова оригинала, при **выключенном** override) читать реальный `InputUnit` и пушить `ReplayFrame` с `frame_index` (счётчик кадров от старта). В `Present` читать нельзя — unit сброшен (`valid=0`).
 4. Добавить таблицы `replays`/`replay_frames` (`input_unit BLOB`, 48 байт). WAL уже включён в `init_db`.
 5. При `SegmentAction::End` — bulk insert кадров в `replay_frames` + строка в `replays` (паттерн `segment::finish_segment`).
 6. **Проверка:** завершить сегмент → в БД появились `replays` и `replay_frames` с корректным числом кадров; кадры содержат ненулевые `buttons_down`/стики при реальном вводе.
@@ -394,7 +396,7 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 ### Этап 3 — Модуль воспроизведения (Playback)
 
 1. Загрузка кадров последней записи по `mission_id` (`ORDER BY id DESC LIMIT 1`, затем `SELECT ... WHERE replay_id = ? ORDER BY frame_index`).
-2. Каждый кадр по `duration_ms` через `partition_point` (паттерн ghost в `lib.rs::render_3d`) — найти кадр, чей `duration_ms <= elapsed`, и записать его **полный `InputUnit`** через `set_input_override`. Флаги `ms_bUpdateKeyboard`/`ms_bUpdateMouse` **не нужны** — override пишет в правильной фазе кадра.
+2. Каждый кадр строго по `frame_index` (1 кадр на тик), а не по `duration_ms`/`partition_point` — dt теряет однокадровые фронты `pressed`/`released`. Записывать его **полный `InputUnit`** через `set_input_override`. Флаги `ms_bUpdateKeyboard`/`ms_bUpdateMouse` **не нужны** — override пишет в правильной фазе кадра.
 3. Остановка по достижении конца записи — снять override, `ReplayMode::Idle`.
 4. **Проверка:** воспроизвести сегмент — персонаж повторяет движения/атаки/камеру (визуально, рядом с ghost-цилиндром).
 
@@ -424,7 +426,9 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 |------|----------|-----------|
 | Перезапись `ms_KeyInput` из DirectInput | Игра может каждый кадр перезаписывать сырой ввод из устройства, затирая наши кадры. | Гипотеза `ms_bUpdateKeyboard=false` (Этап 1); fallback — `ms_InputKeys` или нормализованный ввод + хук. |
 | Недетерминизм физики | Чистый ввод в Havok может дрейфовать из-за вариации `dt`/RNG. | Принято (чистый ввод). Возможное расширение — гибрид «ввод + коррекция позиции». |
-| Тайминг однократных `Pressed` | Прыжок/атака зависят от фронта нажатия; пропуск кадра может потерять событие. | Записывать и воспроизводить `Pressed` и `Down` отдельно; проверить в Этапе 5. |
+| Тайминг однократных `Pressed` | Прыжок/атака зависят от фронта нажатия; dt-сопоставление теряет 1-кадровые фронты. | ✅ Решено: подача строго по `frame_index` (1 кадр/тик), не по `dt` (см. FINDINGS №14). |
+| Креш при рестарте (loading) | `static_ptr`/`cached_player_obj_ptr` указывает на освобождённую память (dangling, не `null`) → access violation. | ✅ Решено: читать объект игрока только при `player_readable`, в loading обнулять `cached_player_obj_ptr` (см. FINDINGS №13). |
+| Креш при быстром рестарте (без loading) | `menu_status` не переходит в loading (остаётся `InGame`), но объект игрока/`rAnim`/`PlayerManager` пересоздаются; кэшированные в `new()` указатели `r_anim_ptr`/`player_manager_addr` становятся dangling → access violation. | ✅ Решено: `rAnim` читается из `cached_player_obj_ptr + 0x618` (лежит в `Pl0000`), `PlayerManagerImplement` перечитывается каждый кадр; `cached_player_obj_ptr` обнуляется по `VirtualQuery` (страница не committed/не читаема) — см. FINDINGS №15. |
 | Точность смещений `m_*` в `Pl0000` | Смещения нормализованного ввода вычислены, не подтверждены. | Верифицировать в Этапе 0; для MVP они не критичны (используем сырой ввод). |
 | Объём данных | Длинные сегменты → много кадров. | bulk insert + WAL (уже есть); при необходимости — сжатие или отдельный файл. |
 

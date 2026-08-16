@@ -284,16 +284,19 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             // Этап 1.5: короткая запись/воспроизведение по нумпаду (без сегментов/БД)
             ui.text_colored(
                 [0.5, 1.0, 0.5, 1.0],
-                "NumPad5: запись (toggle)  NumPad6: воспроизведение (toggle)",
+                "NumPad5: запись (arm→триггер)  NumPad6: воспроизведение (arm→триггер)",
             );
             ui.text(format!(
-                "short record: {}  frames: {}",
+                "short record: armed={} recording={}  frames: {}",
+                hud.bare_record_armed,
                 replay::is_bare_recording(),
                 replay::bare_recording_frame_count()
             ));
             ui.text(format!(
-                "short playback: {}  frames: {}",
+                "short playback: armed={} playing={}  frame: {}/{}",
+                hud.bare_playback_armed,
                 hud.bare_playback,
+                hud.bare_playback_frame_idx,
                 hud.bare_playback_frames.len()
             ));
 
