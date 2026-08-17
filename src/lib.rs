@@ -17,6 +17,7 @@ mod ui;
 
 use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
+use tas::addresses;
 use tas::hooks;
 use tas::replay;
 use tas::types;
@@ -657,7 +658,7 @@ impl HelloHud {
         }
         unsafe {
             self.cached_player_obj_ptr
-                .add(replay::CURRENT_INPUT_OFFSET)
+                .add(addresses::CURRENT_INPUT_OFFSET)
                 .cast::<types::InputUnit>()
                 .read()
         }
@@ -670,7 +671,7 @@ impl HelloHud {
             return types::InputUnit::default();
         }
         unsafe {
-            ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const types::InputUnit).read()
+            ((self.base_addr + addresses::GLOBAL_INPUT_UNIT0) as *const types::InputUnit).read()
         }
     }
 
@@ -683,16 +684,16 @@ impl HelloHud {
         let p = self.cached_player_obj_ptr;
         unsafe {
             types::PlInputSnapshot {
-                input: p.add(replay::CURRENT_INPUT_OFFSET).cast::<types::InputUnit>().read(),
-                input_mag_sq: *(p.add(replay::PL_INPUT_MAG_SQ) as *const f32),
-                input_direction: *(p.add(replay::PL_INPUT_DIR) as *const f32),
-                button_jump: *(p.add(replay::PL_BUTTON_JUMP) as *const i32),
-                button_light_attack: *(p.add(replay::PL_BUTTON_LIGHT_ATTACK) as *const i32),
-                button_heavy_attack: *(p.add(replay::PL_BUTTON_HEAVY_ATTACK) as *const i32),
-                button_action: *(p.add(replay::PL_BUTTON_ACTION) as *const i32),
-                button_ninjarun: *(p.add(replay::PL_BUTTON_NINJARUN) as *const i32),
-                button_blademode: *(p.add(replay::PL_BUTTON_BLADEMODE) as *const i32),
-                button_use_item: *(p.add(replay::PL_BUTTON_USEITEM) as *const i32),
+                input: p.add(addresses::CURRENT_INPUT_OFFSET).cast::<types::InputUnit>().read(),
+                input_mag_sq: *(p.add(addresses::PL_INPUT_MAG_SQ) as *const f32),
+                input_direction: *(p.add(addresses::PL_INPUT_DIR) as *const f32),
+                button_jump: *(p.add(addresses::PL_BUTTON_JUMP) as *const i32),
+                button_light_attack: *(p.add(addresses::PL_BUTTON_LIGHT_ATTACK) as *const i32),
+                button_heavy_attack: *(p.add(addresses::PL_BUTTON_HEAVY_ATTACK) as *const i32),
+                button_action: *(p.add(addresses::PL_BUTTON_ACTION) as *const i32),
+                button_ninjarun: *(p.add(addresses::PL_BUTTON_NINJARUN) as *const i32),
+                button_blademode: *(p.add(addresses::PL_BUTTON_BLADEMODE) as *const i32),
+                button_use_item: *(p.add(addresses::PL_BUTTON_USEITEM) as *const i32),
             }
         }
     }
@@ -757,7 +758,7 @@ impl HelloHud {
     /// Этап 1 (debug): инжекция ввода через override хука updateInputUnit.
     /// Все действия пишутся в глобальный InputUnit[0] — реальный источник
     /// входа игрока (прямая запись в поля Pl0000 в Present не работает:
-    /// поздно — после handleActions). Биты — см. `replay::input_bits`.
+    /// поздно — после handleActions). Биты — см. `addresses::input_bits`.
     #[cfg(debug_assertions)]
     pub(crate) fn update_input_injection(&mut self) {
         // Во время воспроизведения override управляется исключительно playback —
@@ -793,16 +794,16 @@ impl HelloHud {
         if script_active {
             let t = self.script_frames;
             if t <= SCRIPT_RUN_END {
-                unit.buttons_down |= replay::input_bits::FORWARD;
+                unit.buttons_down |= addresses::input_bits::FORWARD;
                 unit.left_stick = [0.0, -1000.0];
             }
             if (SCRIPT_JUMP_AT..SCRIPT_JUMP_AT + 2).contains(&t) {
-                unit.buttons_down |= replay::input_bits::JUMP;
-                unit.buttons_pressed |= replay::input_bits::JUMP;
+                unit.buttons_down |= addresses::input_bits::JUMP;
+                unit.buttons_pressed |= addresses::input_bits::JUMP;
             }
             if (SCRIPT_ATTACK_AT..SCRIPT_ATTACK_AT + 2).contains(&t) {
-                unit.buttons_down |= replay::input_bits::LIGHT_ATTACK;
-                unit.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
+                unit.buttons_down |= addresses::input_bits::LIGHT_ATTACK;
+                unit.buttons_pressed |= addresses::input_bits::LIGHT_ATTACK;
             }
             if (SCRIPT_CAMERA_AT..SCRIPT_TOTAL).contains(&t) {
                 // Поворот камеры вправо (мышь = right_stick, дельта в пикселях)
@@ -815,22 +816,22 @@ impl HelloHud {
         }
 
         if self.inject_w {
-            unit.buttons_down |= replay::input_bits::FORWARD;
+            unit.buttons_down |= addresses::input_bits::FORWARD;
             unit.left_stick = [0.0, -1000.0];
         }
         if jump_active {
-            unit.buttons_down |= replay::input_bits::JUMP;
-            unit.buttons_pressed |= replay::input_bits::JUMP;
+            unit.buttons_down |= addresses::input_bits::JUMP;
+            unit.buttons_pressed |= addresses::input_bits::JUMP;
             self.inject_jump_frames -= 1;
         }
         if light_active {
-            unit.buttons_down |= replay::input_bits::LIGHT_ATTACK;
-            unit.buttons_pressed |= replay::input_bits::LIGHT_ATTACK;
+            unit.buttons_down |= addresses::input_bits::LIGHT_ATTACK;
+            unit.buttons_pressed |= addresses::input_bits::LIGHT_ATTACK;
             self.inject_light_frames -= 1;
         }
         if heavy_active {
-            unit.buttons_down |= replay::input_bits::HEAVY_ATTACK;
-            unit.buttons_pressed |= replay::input_bits::HEAVY_ATTACK;
+            unit.buttons_down |= addresses::input_bits::HEAVY_ATTACK;
+            unit.buttons_pressed |= addresses::input_bits::HEAVY_ATTACK;
             self.inject_heavy_frames -= 1;
         }
         if self.inject_camera {
@@ -1243,7 +1244,7 @@ impl ImguiRenderLoop for HelloHud {
                 // реальный источник входа игрока.
                 let g = if self.base_addr != 0 {
                     let u = unsafe {
-                        ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const types::InputUnit)
+                        ((self.base_addr + addresses::GLOBAL_INPUT_UNIT0) as *const types::InputUnit)
                             .read()
                     };
                     (u.buttons_down, u.buttons_pressed, u.left_stick, u.valid_input)

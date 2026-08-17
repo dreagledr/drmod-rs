@@ -5,6 +5,7 @@
 use hudhook::mh::{MH_ApplyQueued, MhHook};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use super::addresses;
 use super::replay;
 use super::types;
 
@@ -31,7 +32,7 @@ impl InputHooks {
             if base_addr == 0 {
                 0
             } else {
-                base_addr + replay::KEY_INPUT
+                base_addr + addresses::KEY_INPUT
             },
             Ordering::Relaxed,
         );
@@ -39,7 +40,7 @@ impl InputHooks {
             if base_addr == 0 {
                 0
             } else {
-                base_addr + replay::MOUSE_INPUT
+                base_addr + addresses::MOUSE_INPUT
             },
             Ordering::Relaxed,
         );
@@ -72,7 +73,7 @@ impl InputHooks {
             replay::log_line("create_input_hook: base_addr=0");
             return None;
         }
-        let target = (base_addr + replay::UPDATE_INPUT_UNIT) as *mut c_void;
+        let target = (base_addr + addresses::UPDATE_INPUT_UNIT) as *mut c_void;
         let detour = replay::update_input_unit_detour as *mut c_void;
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
@@ -110,7 +111,7 @@ impl InputHooks {
             replay::log_line("create_keybind_hook: base_addr=0");
             return None;
         }
-        let target = (base_addr + replay::IS_KEYBIND_PRESSED) as *mut c_void;
+        let target = (base_addr + addresses::IS_KEYBIND_PRESSED) as *mut c_void;
         let detour = replay::is_keybind_pressed_detour as *mut c_void;
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
@@ -147,7 +148,7 @@ impl InputHooks {
             replay::log_line("create_keybind_down_hook: base_addr=0");
             return None;
         }
-        let target = (base_addr + replay::IS_KEYBIND_DOWN) as *mut c_void;
+        let target = (base_addr + addresses::IS_KEYBIND_DOWN) as *mut c_void;
         let detour = replay::is_keybind_down_detour as *mut c_void;
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,

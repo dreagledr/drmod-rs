@@ -32,6 +32,7 @@ src/
 ├── d3d_render.rs    # CylinderRenderer, SphereRenderer for 3D overlays
 ├── skeleton.rs      # Bone/skeleton data structures
 ├── tas/             # TAS (tool-assisted speedrun) — input record/replay
+│   ├── addresses.rs #   Input memory addresses/constants
 │   ├── replay.rs    #   Record/playback logic, replay DB tables
 │   ├── hooks.rs     #   MinHook input hooks + raw input readers
 │   └── types.rs     #   Input/state DTOs (InputUnit, ReplayFrame, ...)
