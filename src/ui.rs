@@ -256,9 +256,9 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             }
             ui.checkbox("Крутить камеру (мышь)", &mut hud.inject_camera);
             if ui.button("Ripper (R)") {
-                replay::set_ripper_frames(1);
+                hooks::set_ripper_frames(1);
             }
-            ui.text(format!("ripper_emul frames left: {}", replay::ripper_frames()));
+            ui.text(format!("ripper_emul frames left: {}", hooks::ripper_frames()));
             ui.text_colored(
                 [0.5, 1.0, 0.5, 1.0],
                 "NumPad4: бег→прыжок→удар→поворот камеры",
@@ -277,7 +277,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             );
             ui.text(format!(
                 "blade hold: {}",
-                replay::blade_hold()
+                hooks::blade_hold()
             ));
 
             // Текущий override

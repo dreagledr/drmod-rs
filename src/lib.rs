@@ -7,6 +7,7 @@ use std::time::Instant;
 
 mod d3d_render;
 mod game;
+mod logger;
 mod net;
 mod overlay;
 mod segment;
@@ -20,6 +21,7 @@ use skeleton::BonePos;
 use tas::addresses;
 use tas::db;
 use tas::hooks;
+#[cfg(debug_assertions)]
 use tas::replay;
 use tas::types;
 
@@ -201,7 +203,7 @@ fn in_bare_trigger(pos: Option<segment::Vec3>) -> bool {
 }
 
 /// Re-entrancy guard для VEH-обработчика. Если исключение случается внутри
-/// самого обработчика (например, в `log_line`/`format!` при рестарте), повторный
+/// самого обработчика (например, в `logger::log_line`/`format!` при рестарте), повторный
 /// вход не логирует — иначе рекурсия диспетчера исключений → stack overflow.
 #[cfg(debug_assertions)]
 static IN_VEH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -223,7 +225,7 @@ unsafe extern "system" fn veh_handler(
     if code == 0x406D1388 || code == 0x40010006 {
         return windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH;
     }
-    // Повторный вход (исключение внутри log_line/format! при рестарте) — не
+    // Повторный вход (исключение внутри logger::log_line/format! при рестарте) — не
     // логируем, чтобы диспетчер исключений не зациклился.
     if IN_VEH.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH;
@@ -234,7 +236,7 @@ unsafe extern "system" fn veh_handler(
     } else {
         usize::MAX
     };
-    replay::log_line(&format!(
+    logger::log_line(&format!(
         "EXCEPTION: code=0x{:08X} fault=0x{:08X} access=0x{:08X}",
         code, fault, access
     ));
@@ -293,9 +295,8 @@ impl HelloHud {
         .map(|h| h.0 as usize)
         .unwrap_or(0);
 
-        // Детур updateInputUnit использует базовый адрес для прямой записи
-        // в сырые структуры ввода (эмуляция клавиши R / ripper).
-        let _ = replay::set_base_addr(base_addr);
+        // Базовый адрес модуля — нужен хукам ввода и прямым вызовам ripper.
+        let _ = hooks::set_base_addr(base_addr);
 
         let static_ptr_addr = if base_addr == 0 {
             None
@@ -324,8 +325,8 @@ impl HelloHud {
         let input_hooks = tas::hooks::InputHooks::new(base_addr);
 
         // Отдельный лог состояния (velocity/rotation/heading/ripper/...),
-        // перезатирается при старте мода — см. `replay::init_state_log`.
-        replay::init_state_log();
+        // перезатирается при старте мода — см. `logger::init_state_log`.
+        logger::init_state_log();
 
         Self {
             current_run_start,
@@ -455,7 +456,7 @@ impl HelloHud {
             #[cfg(debug_assertions)]
             {
                 if player_readable != self.prev_player_readable {
-                    replay::log_line(&format!(
+                    logger::log_line(&format!(
                         "menu: player_readable {} -> {} (raw={})",
                         self.prev_player_readable, player_readable, state.menu_status_raw
                     ));
@@ -872,7 +873,7 @@ impl HelloHud {
             self.record_armed = false;
             replay::set_input_override(types::InputOverride::default());
             // Снять остатки ручной keybind-эмуляции (NumPad7/8) до старта.
-            replay::clear_keybind_emulation();
+            hooks::clear_keybind_emulation();
             self.playback_armed = true;
         }
     }
@@ -904,7 +905,7 @@ impl HelloHud {
             .as_ref()
             .and_then(|conn| db::flush_replay(conn, &meta, &frames));
         self.playback_frames = frames;
-        replay::log_line(&format!(
+        logger::log_line(&format!(
             "record: stop frames={} id={:?}",
             self.playback_frames.len(),
             self.last_record_id
@@ -918,7 +919,7 @@ impl HelloHud {
         replay::set_input_override(types::InputOverride::default());
         // Снять keybind-эмуляцию (ripper/blade): иначе удержание blade
         // останется активным и будет подмешиваться в реальный ввод.
-        replay::clear_keybind_emulation();
+        hooks::clear_keybind_emulation();
         let was_active = self.playback_active;
         self.playback_active = false;
         self.playback_frame_idx = 0;
@@ -940,7 +941,7 @@ impl HelloHud {
                 .db_conn
                 .as_ref()
                 .and_then(|conn| db::flush_replay(conn, &meta, &log));
-            replay::log_line(&format!(
+            logger::log_line(&format!(
                 "playback: stop frames={} id={:?}",
                 log.len(),
                 self.last_playback_id
@@ -963,10 +964,10 @@ impl HelloHud {
         }
         if self.record_armed {
             self.record_armed = false;
-            replay::log_line("deferred: trigger -> start recording");
+            logger::log_line("deferred: trigger -> start recording");
             // Запись ловит только реальный ввод — сбрасываем keybind-эмуляцию,
             // чтобы остатки ручного NumPad7/8 не подмешались в кадры.
-            replay::clear_keybind_emulation();
+            hooks::clear_keybind_emulation();
             self.record_active = true;
             self.record_frames.clear();
             self.record_start = Some(Instant::now());
@@ -976,9 +977,9 @@ impl HelloHud {
         }
         if self.playback_armed {
             self.playback_armed = false;
-            replay::log_line("deferred: trigger -> start playback");
+            logger::log_line("deferred: trigger -> start playback");
             replay::set_input_override(types::InputOverride::default());
-            replay::clear_keybind_emulation();
+            hooks::clear_keybind_emulation();
             self.playback_active = true;
             self.playback_frame_idx = 0;
             self.playback_log.clear();
@@ -992,17 +993,17 @@ impl HelloHud {
     #[cfg(debug_assertions)]
     fn stop_on_loading(&mut self) {
         if self.record_active {
-            replay::log_line("loading: stop active recording");
+            logger::log_line("loading: stop active recording");
             self.stop_record();
         }
         if self.playback_active {
-            replay::log_line("loading: stop active playback");
+            logger::log_line("loading: stop active playback");
             self.stop_playback();
         }
         // Сбрасываем keybind-эмуляцию (ripper/blade): иначе при рестарте
         // детуры isKeybindPressed/isKeybindDown возвращают 1 на пересоздающемся
         // игроке → handleActions падает (access violation).
-        replay::clear_keybind_emulation();
+        hooks::clear_keybind_emulation();
     }
 }
 
@@ -1259,7 +1260,7 @@ impl ImguiRenderLoop for HelloHud {
                 let keys_down = hooks::read_keys().map(|(d, _)| d).unwrap_or([0; 6]);
                 let space = keys_down[1] & 0x8000_0000 != 0;
                 let w_down = keys_down[2] & 0x100 != 0;
-                replay::log_line(&format!(
+                logger::log_line(&format!(
                     "frame: player=0x{:08X} status_raw={} cur_in down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) dir={:.2} jump={} mouse={:X} space={} w={} pos=({:.2},{:.2},{:.2}) ov_active={} g_unit0: down={:08X} pressed={:08X} L=({:.2},{:.2}) valid={}",
                     self.cached_player_obj_ptr as usize,
                     ui_state.menu_status_raw,
@@ -1326,7 +1327,7 @@ impl ImguiRenderLoop for HelloHud {
                     ]
                 }
             };
-            replay::log_state_line(&format!(
+            logger::log_state_line(&format!(
                 "f={} pos=({:.3},{:.3},{:.3}) vel=({:.3},{:.3},{:.3}) prev=({:.3},{:.3},{:.3}) rot=({:.3},{:.3},{:.3}) heading={:.3} dir={:.3} ripper={} blade={} ninja={} jump={} cam=({:.1},{:.1},{:.1})",
                 self.d3d_frame_count,
                 pos[0], pos[1], pos[2],
@@ -1379,8 +1380,8 @@ impl ImguiRenderLoop for HelloHud {
                     0
                 };
                 if frame.state.ripper_enabled != prev_ripper {
-                    replay::set_ripper_frames(1);
-                    replay::log_line(&format!(
+                    hooks::set_ripper_frames(1);
+                    logger::log_line(&format!(
                         "playback: ripper edge {} -> {} at frame {}",
                         prev_ripper,
                         frame.state.ripper_enabled,
@@ -1388,9 +1389,9 @@ impl ImguiRenderLoop for HelloHud {
                     ));
                 }
                 let blade_on = frame.state.blade_mode_type != 0;
-                if blade_on != replay::blade_hold() {
-                    replay::set_blade_hold(blade_on);
-                    replay::log_line(&format!(
+                if blade_on != hooks::blade_hold() {
+                    hooks::set_blade_hold(blade_on);
+                    logger::log_line(&format!(
                         "playback: blade hold {} at frame {}",
                         if blade_on { "ON" } else { "OFF" },
                         self.playback_frame_idx
@@ -1458,14 +1459,14 @@ impl ImguiRenderLoop for HelloHud {
             // NumPad7 — эмуляция клавиши R (ripper) через хук isKeybindPressed:
             // handleActions видит "R нажата" и запускает штатную активацию.
             if ui.is_key_pressed_no_repeat(Key::Keypad7) {
-                replay::set_ripper_frames(1);
-                replay::log_line("NumPad7: emulate R (ripper) 1 frame via isKeybindPressed");
+                hooks::set_ripper_frames(1);
+                logger::log_line("NumPad7: emulate R (ripper) 1 frame via isKeybindPressed");
             }
             // NumPad8 — toggle удержания blade mode через isKeybindDown (hold).
             if ui.is_key_pressed_no_repeat(Key::Keypad8) {
-                let on = !replay::blade_hold();
-                replay::set_blade_hold(on);
-                replay::log_line(&format!(
+                let on = !hooks::blade_hold();
+                hooks::set_blade_hold(on);
+                logger::log_line(&format!(
                     "NumPad8: blade_hold {}",
                     if on { "ON" } else { "OFF" }
                 ));
@@ -1474,12 +1475,12 @@ impl ImguiRenderLoop for HelloHud {
             // (обход ввода: игра читает DirectInput GetDeviceState напрямую).
             if !self.cached_player_obj_ptr.is_null() {
                 if ui.is_key_pressed_no_repeat(Key::Keypad9) {
-                    replay::enable_ripper(self.cached_player_obj_ptr);
-                    replay::log_line("NumPad9: enableRipperMode()");
+                    hooks::enable_ripper(self.cached_player_obj_ptr);
+                    logger::log_line("NumPad9: enableRipperMode()");
                 }
                 if ui.is_key_pressed_no_repeat(Key::Keypad0) {
-                    replay::disable_ripper(self.cached_player_obj_ptr);
-                    replay::log_line("NumPad0: disableRipperMode()");
+                    hooks::disable_ripper(self.cached_player_obj_ptr);
+                    logger::log_line("NumPad0: disableRipperMode()");
                 }
             }
         }

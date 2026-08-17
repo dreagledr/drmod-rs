@@ -31,11 +31,12 @@ src/
 ├── settings.rs      # User settings (ghost opacity, show ghost toggle)
 ├── d3d_render.rs    # CylinderRenderer, SphereRenderer for 3D overlays
 ├── skeleton.rs      # Bone/skeleton data structures
+├── logger.rs        # Logging to %LOCALAPPDATA%\drmod\ (debug.log + buffered state.log)
 ├── tas/             # TAS (tool-assisted speedrun) — input record/replay
 │   ├── addresses.rs #   Input memory addresses/constants
 │   ├── db.rs        #   Replay SQLite tables + bulk insert
 │   ├── replay.rs    #   Record/playback logic, input override
-│   ├── hooks.rs     #   MinHook input hooks + raw input readers
+│   ├── hooks.rs     #   MinHook input hooks (updateInputUnit/isKeybindPressed/isKeybindDown), ripper/blade emulation, raw input readers
 │   └── types.rs     #   Input/state DTOs (InputUnit, ReplayFrame, ...)
 server/              # Multiplayer server (tokio, 64-bit, Docker)
 protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPacket)

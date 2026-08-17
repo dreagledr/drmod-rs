@@ -3,16 +3,155 @@
 //! чтение сырого ввода (клавиатура/мышь).
 
 use hudhook::mh::{MH_ApplyQueued, MhHook};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::OnceLock;
 
-use super::addresses;
+use super::addresses::{
+    self, DISABLE_RIPPER_MODE, ENABLE_RIPPER_MODE, KEYBIND_BLADEMODE, KEYBIND_RIPPERMODE,
+};
 use super::replay;
 use super::types;
+use crate::logger;
 
 /// cInput::ms_KeyInput — адрес сырого ввода клавиатуры (вычисляется в `install`).
 static KEY_INPUT_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// cInput::ms_MouseInput — адрес сырого ввода мыши (вычисляется в `install`).
 static MOUSE_INPUT_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// Trampoline оригинальной `cInput::updateInputUnit` (устанавливается в `create_input_hook`).
+static ORIG_UPDATE_INPUT_UNIT: OnceLock<unsafe extern "C" fn(*mut types::InputUnit, i32)> =
+    OnceLock::new();
+/// Trampoline оригинальной `cInput::isKeybindPressed`.
+static ORIG_IS_KEYBIND_PRESSED: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
+/// Trampoline оригинальной `cInput::isKeybindDown`.
+static ORIG_IS_KEYBIND_DOWN: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
+/// Базовый адрес модуля игры (устанавливается в `HelloHud::new`) — нужен
+/// для прямых вызовов `enableRipperMode`/`disableRipperMode`.
+static BASE_ADDR: OnceLock<usize> = OnceLock::new();
+/// Остаток кадров эмуляции клавиши R (ripper) в детуре.
+static RIPPER_FRAMES: AtomicU32 = AtomicU32::new(0);
+/// Флаг удержания blade mode (isKeybindDown, hold) в детуре.
+static BLADE_HOLD: AtomicU32 = AtomicU32::new(0);
+
+/// Запоминает базовый адрес модуля для прямых вызовов ripper.
+pub(crate) fn set_base_addr(addr: usize) -> Result<(), ()> {
+    BASE_ADDR.set(addr).map_err(|_| ())
+}
+
+/// Взводит эмуляцию клавиши R (ripper) на `n` кадров — сырой ввод, который
+/// читается `isKeybindDown(KEYBIND_RIPPERMODE)`, а не `InputUnit`.
+pub(crate) fn set_ripper_frames(n: u32) {
+    RIPPER_FRAMES.store(n, Ordering::Relaxed);
+}
+
+/// Сколько кадров эмуляции R осталось (для debug-панели).
+pub(crate) fn ripper_frames() -> u32 {
+    RIPPER_FRAMES.load(Ordering::Relaxed)
+}
+
+/// Взводит/снимает удержание blade mode (isKeybindDown, hold-действие).
+pub(crate) fn set_blade_hold(on: bool) {
+    BLADE_HOLD.store(if on { 1 } else { 0 }, Ordering::Relaxed);
+}
+
+/// Удерживается ли blade mode сейчас (для debug-панели).
+pub(crate) fn blade_hold() -> bool {
+    BLADE_HOLD.load(Ordering::Relaxed) != 0
+}
+
+/// Сбрасывает keybind-эмуляцию (ripper/blade) — вызывается при остановке
+/// воспроизведения, старте записи и входе в loading, чтобы hold-действие
+/// (blade) и однокадровый фронт (ripper) не «зависали» и не подмешивались
+/// в реальный ввод.
+#[cfg(debug_assertions)]
+pub(crate) fn clear_keybind_emulation() {
+    RIPPER_FRAMES.store(0, Ordering::Relaxed);
+    BLADE_HOLD.store(0, Ordering::Relaxed);
+}
+
+/// Включает Ripper Mode напрямую (обход ввода) — `Pl0000::enableRipperMode`
+/// (`__thiscall`, `this` = указатель на объект игрока).
+pub(crate) fn enable_ripper(player: *mut u8) {
+    let Some(&base) = BASE_ADDR.get() else {
+        return;
+    };
+    type Fn = unsafe extern "thiscall" fn(*mut u8);
+    let f: Fn = unsafe { std::mem::transmute((base + ENABLE_RIPPER_MODE) as *const ()) };
+    unsafe { f(player) };
+}
+
+/// Выключает Ripper Mode (`Pl0000::disableRipperMode(bool)`, `__thiscall`).
+pub(crate) fn disable_ripper(player: *mut u8) {
+    let Some(&base) = BASE_ADDR.get() else {
+        return;
+    };
+    type Fn = unsafe extern "thiscall" fn(*mut u8, bool);
+    let f: Fn = unsafe { std::mem::transmute((base + DISABLE_RIPPER_MODE) as *const ()) };
+    unsafe { f(player, false) };
+}
+
+/// Детур `cInput::updateInputUnit` (__cdecl). Вызывает оригинал, затем для
+/// `user_index == 0` перезаписывает unit нашим override (подача ввода).
+///
+/// Детур вызывается игрой несколько раз за кадр и должен быть ЛЁГКИМ: только
+/// чтение/запись атомиков. Никакого `log_line` (chrono + файловый I/O) — при
+/// рестарте это даёт рекурсию access violation (см. docs/REPLAY_FINDINGS.md).
+unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_index: i32) {
+    if let Some(&orig) = ORIG_UPDATE_INPUT_UNIT.get() {
+        unsafe { orig(unit, user_index) };
+    }
+
+    if user_index != 0 {
+        return;
+    }
+
+    replay::apply_override(unit);
+}
+
+/// Детур `cInput::isKeybindPressed` (__cdecl, 0x61D2D0). Для `KEYBIND_RIPPERMODE`
+/// возвращает 1 (нажат фронт), пока эмуляция R активна (`RIPPER_FRAMES > 0`) —
+/// тогда `handleActions` запускает штатную активацию/деактивацию ripper
+/// с проверками условий и анимациями. Остальные keybind'ы идут в оригинал.
+unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
+    if keybind == KEYBIND_RIPPERMODE && RIPPER_FRAMES.load(Ordering::Relaxed) > 0 {
+        RIPPER_FRAMES.fetch_sub(1, Ordering::Relaxed);
+        return 1;
+    }
+
+    if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
+        return unsafe { orig(keybind) };
+    }
+    0
+}
+
+/// Детур `cInput::isKeybindDown` (__cdecl, 0x61D280). Для `KEYBIND_BLADEMODE`
+/// возвращает 1 (удержание), пока `BLADE_HOLD` взведён — blade mode это
+/// hold-действие, активируется удержанием клавиши через handleActions.
+unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
+    if keybind == KEYBIND_BLADEMODE && BLADE_HOLD.load(Ordering::Relaxed) != 0 {
+        return 1;
+    }
+    if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
+        return unsafe { orig(keybind) };
+    }
+    0
+}
+
+/// Сохраняет trampoline (адрес оригинальной функции) после создания хука.
+fn set_original_update_input_unit(
+    orig: unsafe extern "C" fn(*mut types::InputUnit, i32),
+) -> Result<(), ()> {
+    ORIG_UPDATE_INPUT_UNIT.set(orig).map_err(|_| ())
+}
+
+/// Сохраняет trampoline оригинальной `isKeybindPressed` после создания хука.
+fn set_original_is_keybind_pressed(orig: unsafe extern "C" fn(i32) -> i32) -> Result<(), ()> {
+    ORIG_IS_KEYBIND_PRESSED.set(orig).map_err(|_| ())
+}
+
+/// Сохраняет trampoline оригинальной `isKeybindDown` после создания хука.
+fn set_original_is_keybind_down(orig: unsafe extern "C" fn(i32) -> i32) -> Result<(), ()> {
+    ORIG_IS_KEYBIND_DOWN.set(orig).map_err(|_| ())
+}
 
 /// MinHook-хуки ввода. Поля приватные: хуки живут, пока живёт структура
 /// (деструктор `MhHook` снимает хук), наружу выставляются только функции
@@ -49,7 +188,7 @@ impl InputHooks {
         let keybind = Self::create_keybind_hook(base_addr);
         let keybind_down = Self::create_keybind_down_hook(base_addr);
 
-        replay::log_line(&format!(
+        logger::log_line(&format!(
             "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={}",
             base_addr,
             if input.is_some() { "OK" } else { "FAIL" },
@@ -70,15 +209,15 @@ impl InputHooks {
         use core::ffi::c_void;
 
         if base_addr == 0 {
-            replay::log_line("create_input_hook: base_addr=0");
+            logger::log_line("create_input_hook: base_addr=0");
             return None;
         }
         let target = (base_addr + addresses::UPDATE_INPUT_UNIT) as *mut c_void;
-        let detour = replay::update_input_unit_detour as *mut c_void;
+        let detour = update_input_unit_detour as *mut c_void;
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
-                replay::log_line(&format!(
+                logger::log_line(&format!(
                     "create_input_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
                     target as usize, e
                 ));
@@ -87,13 +226,13 @@ impl InputHooks {
         };
         let trampoline: unsafe extern "C" fn(*mut types::InputUnit, i32) =
             unsafe { std::mem::transmute(hook.trampoline()) };
-        let _ = replay::set_original_update_input_unit(trampoline);
+        let _ = set_original_update_input_unit(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            replay::log_line(&format!("create_input_hook: queue_enable FAIL err={:?}", e));
+            logger::log_line(&format!("create_input_hook: queue_enable FAIL err={:?}", e));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };
-        replay::log_line(&format!(
+        logger::log_line(&format!(
             "create_input_hook: OK target=0x{:08X} trampoline=0x{:08X}",
             target as usize,
             hook.trampoline() as usize
@@ -108,15 +247,15 @@ impl InputHooks {
         use core::ffi::c_void;
 
         if base_addr == 0 {
-            replay::log_line("create_keybind_hook: base_addr=0");
+            logger::log_line("create_keybind_hook: base_addr=0");
             return None;
         }
         let target = (base_addr + addresses::IS_KEYBIND_PRESSED) as *mut c_void;
-        let detour = replay::is_keybind_pressed_detour as *mut c_void;
+        let detour = is_keybind_pressed_detour as *mut c_void;
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
-                replay::log_line(&format!(
+                logger::log_line(&format!(
                     "create_keybind_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
                     target as usize, e
                 ));
@@ -125,13 +264,13 @@ impl InputHooks {
         };
         let trampoline: unsafe extern "C" fn(i32) -> i32 =
             unsafe { std::mem::transmute(hook.trampoline()) };
-        let _ = replay::set_original_is_keybind_pressed(trampoline);
+        let _ = set_original_is_keybind_pressed(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            replay::log_line(&format!("create_keybind_hook: queue_enable FAIL err={:?}", e));
+            logger::log_line(&format!("create_keybind_hook: queue_enable FAIL err={:?}", e));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };
-        replay::log_line(&format!(
+        logger::log_line(&format!(
             "create_keybind_hook: OK target=0x{:08X} trampoline=0x{:08X}",
             target as usize,
             hook.trampoline() as usize
@@ -145,15 +284,15 @@ impl InputHooks {
         use core::ffi::c_void;
 
         if base_addr == 0 {
-            replay::log_line("create_keybind_down_hook: base_addr=0");
+            logger::log_line("create_keybind_down_hook: base_addr=0");
             return None;
         }
         let target = (base_addr + addresses::IS_KEYBIND_DOWN) as *mut c_void;
-        let detour = replay::is_keybind_down_detour as *mut c_void;
+        let detour = is_keybind_down_detour as *mut c_void;
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
-                replay::log_line(&format!(
+                logger::log_line(&format!(
                     "create_keybind_down_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
                     target as usize, e
                 ));
@@ -162,13 +301,13 @@ impl InputHooks {
         };
         let trampoline: unsafe extern "C" fn(i32) -> i32 =
             unsafe { std::mem::transmute(hook.trampoline()) };
-        let _ = replay::set_original_is_keybind_down(trampoline);
+        let _ = set_original_is_keybind_down(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            replay::log_line(&format!("create_keybind_down_hook: queue_enable FAIL err={:?}", e));
+            logger::log_line(&format!("create_keybind_down_hook: queue_enable FAIL err={:?}", e));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };
-        replay::log_line(&format!(
+        logger::log_line(&format!(
             "create_keybind_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
             target as usize,
             hook.trampoline() as usize
