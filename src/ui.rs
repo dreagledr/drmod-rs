@@ -3,6 +3,8 @@ use crate::net;
 #[cfg(debug_assertions)]
 use crate::overlay;
 #[cfg(debug_assertions)]
+use crate::tas::hooks;
+#[cfg(debug_assertions)]
 use crate::tas::replay;
 use crate::segment;
 use crate::HelloHud;
@@ -147,12 +149,11 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             // --- СЫРОЙ ВВОД (Record/Replay, этап 0) ---
             ui.separator();
             ui.text("Raw input:");
-            match hud.key_input_addr {
+            match hooks::read_keys() {
                 None => {
                     ui.text_colored([1.0, 0.5, 0.0, 1.0], "key_input: N/A");
                 }
-                Some(_) => {
-                    let (keys_down, keys_pressed) = hud.read_keys();
+                Some((keys_down, keys_pressed)) => {
                     for i in 0..6 {
                         ui.text(format!(
                             "Keys[{}]: down={:08X} pressed={:08X}",
@@ -188,12 +189,11 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                     ui.text(format!("Pressed: {}", pressed_text));
                 }
             }
-            match hud.mouse_input_addr {
+            match hooks::read_mouse() {
                 None => {
                     ui.text_colored([1.0, 0.5, 0.0, 1.0], "mouse_input: N/A");
                 }
-                Some(_) => {
-                    let m = hud.read_mouse();
+                Some(m) => {
                     ui.text(format!(
                         "Mouse: buttons={:08X} pressed={:08X} pos=({:.0}, {:.0}) last=({:.0}, {:.0})",
                         m.buttons,
@@ -280,31 +280,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                 replay::blade_hold()
             ));
 
-            // Статус хука updateInputUnit и текущего override
-            match &hud.input_hook {
-                Some(_) => {
-                    ui.text_colored([0.0, 1.0, 0.0, 1.0], "hook updateInputUnit: OK");
-                }
-                None => {
-                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "hook updateInputUnit: N/A");
-                }
-            }
-            match &hud.keybind_hook {
-                Some(_) => {
-                    ui.text_colored([0.0, 1.0, 0.0, 1.0], "hook isKeybindPressed: OK");
-                }
-                None => {
-                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "hook isKeybindPressed: N/A");
-                }
-            }
-            match &hud.keybind_down_hook {
-                Some(_) => {
-                    ui.text_colored([0.0, 1.0, 0.0, 1.0], "hook isKeybindDown: OK");
-                }
-                None => {
-                    ui.text_colored([1.0, 0.5, 0.0, 1.0], "hook isKeybindDown: N/A");
-                }
-            }
+            // Текущий override
             let ov = replay::input_override();
             ui.text(format!(
                 "Override: active={} down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2})",

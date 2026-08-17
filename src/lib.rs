@@ -17,7 +17,9 @@ mod ui;
 
 use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
+use tas::hooks;
 use tas::replay;
+use tas::types;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
 
@@ -110,15 +112,9 @@ struct HelloHud {
     dummy: CylinderRenderer,
     remote_sphere: SphereRenderer,
     pub(crate) cached_player_obj_ptr: *mut u8,
-    // Raw input (Record/Replay)
-    pub(crate) key_input_addr: Option<NonNull<u8>>,
-    pub(crate) mouse_input_addr: Option<NonNull<u8>>,
-    // Хук cInput::updateInputUnit (подача ввода: подмена InputUnit[0])
-    pub(crate) input_hook: Option<hudhook::mh::MhHook>,
-    // Хук cInput::isKeybindPressed (эмуляция toggle-действий: ripper)
-    pub(crate) keybind_hook: Option<hudhook::mh::MhHook>,
-    // Хук cInput::isKeybindDown (эмуляция hold-действий: blade mode)
-    pub(crate) keybind_down_hook: Option<hudhook::mh::MhHook>,
+    // Хуки ввода (MinHook) + адреса сырого ввода — живут в tas::hooks.
+    #[allow(dead_code)] // keep-alive: поле не читается, но Drop снимает хуки
+    input_hooks: tas::hooks::InputHooks,
     // Полное логирование состояния при записи/воспроизведении (NumPad5/6).
     // Буферы копятся в памяти, флашатся в БД по завершении (bulk insert).
     #[cfg(debug_assertions)]
@@ -126,7 +122,7 @@ struct HelloHud {
     #[cfg(debug_assertions)]
     pub(crate) record_active: bool,
     #[cfg(debug_assertions)]
-    pub(crate) record_frames: Vec<replay::ReplayFrame>,
+    pub(crate) record_frames: Vec<types::ReplayFrame>,
     #[cfg(debug_assertions)]
     pub(crate) record_start: Option<Instant>,
     #[cfg(debug_assertions)]
@@ -142,11 +138,11 @@ struct HelloHud {
     #[cfg(debug_assertions)]
     pub(crate) playback_active: bool,
     #[cfg(debug_assertions)]
-    pub(crate) playback_frames: Vec<replay::ReplayFrame>,
+    pub(crate) playback_frames: Vec<types::ReplayFrame>,
     #[cfg(debug_assertions)]
     pub(crate) playback_frame_idx: usize,
     #[cfg(debug_assertions)]
-    pub(crate) playback_log: Vec<replay::ReplayFrame>,
+    pub(crate) playback_log: Vec<types::ReplayFrame>,
     #[cfg(debug_assertions)]
     pub(crate) playback_start: Option<Instant>,
     #[cfg(debug_assertions)]
@@ -321,39 +317,13 @@ impl HelloHud {
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA1D0) })
         };
 
-        // Сырой ввод: cInput::ms_KeyInput / cInput::ms_MouseInput (SDK, Hw.h)
-        let key_input_addr = if base_addr == 0 {
-            None
-        } else {
-            NonNull::new(unsafe { (base_addr as *mut u8).add(replay::KEY_INPUT) })
-        };
-        let mouse_input_addr = if base_addr == 0 {
-            None
-        } else {
-            NonNull::new(unsafe { (base_addr as *mut u8).add(replay::MOUSE_INPUT) })
-        };
-
-        // Хук cInput::updateInputUnit — подача ввода: после вызова оригинала
-        // перезаписываем глобальный InputUnit[0] (реальный источник игрока).
-        let input_hook = Self::create_input_hook(base_addr);
-
-        // Хук cInput::isKeybindPressed — эмуляция toggle-действий (ripper).
-        let keybind_hook = Self::create_keybind_hook(base_addr);
-
-        // Хук cInput::isKeybindDown — эмуляция hold-действий (blade mode).
-        let keybind_down_hook = Self::create_keybind_down_hook(base_addr);
+        // Хуки ввода (updateInputUnit / isKeybindPressed / isKeybindDown)
+        // и адреса сырого ввода — устанавливаются и логируются в tas::hooks.
+        let input_hooks = tas::hooks::InputHooks::new(base_addr);
 
         // Отдельный лог состояния (velocity/rotation/heading/ripper/...),
         // перезатирается при старте мода — см. `replay::init_state_log`.
         replay::init_state_log();
-
-        replay::log_line(&format!(
-            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={}",
-            base_addr,
-            if input_hook.is_some() { "OK" } else { "FAIL" },
-            if keybind_hook.is_some() { "OK" } else { "FAIL" },
-            if keybind_down_hook.is_some() { "OK" } else { "FAIL" }
-        ));
 
         Self {
             current_run_start,
@@ -378,11 +348,7 @@ impl HelloHud {
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
             cached_player_obj_ptr: std::ptr::null_mut(),
-            key_input_addr,
-            mouse_input_addr,
-            input_hook,
-            keybind_hook,
-            keybind_down_hook,
+            input_hooks,
             #[cfg(debug_assertions)]
             record_armed: false,
             #[cfg(debug_assertions)]
@@ -440,122 +406,6 @@ impl HelloHud {
             last_skeleton_send: Instant::now(),
             viewport: [0.0; 4],
         }
-    }
-
-    /// Устанавливает MinHook на `cInput::updateInputUnit` (0x9DAFE0):
-    /// после вызова оригинала детур перезаписывает InputUnit игрока.
-    /// Возвращает хук для удержания (хранится в HelloHud).
-    fn create_input_hook(base_addr: usize) -> Option<hudhook::mh::MhHook> {
-        use core::ffi::c_void;
-        use hudhook::mh::{MH_ApplyQueued, MhHook};
-
-        if base_addr == 0 {
-            replay::log_line("create_input_hook: base_addr=0");
-            return None;
-        }
-        let target = (base_addr + replay::UPDATE_INPUT_UNIT) as *mut c_void;
-        let detour = replay::update_input_unit_detour as *mut c_void;
-        let hook = match unsafe { MhHook::new(target, detour) } {
-            Ok(h) => h,
-            Err(e) => {
-                replay::log_line(&format!(
-                    "create_input_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
-                    target as usize, e
-                ));
-                return None;
-            }
-        };
-        let trampoline: unsafe extern "C" fn(*mut replay::InputUnit, i32) =
-            unsafe { std::mem::transmute(hook.trampoline()) };
-        let _ = replay::set_original_update_input_unit(trampoline);
-        if let Err(e) = unsafe { hook.queue_enable() } {
-            replay::log_line(&format!("create_input_hook: queue_enable FAIL err={:?}", e));
-            return None;
-        }
-        let _ = unsafe { MH_ApplyQueued() };
-        replay::log_line(&format!(
-            "create_input_hook: OK target=0x{:08X} trampoline=0x{:08X}",
-            target as usize,
-            hook.trampoline() as usize
-        ));
-        Some(hook)
-    }
-
-    /// Устанавливает MinHook на `cInput::isKeybindPressed` (0x61D2D0):
-    /// подменяет результат для toggle-действий (ripper), чтобы handleActions
-    /// запускал их штатным путём (с условиями и анимациями).
-    fn create_keybind_hook(base_addr: usize) -> Option<hudhook::mh::MhHook> {
-        use core::ffi::c_void;
-        use hudhook::mh::{MH_ApplyQueued, MhHook};
-
-        if base_addr == 0 {
-            replay::log_line("create_keybind_hook: base_addr=0");
-            return None;
-        }
-        let target = (base_addr + replay::IS_KEYBIND_PRESSED) as *mut c_void;
-        let detour = replay::is_keybind_pressed_detour as *mut c_void;
-        let hook = match unsafe { MhHook::new(target, detour) } {
-            Ok(h) => h,
-            Err(e) => {
-                replay::log_line(&format!(
-                    "create_keybind_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
-                    target as usize, e
-                ));
-                return None;
-            }
-        };
-        let trampoline: unsafe extern "C" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(hook.trampoline()) };
-        let _ = replay::set_original_is_keybind_pressed(trampoline);
-        if let Err(e) = unsafe { hook.queue_enable() } {
-            replay::log_line(&format!("create_keybind_hook: queue_enable FAIL err={:?}", e));
-            return None;
-        }
-        let _ = unsafe { MH_ApplyQueued() };
-        replay::log_line(&format!(
-            "create_keybind_hook: OK target=0x{:08X} trampoline=0x{:08X}",
-            target as usize,
-            hook.trampoline() as usize
-        ));
-        Some(hook)
-    }
-
-    /// Устанавливает MinHook на `cInput::isKeybindDown` (0x61D280):
-    /// подменяет результат для hold-действий (blade mode).
-    fn create_keybind_down_hook(base_addr: usize) -> Option<hudhook::mh::MhHook> {
-        use core::ffi::c_void;
-        use hudhook::mh::{MH_ApplyQueued, MhHook};
-
-        if base_addr == 0 {
-            replay::log_line("create_keybind_down_hook: base_addr=0");
-            return None;
-        }
-        let target = (base_addr + replay::IS_KEYBIND_DOWN) as *mut c_void;
-        let detour = replay::is_keybind_down_detour as *mut c_void;
-        let hook = match unsafe { MhHook::new(target, detour) } {
-            Ok(h) => h,
-            Err(e) => {
-                replay::log_line(&format!(
-                    "create_keybind_down_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
-                    target as usize, e
-                ));
-                return None;
-            }
-        };
-        let trampoline: unsafe extern "C" fn(i32) -> i32 =
-            unsafe { std::mem::transmute(hook.trampoline()) };
-        let _ = replay::set_original_is_keybind_down(trampoline);
-        if let Err(e) = unsafe { hook.queue_enable() } {
-            replay::log_line(&format!("create_keybind_down_hook: queue_enable FAIL err={:?}", e));
-            return None;
-        }
-        let _ = unsafe { MH_ApplyQueued() };
-        replay::log_line(&format!(
-            "create_keybind_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
-            target as usize,
-            hook.trampoline() as usize
-        ));
-        Some(hook)
     }
 
     fn read_game_state(&mut self) -> ui::UiState {
@@ -800,69 +650,40 @@ impl HelloHud {
         state
     }
 
-    /// Читает сырой ввод клавиатуры: (m_aKeysDown, m_aKeysPressed).
-    pub(crate) fn read_keys(&self) -> ([u32; 6], [u32; 6]) {
-        match self.key_input_addr {
-            Some(addr) => {
-                let k: replay::KeyInput = unsafe { addr.as_ptr().cast::<replay::KeyInput>().read() };
-                (k.keys_down, k.keys_pressed)
-            }
-            None => Default::default(),
-        }
-    }
-
-    /// Читает сырое состояние мыши (кнопки + позиция).
-    pub(crate) fn read_mouse(&self) -> replay::MouseState {
-        match self.mouse_input_addr {
-            Some(addr) => {
-                let base = addr.as_ptr();
-                unsafe {
-                    replay::MouseState {
-                        buttons: *(base.cast::<i32>()),
-                        buttons_pressed: *(base.add(0x04).cast::<i32>()),
-                        position: *(base.add(0x10).cast::<[f32; 2]>()),
-                        last_position: *(base.add(0x20).cast::<[f32; 2]>()),
-                    }
-                }
-            }
-            None => replay::MouseState::default(),
-        }
-    }
-
     /// Читает нормализованный ввод игрока (Pl0000::m_CurrentInput).
-    pub(crate) fn read_current_input(&self) -> replay::InputUnit {
+    pub(crate) fn read_current_input(&self) -> types::InputUnit {
         if self.cached_player_obj_ptr.is_null() {
-            return replay::InputUnit::default();
+            return types::InputUnit::default();
         }
         unsafe {
             self.cached_player_obj_ptr
                 .add(replay::CURRENT_INPUT_OFFSET)
-                .cast::<replay::InputUnit>()
+                .cast::<types::InputUnit>()
                 .read()
         }
     }
 
     /// Читает глобальный InputUnit[0] (base+0x177B850) — реальный источник
     /// входа игрока (Pl0000::updateInput копирует его в m_CurrentInput).
-    pub(crate) fn read_global_input_unit(&self) -> replay::InputUnit {
+    pub(crate) fn read_global_input_unit(&self) -> types::InputUnit {
         if self.base_addr == 0 {
-            return replay::InputUnit::default();
+            return types::InputUnit::default();
         }
         unsafe {
-            ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const replay::InputUnit).read()
+            ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const types::InputUnit).read()
         }
     }
 
     /// Читает полный снимок нормализованного ввода игрока (Pl0000) — InputUnit
     /// по 0xCF8 + m_fInputDirection и m_nButton* по подтверждённым SDK-смещениям.
-    pub(crate) fn read_pl_input(&self) -> replay::PlInputSnapshot {
+    pub(crate) fn read_pl_input(&self) -> types::PlInputSnapshot {
         if self.cached_player_obj_ptr.is_null() {
-            return replay::PlInputSnapshot::default();
+            return types::PlInputSnapshot::default();
         }
         let p = self.cached_player_obj_ptr;
         unsafe {
-            replay::PlInputSnapshot {
-                input: p.add(replay::CURRENT_INPUT_OFFSET).cast::<replay::InputUnit>().read(),
+            types::PlInputSnapshot {
+                input: p.add(replay::CURRENT_INPUT_OFFSET).cast::<types::InputUnit>().read(),
                 input_mag_sq: *(p.add(replay::PL_INPUT_MAG_SQ) as *const f32),
                 input_direction: *(p.add(replay::PL_INPUT_DIR) as *const f32),
                 button_jump: *(p.add(replay::PL_BUTTON_JUMP) as *const i32),
@@ -877,15 +698,15 @@ impl HelloHud {
     }
 
     /// Читает полное состояние персонажа (позиция/поворот/скорость/HP/состояния)
-    /// из `cached_player_obj_ptr`. Смещения из SDK — см. `replay::PlayerState`.
+    /// из `cached_player_obj_ptr`. Смещения из SDK — см. `types::PlayerState`.
     /// Новые смещения 0x90/0x890/0x3184/0x40C8 требуют рантайм-верификации.
-    pub(crate) fn read_player_state(&self) -> Option<replay::PlayerState> {
+    pub(crate) fn read_player_state(&self) -> Option<types::PlayerState> {
         if self.cached_player_obj_ptr.is_null() {
             return None;
         }
         let p = self.cached_player_obj_ptr;
         Some(unsafe {
-            replay::PlayerState {
+            types::PlayerState {
                 pos: [
                     *(p.add(0x50) as *const f32),
                     *(p.add(0x54) as *const f32),
@@ -919,10 +740,10 @@ impl HelloHud {
     }
 
     /// Читает состояние камеры: позиция (+0x1B0) и view-proj матрица (+0x200).
-    pub(crate) fn read_camera_state(&self) -> Option<replay::CameraState> {
+    pub(crate) fn read_camera_state(&self) -> Option<types::CameraState> {
         let addr = self.camera_ptr_addr?.as_ptr();
         Some(unsafe {
-            replay::CameraState {
+            types::CameraState {
                 pos: [
                     *(addr.add(0x1B0) as *const f32),
                     *(addr.add(0x1B4) as *const f32),
@@ -964,7 +785,7 @@ impl HelloHud {
             || light_active
             || heavy_active;
 
-        let mut unit = replay::InputUnit {
+        let mut unit = types::InputUnit {
             valid_input: 1,
             ..Default::default()
         };
@@ -1015,7 +836,7 @@ impl HelloHud {
         if self.inject_camera {
             unit.right_stick = [500.0, 0.0];
         }
-        replay::set_input_override(replay::InputOverride {
+        replay::set_input_override(types::InputOverride {
             active,
             input: unit,
         });
@@ -1047,7 +868,7 @@ impl HelloHud {
         } else if !self.playback_frames.is_empty() {
             self.stop_record();
             self.record_armed = false;
-            replay::set_input_override(replay::InputOverride::default());
+            replay::set_input_override(types::InputOverride::default());
             // Снять остатки ручной keybind-эмуляции (NumPad7/8) до старта.
             replay::clear_keybind_emulation();
             self.playback_armed = true;
@@ -1068,7 +889,7 @@ impl HelloHud {
             .map(|i| i.elapsed().as_millis() as i64)
             .unwrap_or(0);
         self.record_start = None;
-        let meta = replay::ReplayRunMeta {
+        let meta = types::ReplayRunMeta {
             kind: "record",
             mission_id: self.record_mission_id,
             mission_name: self.record_mission_name.clone(),
@@ -1092,7 +913,7 @@ impl HelloHud {
     /// в БД (kind=playback, source_replay_id=id исходной записи).
     #[cfg(debug_assertions)]
     fn stop_playback(&mut self) {
-        replay::set_input_override(replay::InputOverride::default());
+        replay::set_input_override(types::InputOverride::default());
         // Снять keybind-эмуляцию (ripper/blade): иначе удержание blade
         // останется активным и будет подмешиваться в реальный ввод.
         replay::clear_keybind_emulation();
@@ -1105,7 +926,7 @@ impl HelloHud {
                 .playback_start
                 .map(|i| i.elapsed().as_millis() as i64)
                 .unwrap_or(0);
-            let meta = replay::ReplayRunMeta {
+            let meta = types::ReplayRunMeta {
                 kind: "playback",
                 mission_id: self.record_mission_id,
                 mission_name: self.record_mission_name.clone(),
@@ -1154,7 +975,7 @@ impl HelloHud {
         if self.playback_armed {
             self.playback_armed = false;
             replay::log_line("deferred: trigger -> start playback");
-            replay::set_input_override(replay::InputOverride::default());
+            replay::set_input_override(types::InputOverride::default());
             replay::clear_keybind_emulation();
             self.playback_active = true;
             self.playback_frame_idx = 0;
@@ -1422,7 +1243,7 @@ impl ImguiRenderLoop for HelloHud {
                 // реальный источник входа игрока.
                 let g = if self.base_addr != 0 {
                     let u = unsafe {
-                        ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const replay::InputUnit)
+                        ((self.base_addr + replay::GLOBAL_INPUT_UNIT0) as *const types::InputUnit)
                             .read()
                     };
                     (u.buttons_down, u.buttons_pressed, u.left_stick, u.valid_input)
@@ -1432,8 +1253,8 @@ impl ImguiRenderLoop for HelloHud {
                 // Семантические кнопки Pl0000 + сырые клавиши/мышь —
                 // для сопоставления «физическая клавиша → бит в cur_in».
                 let pl = self.read_pl_input();
-                let mouse_btns = self.read_mouse().buttons;
-                let keys_down = self.read_keys().0;
+                let mouse_btns = hooks::read_mouse().map(|m| m.buttons).unwrap_or(0);
+                let keys_down = hooks::read_keys().map(|(d, _)| d).unwrap_or([0; 6]);
                 let space = keys_down[1] & 0x8000_0000 != 0;
                 let w_down = keys_down[2] & 0x100 != 0;
                 replay::log_line(&format!(
@@ -1525,7 +1346,7 @@ impl ImguiRenderLoop for HelloHud {
         // --- RECORD CAPTURE: полное состояние на кадр ---
         #[cfg(debug_assertions)]
         if self.record_active {
-            self.record_frames.push(replay::ReplayFrame {
+            self.record_frames.push(types::ReplayFrame {
                 frame_index: self.record_frames.len() as u32,
                 input: self.read_current_input(),
                 state: self.read_player_state().unwrap_or_default(),
@@ -1574,12 +1395,12 @@ impl ImguiRenderLoop for HelloHud {
                     ));
                 }
 
-                replay::set_input_override(replay::InputOverride {
+                replay::set_input_override(types::InputOverride {
                     active: true,
                     input: frame.input,
                 });
                 self.playback_frame_idx += 1;
-                self.playback_log.push(replay::ReplayFrame {
+                self.playback_log.push(types::ReplayFrame {
                     frame_index: self.playback_log.len() as u32,
                     input: self.read_current_input(),
                     state: self.read_player_state().unwrap_or_default(),
