@@ -19,18 +19,11 @@ pub(super) struct KeyInput {
     pub press_delay: i32,
 }
 
-/// Снимок сырого состояния мыши (cInput::MouseInput, читается по полям —
-/// раскладка между +0x18 и +0x1C в SDK не уточнена).
+/// Снимок сырого состояния мыши (cInput::MouseInput) — зажатые кнопки.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct MouseState {
     /// +0x00 m_nMouseButtons — зажатые кнопки (битовая маска)
     pub buttons: i32,
-    /// +0x04 m_nButtonsPressed — нажатые в этом кадре
-    pub buttons_pressed: i32,
-    /// +0x10 m_MousePosition — текущая позиция курсора
-    pub position: [f32; 2],
-    /// +0x20 m_LastMousePosition — позиция на прошлом кадре
-    pub last_position: [f32; 2],
 }
 
 /// Нормализованный ввод игрока (cInput::InputUnit).
@@ -59,30 +52,14 @@ pub struct InputUnit {
     pub repeat_count: i32,
 }
 
-/// Снимок нормализованного ввода игрока (Pl0000) — поля, которые реально
-/// двигают персонажа. Смещения из SDK `Pl0000.h` (якоря 0xB74/0x13FC).
+/// Снимок ввода игрока (Pl0000) — направление и кнопка прыжка по
+/// подтверждённым SDK-смещениям.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PlInputSnapshot {
-    /// m_CurrentInput (0xCF8) — кнопки + стики + триггеры
-    pub input: InputUnit,
-    /// m_fInputMagnitudeSquared (0xD28)
-    pub input_mag_sq: f32,
     /// m_fInputDirection (0xD2C)
     pub input_direction: f32,
     /// m_nButtonJump (0xE18)
     pub button_jump: i32,
-    /// m_nButtonLightAttack (0xE20)
-    pub button_light_attack: i32,
-    /// m_nButtonHeavyAttack (0xE24)
-    pub button_heavy_attack: i32,
-    /// m_nButtonAction (0xE38)
-    pub button_action: i32,
-    /// m_nButtonNinjarun (0xE48)
-    pub button_ninjarun: i32,
-    /// m_nButtonBlademode (0xE50)
-    pub button_blademode: i32,
-    /// m_nButtonUseItem (0xE58)
-    pub button_use_item: i32,
 }
 
 /// Значения, подменяющие ввод игрока в хуке `updateInputUnit`.

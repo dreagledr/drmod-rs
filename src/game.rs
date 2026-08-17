@@ -65,13 +65,3 @@ impl GameMenuStatus {
         )
     }
 }
-
-pub fn custom_weapon_name(id: i32) -> &'static str {
-    match id {
-        0 => "None",
-        2 => "Polearm",
-        3 => "Sai",
-        4 => "Pincer",
-        _ => "Unknown",
-    }
-}

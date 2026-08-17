@@ -210,7 +210,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 - **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since addresses are computed once in `new()` and never mutated.
 - All static addresses are calculated once at init time, not per-frame.
-- **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window, Numpad keys (save/teleport/+10Y), saved position display. Release builds keep only Multiplayer and Settings windows.
+- **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window (record/playback status, segment timer, mission/menu status, compact player state), `Actions` window (numpad hotkey reference), Numpad keys, saved position display. Release builds keep only Multiplayer and Settings windows.
 - Error handling uses Windows `MessageBoxW` for user-facing errors.
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
 
@@ -236,6 +236,11 @@ The overlay supports keyboard input via hudhook's built-in WndProc hook — it i
 | `NumPad1` | +10m to player Y coordinate (direct memory write) |
 | `NumPad2` | Save current position |
 | `NumPad3` | Teleport to saved position |
+| `NumPad4` | Script: run → jump → light attack → camera turn |
+| `NumPad5` | Toggle record (arm → position trigger) |
+| `NumPad6` | Toggle playback (arm → position trigger) |
+| `NumPad7` | Emulate R (ripper) via isKeybindPressed, 1 frame |
+| `NumPad8` | Blade mode (hold) toggle |
 
 Memory writes use raw `*mut f32` pointers — since the DLL is injected, it has direct access to game memory.
 

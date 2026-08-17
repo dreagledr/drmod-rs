@@ -20,6 +20,7 @@ use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
 use tas::addresses;
 use tas::db;
+#[cfg(debug_assertions)]
 use tas::hooks;
 #[cfg(debug_assertions)]
 use tas::replay;
@@ -93,10 +94,6 @@ struct HelloHud {
     pub(crate) db_conn: Option<Connection>,
     pub(crate) base_addr: usize,
     pub(crate) static_ptr_addr: Option<NonNull<u8>>,
-    /// Статический адрес `base + 0x17EA100`, хранящий указатель на
-    /// PlayerManagerImplement. Сам указатель перечитывается каждый кадр —
-    /// при рестарте PlayerManagerImplement пересоздаётся, кэшировать его нельзя.
-    pub(crate) player_manager_ptr_addr: Option<NonNull<u8>>,
     pub(crate) camera_ptr_addr: Option<NonNull<u8>>,
     pub(crate) saved_position: Option<(f32, f32, f32)>,
     pub(crate) saved_bones: Option<Vec<BonePos>>,
@@ -126,7 +123,6 @@ struct HelloHud {
     #[cfg(debug_assertions)]
     prev_player_readable: bool,
     pub(crate) d3d_frame_count: u32,
-    pub(crate) d3d_last_error: String,
     // Multiplayer
     pub(crate) net_client: Option<net::NetClient>,
     pub(crate) player_name: String,
@@ -231,22 +227,10 @@ impl HelloHud {
         .map(|h| h.0 as usize)
         .unwrap_or(0);
 
-        // Базовый адрес модуля — нужен хукам ввода и прямым вызовам ripper.
-        let _ = hooks::set_base_addr(base_addr);
-
         let static_ptr_addr = if base_addr == 0 {
             None
         } else {
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x177B4A4) })
-        };
-
-        let player_manager_ptr_addr = if base_addr == 0 {
-            None
-        } else {
-            // base + 0x17EA100 — статический адрес, хранящий указатель на
-            // PlayerManagerImplement. Указатель читается каждый кадр в
-            // read_game_state (PlayerManagerImplement пересоздаётся при рестарте).
-            NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA100) })
         };
 
         let camera_ptr_addr = if base_addr == 0 {
@@ -270,7 +254,6 @@ impl HelloHud {
             db_conn,
             base_addr,
             static_ptr_addr,
-            player_manager_ptr_addr,
             camera_ptr_addr,
             saved_position: None,
             saved_bones: None,
@@ -293,7 +276,6 @@ impl HelloHud {
             #[cfg(debug_assertions)]
             prev_player_readable: false,
             d3d_frame_count: 0,
-            d3d_last_error: String::new(),
             net_client: None,
             player_name: "Raiden".to_string(),
             room_name: "default".to_string(),
@@ -313,25 +295,16 @@ impl HelloHud {
             menu_status_raw: 0,
             menu_status_valid: false,
             menu_status: game::GameMenuStatus::None,
-            sword_state: 0,
-            sword_hidden: 0,
-            main_weapon: 0,
-            custom_weapon: 0,
-            sub_weapon: 0,
-            static_ptr_value: 0,
             position: None,
-            hp: 0,
             player_found: false,
-            segment_action: segment::SegmentAction::None,
-            gstr: String::new(),
-            gstr2: String::new(),
-            gstr4: String::new(),
-            r_anim: 0,
         };
 
         // Строки миссии (gStr) и анимация (rAnim) в loading уничтожаются —
         // их нельзя читать, пока статус не станет валидным и не-загрузочным.
         let mut player_readable = false;
+        let mut gstr = String::new();
+        let mut gstr2 = String::new();
+        let mut gstr4 = String::new();
 
         if self.base_addr != 0 {
             // --- GAME MENU STATUS (первым: от него зависит, можно ли читать остальное) ---
@@ -380,17 +353,17 @@ impl HelloHud {
 
             // --- gStr / gStr2 / gStr4 (ASL location strings) ---
             if player_readable {
-                state.gstr = unsafe {
+                gstr = unsafe {
                     std::ffi::CStr::from_ptr((self.base_addr + 0x14B9181) as *const i8)
                 }
                 .to_string_lossy()
                 .into_owned();
-                state.gstr2 = unsafe {
+                gstr2 = unsafe {
                     std::ffi::CStr::from_ptr((self.base_addr + 0x14B91AD) as *const i8)
                 }
                 .to_string_lossy()
                 .into_owned();
-                state.gstr4 = unsafe {
+                gstr4 = unsafe {
                     std::ffi::CStr::from_ptr((self.base_addr + 0x14B91A8) as *const i8)
                 }
                 .to_string_lossy()
@@ -402,8 +375,8 @@ impl HelloHud {
         // Читаем объект игрока только когда он «читаем» (не loading): в loading
         // статический указатель может указывать на освобождённую память
         // (dangling, не null) — разыменование даёт access violation при рестарте.
+        let mut r_anim = 0;
         if let Some(static_ptr) = self.static_ptr_addr {
-            state.static_ptr_value = static_ptr.as_ptr() as usize;
             self.cached_player_obj_ptr = if player_readable {
                 unsafe { *(static_ptr.as_ptr() as *const *mut u8) }
             } else {
@@ -424,72 +397,51 @@ impl HelloHud {
                 // Читаем из cached_player_obj_ptr, а не из отдельной
                 // кэшированной цепочки указателей — при рестарте цепочка
                 // становится dangling и даёт access violation.
-                state.r_anim = unsafe { *(self.cached_player_obj_ptr.add(0x618) as *const i32) };
-                state.sword_state =
-                    unsafe { *(self.cached_player_obj_ptr.add(0x13FC) as *const i32) };
-                state.sword_hidden =
-                    unsafe { *(self.cached_player_obj_ptr.add(0xB74) as *const i32) };
+                r_anim = unsafe { *(self.cached_player_obj_ptr.add(0x618) as *const i32) };
                 state.position = Some(segment::Vec3 {
                     x: unsafe { *(self.cached_player_obj_ptr.add(0x50) as *const f32) },
                     y: unsafe { *(self.cached_player_obj_ptr.add(0x54) as *const f32) },
                     z: unsafe { *(self.cached_player_obj_ptr.add(0x58) as *const f32) },
                 });
-                state.hp = unsafe { *(self.cached_player_obj_ptr.add(0x870) as *const i32) };
-            }
-        }
-
-        // --- WEAPONS ---
-        if player_readable
-            && let Some(pm_addr) = self.player_manager_ptr_addr
-        {
-            // Указатель на PlayerManagerImplement перечитываем каждый кадр —
-            // он пересоздаётся при рестарте (кэшировать нельзя).
-            let pm_ptr = unsafe { *(pm_addr.as_ptr() as *const *mut u8) };
-            // При быстром рестарте указатель может стать dangling (не null) —
-            // гейтим через is_readable_ptr, как и объект игрока.
-            if !pm_ptr.is_null() && is_readable_ptr(pm_ptr as usize) {
-                state.main_weapon = unsafe { *(pm_ptr.add(0xE0) as *const i32) };
-                state.custom_weapon = unsafe { *(pm_ptr.add(0xE4) as *const i32) };
-                state.sub_weapon = unsafe { *(pm_ptr.add(0xE8) as *const i32) };
             }
         }
 
         // --- SEGMENT ACTION ---
-        if player_readable {
-            state.segment_action = segment::segment_action(
+        let segment_action = if player_readable {
+            let action = segment::segment_action(
                 state.mission_id,
                 &state.mission_name,
                 state.position,
                 state.menu_status,
-                &state.gstr,
+                &gstr,
                 &self.prev_gstr,
-                &state.gstr2,
+                &gstr2,
                 &self.prev_gstr2,
-                state.r_anim,
+                r_anim,
                 self.prev_r_anim,
                 self.active_segment.as_ref(),
             );
 
             // Update prev_ values for next frame
-            self.prev_gstr = state.gstr.clone();
-            self.prev_gstr2 = state.gstr2.clone();
-            self.prev_gstr4 = state.gstr4.clone();
-            self.prev_r_anim = state.r_anim;
+            self.prev_gstr = gstr.clone();
+            self.prev_gstr2 = gstr2.clone();
+            self.prev_gstr4 = gstr4.clone();
+            self.prev_r_anim = r_anim;
+            action
         } else {
             // В загрузке gStr/rAnim заглушены — не двигаем prev_* и не даём
             // ложных finish-переходов. Выход в меню по-прежнему сбрасывает сегмент.
-            state.segment_action =
-                if state.menu_status == game::GameMenuStatus::MainMenuLoad
-                    && self.active_segment.is_some()
-                {
-                    segment::SegmentAction::Reset
-                } else {
-                    segment::SegmentAction::None
-                };
-        }
+            if state.menu_status == game::GameMenuStatus::MainMenuLoad
+                && self.active_segment.is_some()
+            {
+                segment::SegmentAction::Reset
+            } else {
+                segment::SegmentAction::None
+            }
+        };
 
         // --- APPLY SEGMENT ACTION ---
-        match state.segment_action {
+        match segment_action {
             segment::SegmentAction::Reset => {
                 self.position_buffer.clear();
                 self.ghost_positions.clear();
@@ -560,19 +512,8 @@ impl HelloHud {
         }
     }
 
-    /// Читает глобальный InputUnit[0] (base+0x177B850) — реальный источник
-    /// входа игрока (Pl0000::updateInput копирует его в m_CurrentInput).
-    pub(crate) fn read_global_input_unit(&self) -> types::InputUnit {
-        if self.base_addr == 0 {
-            return types::InputUnit::default();
-        }
-        unsafe {
-            ((self.base_addr + addresses::GLOBAL_INPUT_UNIT0) as *const types::InputUnit).read()
-        }
-    }
-
-    /// Читает полный снимок нормализованного ввода игрока (Pl0000) — InputUnit
-    /// по 0xCF8 + m_fInputDirection и m_nButton* по подтверждённым SDK-смещениям.
+    /// Читает направление ввода и кнопку прыжка игрока (Pl0000) по
+    /// подтверждённым SDK-смещениям.
     pub(crate) fn read_pl_input(&self) -> types::PlInputSnapshot {
         if self.cached_player_obj_ptr.is_null() {
             return types::PlInputSnapshot::default();
@@ -580,16 +521,8 @@ impl HelloHud {
         let p = self.cached_player_obj_ptr;
         unsafe {
             types::PlInputSnapshot {
-                input: p.add(addresses::CURRENT_INPUT_OFFSET).cast::<types::InputUnit>().read(),
-                input_mag_sq: *(p.add(addresses::PL_INPUT_MAG_SQ) as *const f32),
                 input_direction: *(p.add(addresses::PL_INPUT_DIR) as *const f32),
                 button_jump: *(p.add(addresses::PL_BUTTON_JUMP) as *const i32),
-                button_light_attack: *(p.add(addresses::PL_BUTTON_LIGHT_ATTACK) as *const i32),
-                button_heavy_attack: *(p.add(addresses::PL_BUTTON_HEAVY_ATTACK) as *const i32),
-                button_action: *(p.add(addresses::PL_BUTTON_ACTION) as *const i32),
-                button_ninjarun: *(p.add(addresses::PL_BUTTON_NINJARUN) as *const i32),
-                button_blademode: *(p.add(addresses::PL_BUTTON_BLADEMODE) as *const i32),
-                button_use_item: *(p.add(addresses::PL_BUTTON_USEITEM) as *const i32),
             }
         }
     }
@@ -1058,18 +991,6 @@ impl ImguiRenderLoop for HelloHud {
                     if on { "ON" } else { "OFF" }
                 ));
             }
-            // NumPad9 / NumPad0 — прямой вызов enableRipperMode()/disableRipperMode()
-            // (обход ввода: игра читает DirectInput GetDeviceState напрямую).
-            if !self.cached_player_obj_ptr.is_null() {
-                if ui.is_key_pressed_no_repeat(Key::Keypad9) {
-                    hooks::enable_ripper(self.cached_player_obj_ptr);
-                    logger::log_line("NumPad9: enableRipperMode()");
-                }
-                if ui.is_key_pressed_no_repeat(Key::Keypad0) {
-                    hooks::disable_ripper(self.cached_player_obj_ptr);
-                    logger::log_line("NumPad0: disableRipperMode()");
-                }
-            }
         }
 
         // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ (debug) ---
@@ -1142,6 +1063,9 @@ impl ImguiRenderLoop for HelloHud {
 
         #[cfg(debug_assertions)]
         ui::render_main_window(ui, self, &ui_state);
+
+        #[cfg(debug_assertions)]
+        ui::render_actions_window(ui);
 
         ui::render_multiplayer_window(ui, self);
 

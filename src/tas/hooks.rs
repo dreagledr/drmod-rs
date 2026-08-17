@@ -6,9 +6,7 @@ use hudhook::mh::{MH_ApplyQueued, MhHook};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
-use super::addresses::{
-    self, DISABLE_RIPPER_MODE, ENABLE_RIPPER_MODE, KEYBIND_BLADEMODE, KEYBIND_RIPPERMODE,
-};
+use super::addresses::{self, KEYBIND_BLADEMODE, KEYBIND_RIPPERMODE};
 use super::replay;
 use super::types;
 use crate::logger;
@@ -24,28 +22,15 @@ static ORIG_UPDATE_INPUT_UNIT: OnceLock<unsafe extern "C" fn(*mut types::InputUn
 static ORIG_IS_KEYBIND_PRESSED: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
 /// Trampoline оригинальной `cInput::isKeybindDown`.
 static ORIG_IS_KEYBIND_DOWN: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
-/// Базовый адрес модуля игры (устанавливается в `HelloHud::new`) — нужен
-/// для прямых вызовов `enableRipperMode`/`disableRipperMode`.
-static BASE_ADDR: OnceLock<usize> = OnceLock::new();
 /// Остаток кадров эмуляции клавиши R (ripper) в детуре.
 static RIPPER_FRAMES: AtomicU32 = AtomicU32::new(0);
 /// Флаг удержания blade mode (isKeybindDown, hold) в детуре.
 static BLADE_HOLD: AtomicU32 = AtomicU32::new(0);
 
-/// Запоминает базовый адрес модуля для прямых вызовов ripper.
-pub(crate) fn set_base_addr(addr: usize) -> Result<(), ()> {
-    BASE_ADDR.set(addr).map_err(|_| ())
-}
-
 /// Взводит эмуляцию клавиши R (ripper) на `n` кадров — сырой ввод, который
 /// читается `isKeybindDown(KEYBIND_RIPPERMODE)`, а не `InputUnit`.
 pub(crate) fn set_ripper_frames(n: u32) {
     RIPPER_FRAMES.store(n, Ordering::Relaxed);
-}
-
-/// Сколько кадров эмуляции R осталось (для debug-панели).
-pub(crate) fn ripper_frames() -> u32 {
-    RIPPER_FRAMES.load(Ordering::Relaxed)
 }
 
 /// Взводит/снимает удержание blade mode (isKeybindDown, hold-действие).
@@ -66,27 +51,6 @@ pub(crate) fn blade_hold() -> bool {
 pub(crate) fn clear_keybind_emulation() {
     RIPPER_FRAMES.store(0, Ordering::Relaxed);
     BLADE_HOLD.store(0, Ordering::Relaxed);
-}
-
-/// Включает Ripper Mode напрямую (обход ввода) — `Pl0000::enableRipperMode`
-/// (`__thiscall`, `this` = указатель на объект игрока).
-pub(crate) fn enable_ripper(player: *mut u8) {
-    let Some(&base) = BASE_ADDR.get() else {
-        return;
-    };
-    type Fn = unsafe extern "thiscall" fn(*mut u8);
-    let f: Fn = unsafe { std::mem::transmute((base + ENABLE_RIPPER_MODE) as *const ()) };
-    unsafe { f(player) };
-}
-
-/// Выключает Ripper Mode (`Pl0000::disableRipperMode(bool)`, `__thiscall`).
-pub(crate) fn disable_ripper(player: *mut u8) {
-    let Some(&base) = BASE_ADDR.get() else {
-        return;
-    };
-    type Fn = unsafe extern "thiscall" fn(*mut u8, bool);
-    let f: Fn = unsafe { std::mem::transmute((base + DISABLE_RIPPER_MODE) as *const ()) };
-    unsafe { f(player, false) };
 }
 
 /// Детур `cInput::updateInputUnit` (__cdecl). Вызывает оригинал, затем для
@@ -327,7 +291,7 @@ pub fn read_keys() -> Option<([u32; 6], [u32; 6])> {
     Some((k.keys_down, k.keys_pressed))
 }
 
-/// Читает сырое состояние мыши (кнопки + позиция).
+/// Читает сырое состояние мыши (зажатые кнопки).
 /// `None`, если адрес не установлен (base_addr == 0).
 pub fn read_mouse() -> Option<types::MouseState> {
     let addr = MOUSE_INPUT_ADDR.load(Ordering::Relaxed);
@@ -338,9 +302,6 @@ pub fn read_mouse() -> Option<types::MouseState> {
     Some(unsafe {
         types::MouseState {
             buttons: *(base.cast::<i32>()),
-            buttons_pressed: *(base.add(0x04).cast::<i32>()),
-            position: *(base.add(0x10).cast::<[f32; 2]>()),
-            last_position: *(base.add(0x20).cast::<[f32; 2]>()),
         }
     })
 }

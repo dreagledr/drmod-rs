@@ -11,10 +11,6 @@ pub(super) const MOUSE_INPUT: usize = 0x177B798;
 /// cInput::ms_aControllers — массив ControllerState[4] (XInput-кэш).
 #[allow(dead_code)]
 pub(super) const CONTROLLERS: usize = 0x19D05F0;
-/// Pl0000::enableRipperMode — включает Ripper Mode (обход ввода).
-pub(super) const ENABLE_RIPPER_MODE: usize = 0x785190;
-/// Pl0000::disableRipperMode(bool) — выключает Ripper Mode.
-pub(super) const DISABLE_RIPPER_MODE: usize = 0x7D9590;
 /// cInput::isKeybindDown(eSaveKeybind) — проверка удержания keybind (hold,
 /// для blade mode). Активация ripper её НЕ использует.
 pub(super) const IS_KEYBIND_DOWN: usize = 0x61D280;
@@ -49,21 +45,7 @@ pub(crate) mod input_bits {
     pub const FORWARD: u32 = 0x0040_0000;
 }
 
-/// Pl0000::m_fInputMagnitudeSquared — квадрат магнитуды ввода.
-pub(crate) const PL_INPUT_MAG_SQ: usize = 0xD28;
 /// Pl0000::m_fInputDirection — направление ввода (спроецировано на камеру).
 pub(crate) const PL_INPUT_DIR: usize = 0xD2C;
 /// Pl0000::m_nButtonJump — прыжок.
 pub(crate) const PL_BUTTON_JUMP: usize = 0xE18;
-/// Pl0000::m_nButtonLightAttack — лёгкая атака.
-pub(crate) const PL_BUTTON_LIGHT_ATTACK: usize = 0xE20;
-/// Pl0000::m_nButtonHeavyAttack — тяжёлая атака.
-pub(crate) const PL_BUTTON_HEAVY_ATTACK: usize = 0xE24;
-/// Pl0000::m_nButtonAction — действие.
-pub(crate) const PL_BUTTON_ACTION: usize = 0xE38;
-/// Pl0000::m_nButtonNinjarun — ниндзя-бег.
-pub(crate) const PL_BUTTON_NINJARUN: usize = 0xE48;
-/// Pl0000::m_nButtonBlademode — блейд-мод.
-pub(crate) const PL_BUTTON_BLADEMODE: usize = 0xE50;
-/// Pl0000::m_nButtonUseItem — предмет.
-pub(crate) const PL_BUTTON_USEITEM: usize = 0xE58;
