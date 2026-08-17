@@ -244,17 +244,17 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             // --- ПОДАЧА ВВОДА (override g_InputUnit0) ---
             ui.separator();
             ui.text("Input override:");
-            ui.checkbox("Зажать W", &mut hud.inject_w);
+            ui.checkbox("Зажать W", &mut hud.replay.inject.w);
             if ui.button("Прыжок (Space)") {
-                hud.inject_jump_frames = 2;
+                hud.replay.inject.jump_frames = 2;
             }
             if ui.button("Лёгкая атака (ЛКМ)") {
-                hud.inject_light_frames = 2;
+                hud.replay.inject.light_frames = 2;
             }
             if ui.button("Тяжёлая атака (ПКМ)") {
-                hud.inject_heavy_frames = 2;
+                hud.replay.inject.heavy_frames = 2;
             }
-            ui.checkbox("Крутить камеру (мышь)", &mut hud.inject_camera);
+            ui.checkbox("Крутить камеру (мышь)", &mut hud.replay.inject.camera);
             if ui.button("Ripper (R)") {
                 hooks::set_ripper_frames(1);
             }
@@ -300,19 +300,19 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             );
             ui.text(format!(
                 "record: armed={} active={} frames={} id={:?}",
-                hud.record_armed,
-                hud.record_active,
-                hud.record_frames.len(),
-                hud.last_record_id
+                hud.replay.record.armed,
+                hud.replay.record.active,
+                hud.replay.record.frames.len(),
+                hud.replay.record.last_id
             ));
             ui.text(format!(
                 "playback: armed={} active={} frame={}/{} log={} id={:?}",
-                hud.playback_armed,
-                hud.playback_active,
-                hud.playback_frame_idx,
-                hud.playback_frames.len(),
-                hud.playback_log.len(),
-                hud.last_playback_id
+                hud.replay.playback.armed,
+                hud.replay.playback.active,
+                hud.replay.playback.frame_idx,
+                hud.replay.playback.frames.len(),
+                hud.replay.playback.log.len(),
+                hud.replay.playback.last_id
             ));
 
             ui.separator();

@@ -119,56 +119,12 @@ struct HelloHud {
     // Хуки ввода (MinHook) + адреса сырого ввода — живут в tas::hooks.
     #[allow(dead_code)] // keep-alive: поле не читается, но Drop снимает хуки
     input_hooks: tas::hooks::InputHooks,
-    // Полное логирование состояния при записи/воспроизведении (NumPad5/6).
-    // Буферы копятся в памяти, флашатся в БД по завершении (bulk insert).
+    // Состояние Record/Replay + ручной инжекции ввода (debug) — в tas::replay.
     #[cfg(debug_assertions)]
-    pub(crate) record_armed: bool,
-    #[cfg(debug_assertions)]
-    pub(crate) record_active: bool,
-    #[cfg(debug_assertions)]
-    pub(crate) record_frames: Vec<types::ReplayFrame>,
-    #[cfg(debug_assertions)]
-    pub(crate) record_start: Option<Instant>,
-    #[cfg(debug_assertions)]
-    pub(crate) record_started_at: String,
-    #[cfg(debug_assertions)]
-    pub(crate) record_mission_id: i32,
-    #[cfg(debug_assertions)]
-    pub(crate) record_mission_name: String,
-    #[cfg(debug_assertions)]
-    pub(crate) last_record_id: Option<i64>,
-    #[cfg(debug_assertions)]
-    pub(crate) playback_armed: bool,
-    #[cfg(debug_assertions)]
-    pub(crate) playback_active: bool,
-    #[cfg(debug_assertions)]
-    pub(crate) playback_frames: Vec<types::ReplayFrame>,
-    #[cfg(debug_assertions)]
-    pub(crate) playback_frame_idx: usize,
-    #[cfg(debug_assertions)]
-    pub(crate) playback_log: Vec<types::ReplayFrame>,
-    #[cfg(debug_assertions)]
-    pub(crate) playback_start: Option<Instant>,
-    #[cfg(debug_assertions)]
-    pub(crate) playback_started_at: String,
-    #[cfg(debug_assertions)]
-    pub(crate) last_playback_id: Option<i64>,
+    pub(crate) replay: replay::ReplayState,
     // Предыдущее состояние «игрок читаем» — для детекта перехода в loading.
     #[cfg(debug_assertions)]
     prev_player_readable: bool,
-    // Инжекция ввода (debug-кнопки)
-    #[cfg(debug_assertions)]
-    pub(crate) inject_w: bool,
-    #[cfg(debug_assertions)]
-    pub(crate) inject_camera: bool,
-    #[cfg(debug_assertions)]
-    pub(crate) inject_jump_frames: u32,
-    #[cfg(debug_assertions)]
-    pub(crate) inject_light_frames: u32,
-    #[cfg(debug_assertions)]
-    pub(crate) inject_heavy_frames: u32,
-    #[cfg(debug_assertions)]
-    pub(crate) script_frames: u32,
     pub(crate) d3d_frame_count: u32,
     pub(crate) d3d_last_error: String,
     // Multiplayer
@@ -180,26 +136,6 @@ struct HelloHud {
     last_sent_mission_id: i32,
     last_skeleton_send: Instant,
     pub(crate) viewport: [f32; 4], // [X, Y, Width, Height] from D3D GetViewport
-}
-
-/// Триггер отложенного старта записи/воспроизведения (спавн R-01 beach).
-/// Зеркалит `segment::START_CONDITIONS` для `mission_id == 0x0118`.
-#[cfg(debug_assertions)]
-const BARE_START_TRIGGER: segment::Vec3 = segment::Vec3 {
-    x: -24.7,
-    y: 12.14,
-    z: 120.7,
-};
-
-/// Попадает ли позиция игрока в триггерную зону (допуск как в `segment_action`).
-#[cfg(debug_assertions)]
-fn in_bare_trigger(pos: Option<segment::Vec3>) -> bool {
-    let Some(p) = pos else {
-        return false;
-    };
-    (p.x - BARE_START_TRIGGER.x).abs() <= 0.1
-        && (p.y - BARE_START_TRIGGER.y).abs() <= 1.0
-        && (p.z - BARE_START_TRIGGER.z).abs() <= 0.1
 }
 
 /// Re-entrancy guard для VEH-обработчика. Если исключение случается внутри
@@ -353,51 +289,9 @@ impl HelloHud {
             cached_player_obj_ptr: std::ptr::null_mut(),
             input_hooks,
             #[cfg(debug_assertions)]
-            record_armed: false,
-            #[cfg(debug_assertions)]
-            record_active: false,
-            #[cfg(debug_assertions)]
-            record_frames: Vec::new(),
-            #[cfg(debug_assertions)]
-            record_start: None,
-            #[cfg(debug_assertions)]
-            record_started_at: String::new(),
-            #[cfg(debug_assertions)]
-            record_mission_id: 0,
-            #[cfg(debug_assertions)]
-            record_mission_name: String::new(),
-            #[cfg(debug_assertions)]
-            last_record_id: None,
-            #[cfg(debug_assertions)]
-            playback_armed: false,
-            #[cfg(debug_assertions)]
-            playback_active: false,
-            #[cfg(debug_assertions)]
-            playback_frames: Vec::new(),
-            #[cfg(debug_assertions)]
-            playback_frame_idx: 0,
-            #[cfg(debug_assertions)]
-            playback_log: Vec::new(),
-            #[cfg(debug_assertions)]
-            playback_start: None,
-            #[cfg(debug_assertions)]
-            playback_started_at: String::new(),
-            #[cfg(debug_assertions)]
-            last_playback_id: None,
+            replay: replay::ReplayState::default(),
             #[cfg(debug_assertions)]
             prev_player_readable: false,
-            #[cfg(debug_assertions)]
-            inject_w: false,
-            #[cfg(debug_assertions)]
-            inject_camera: false,
-            #[cfg(debug_assertions)]
-            inject_jump_frames: 0,
-            #[cfg(debug_assertions)]
-            inject_light_frames: 0,
-            #[cfg(debug_assertions)]
-            inject_heavy_frames: 0,
-            #[cfg(debug_assertions)]
-            script_frames: 0,
             d3d_frame_count: 0,
             d3d_last_error: String::new(),
             net_client: None,
@@ -461,7 +355,7 @@ impl HelloHud {
                         self.prev_player_readable, player_readable, state.menu_status_raw
                     ));
                     if !player_readable {
-                        self.stop_on_loading();
+                        self.replay.stop_on_loading(self.db_conn.as_ref());
                     }
                     self.prev_player_readable = player_readable;
                 }
@@ -757,254 +651,6 @@ impl HelloHud {
         })
     }
 
-    /// Этап 1 (debug): инжекция ввода через override хука updateInputUnit.
-    /// Все действия пишутся в глобальный InputUnit[0] — реальный источник
-    /// входа игрока (прямая запись в поля Pl0000 в Present не работает:
-    /// поздно — после handleActions). Биты — см. `addresses::input_bits`.
-    #[cfg(debug_assertions)]
-    pub(crate) fn update_input_injection(&mut self) {
-        // Во время воспроизведения override управляется исключительно playback —
-        // debug-инъекция не должна затирать применяемый кадр.
-        if self.playback_active {
-            return;
-        }
-
-        // Скрипт-последовательность (NumPad4): бег ~1 сек → прыжок на бегу →
-        // лёгкий удар → поворот камеры. Тайминги в кадрах (60 FPS).
-        const SCRIPT_RUN_END: u32 = 60; // бег первые 60 кадров (~1 сек)
-        const SCRIPT_JUMP_AT: u32 = 45; // прыжок на 45-м кадре (на бегу)
-        const SCRIPT_ATTACK_AT: u32 = 85; // лёгкий удар на 85-м кадре (после)
-        const SCRIPT_CAMERA_AT: u32 = 95; // поворот камеры с 95-го кадра
-        const SCRIPT_TOTAL: u32 = 130; // конец скрипта
-
-        let script_active = self.script_frames > 0;
-        let jump_active = self.inject_jump_frames > 0;
-        let light_active = self.inject_light_frames > 0;
-        let heavy_active = self.inject_heavy_frames > 0;
-        let active = script_active
-            || self.inject_w
-            || self.inject_camera
-            || jump_active
-            || light_active
-            || heavy_active;
-
-        let mut unit = types::InputUnit {
-            valid_input: 1,
-            ..Default::default()
-        };
-
-        if script_active {
-            let t = self.script_frames;
-            if t <= SCRIPT_RUN_END {
-                unit.buttons_down |= addresses::input_bits::FORWARD;
-                unit.left_stick = [0.0, -1000.0];
-            }
-            if (SCRIPT_JUMP_AT..SCRIPT_JUMP_AT + 2).contains(&t) {
-                unit.buttons_down |= addresses::input_bits::JUMP;
-                unit.buttons_pressed |= addresses::input_bits::JUMP;
-            }
-            if (SCRIPT_ATTACK_AT..SCRIPT_ATTACK_AT + 2).contains(&t) {
-                unit.buttons_down |= addresses::input_bits::LIGHT_ATTACK;
-                unit.buttons_pressed |= addresses::input_bits::LIGHT_ATTACK;
-            }
-            if (SCRIPT_CAMERA_AT..SCRIPT_TOTAL).contains(&t) {
-                // Поворот камеры вправо (мышь = right_stick, дельта в пикселях)
-                unit.right_stick = [300.0, 0.0];
-            }
-            self.script_frames += 1;
-            if self.script_frames > SCRIPT_TOTAL {
-                self.script_frames = 0;
-            }
-        }
-
-        if self.inject_w {
-            unit.buttons_down |= addresses::input_bits::FORWARD;
-            unit.left_stick = [0.0, -1000.0];
-        }
-        if jump_active {
-            unit.buttons_down |= addresses::input_bits::JUMP;
-            unit.buttons_pressed |= addresses::input_bits::JUMP;
-            self.inject_jump_frames -= 1;
-        }
-        if light_active {
-            unit.buttons_down |= addresses::input_bits::LIGHT_ATTACK;
-            unit.buttons_pressed |= addresses::input_bits::LIGHT_ATTACK;
-            self.inject_light_frames -= 1;
-        }
-        if heavy_active {
-            unit.buttons_down |= addresses::input_bits::HEAVY_ATTACK;
-            unit.buttons_pressed |= addresses::input_bits::HEAVY_ATTACK;
-            self.inject_heavy_frames -= 1;
-        }
-        if self.inject_camera {
-            unit.right_stick = [500.0, 0.0];
-        }
-        replay::set_input_override(types::InputOverride {
-            active,
-            input: unit,
-        });
-    }
-
-    /// Переключает запись по NumPad5 (отложенный старт).
-    /// `active → стоп + flush`, `armed → отмена`, `idle → arm` (старт по триггеру).
-    #[cfg(debug_assertions)]
-    pub(crate) fn toggle_record(&mut self) {
-        if self.record_active {
-            self.stop_record();
-        } else if self.record_armed {
-            self.record_armed = false;
-        } else {
-            self.stop_playback();
-            self.playback_armed = false;
-            self.record_armed = true;
-        }
-    }
-
-    /// Переключает воспроизведение по NumPad6 (отложенный старт).
-    /// `active → стоп + flush`, `armed → отмена`, `idle → arm` (требует кадры).
-    #[cfg(debug_assertions)]
-    pub(crate) fn toggle_playback(&mut self) {
-        if self.playback_active {
-            self.stop_playback();
-        } else if self.playback_armed {
-            self.playback_armed = false;
-        } else if !self.playback_frames.is_empty() {
-            self.stop_record();
-            self.record_armed = false;
-            replay::set_input_override(types::InputOverride::default());
-            // Снять остатки ручной keybind-эмуляции (NumPad7/8) до старта.
-            hooks::clear_keybind_emulation();
-            self.playback_armed = true;
-        }
-    }
-
-    /// Останавливает запись и флашит буфер в БД (kind=record). Кадры
-    /// сохраняются в `playback_frames`, чтобы запись можно было воспроизвести.
-    #[cfg(debug_assertions)]
-    fn stop_record(&mut self) {
-        if !self.record_active {
-            return;
-        }
-        self.record_active = false;
-        let frames = std::mem::take(&mut self.record_frames);
-        let duration_ms = self
-            .record_start
-            .map(|i| i.elapsed().as_millis() as i64)
-            .unwrap_or(0);
-        self.record_start = None;
-        let meta = types::ReplayRunMeta {
-            kind: "record",
-            mission_id: self.record_mission_id,
-            mission_name: self.record_mission_name.clone(),
-            started_at: self.record_started_at.clone(),
-            duration_ms,
-            source_replay_id: None,
-        };
-        self.last_record_id = self
-            .db_conn
-            .as_ref()
-            .and_then(|conn| db::flush_replay(conn, &meta, &frames));
-        self.playback_frames = frames;
-        logger::log_line(&format!(
-            "record: stop frames={} id={:?}",
-            self.playback_frames.len(),
-            self.last_record_id
-        ));
-    }
-
-    /// Останавливает воспроизведение, снимает override и флашит лог результата
-    /// в БД (kind=playback, source_replay_id=id исходной записи).
-    #[cfg(debug_assertions)]
-    fn stop_playback(&mut self) {
-        replay::set_input_override(types::InputOverride::default());
-        // Снять keybind-эмуляцию (ripper/blade): иначе удержание blade
-        // останется активным и будет подмешиваться в реальный ввод.
-        hooks::clear_keybind_emulation();
-        let was_active = self.playback_active;
-        self.playback_active = false;
-        self.playback_frame_idx = 0;
-        if was_active && !self.playback_log.is_empty() {
-            let log = std::mem::take(&mut self.playback_log);
-            let duration_ms = self
-                .playback_start
-                .map(|i| i.elapsed().as_millis() as i64)
-                .unwrap_or(0);
-            let meta = types::ReplayRunMeta {
-                kind: "playback",
-                mission_id: self.record_mission_id,
-                mission_name: self.record_mission_name.clone(),
-                started_at: self.playback_started_at.clone(),
-                duration_ms,
-                source_replay_id: self.last_record_id,
-            };
-            self.last_playback_id = self
-                .db_conn
-                .as_ref()
-                .and_then(|conn| db::flush_replay(conn, &meta, &log));
-            logger::log_line(&format!(
-                "playback: stop frames={} id={:?}",
-                log.len(),
-                self.last_playback_id
-            ));
-        }
-        self.playback_start = None;
-    }
-
-    /// Отложенный старт: если arm и игрок в триггере — запускает запись или
-    /// воспроизведение. Вызывается каждый кадр из `render()`.
-    #[cfg(debug_assertions)]
-    pub(crate) fn update_deferred_start(
-        &mut self,
-        pos: Option<segment::Vec3>,
-        mission_id: i32,
-        mission_name: &str,
-    ) {
-        if !in_bare_trigger(pos) {
-            return;
-        }
-        if self.record_armed {
-            self.record_armed = false;
-            logger::log_line("deferred: trigger -> start recording");
-            // Запись ловит только реальный ввод — сбрасываем keybind-эмуляцию,
-            // чтобы остатки ручного NumPad7/8 не подмешались в кадры.
-            hooks::clear_keybind_emulation();
-            self.record_active = true;
-            self.record_frames.clear();
-            self.record_start = Some(Instant::now());
-            self.record_started_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-            self.record_mission_id = mission_id;
-            self.record_mission_name = mission_name.to_string();
-        }
-        if self.playback_armed {
-            self.playback_armed = false;
-            logger::log_line("deferred: trigger -> start playback");
-            replay::set_input_override(types::InputOverride::default());
-            hooks::clear_keybind_emulation();
-            self.playback_active = true;
-            self.playback_frame_idx = 0;
-            self.playback_log.clear();
-            self.playback_start = Some(Instant::now());
-            self.playback_started_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-        }
-    }
-
-    /// Останавливает активную запись/воспроизведение при входе в loading.
-    /// Arm НЕ снимается — он должен пережить loading и сработать на спавне.
-    #[cfg(debug_assertions)]
-    fn stop_on_loading(&mut self) {
-        if self.record_active {
-            logger::log_line("loading: stop active recording");
-            self.stop_record();
-        }
-        if self.playback_active {
-            logger::log_line("loading: stop active playback");
-            self.stop_playback();
-        }
-        // Сбрасываем keybind-эмуляцию (ripper/blade): иначе при рестарте
-        // детуры isKeybindPressed/isKeybindDown возвращают 1 на пересоздающемся
-        // игроке → handleActions падает (access violation).
-        hooks::clear_keybind_emulation();
-    }
 }
 
 unsafe impl Send for HelloHud {}
@@ -1219,7 +865,7 @@ impl ImguiRenderLoop for HelloHud {
         // Этап 1 (debug): инжекция ввода через override g_InputUnit0 —
         // выполняется каждый кадр, чтобы debug-панель показывала состояние
         #[cfg(debug_assertions)]
-        self.update_input_injection();
+        self.replay.update_input_injection();
 
         // Диагностика: дамп m_CurrentInput игрока, позиции и g_unit0.
         // Логируется при КАЖДОМ изменении кнопок (down/pressed) — чтобы
@@ -1344,75 +990,30 @@ impl ImguiRenderLoop for HelloHud {
         // зону спавна. Перед блоком захвата/применения — чтобы кадр 0 записывался
         // в том же render, где сработал триггер.
         #[cfg(debug_assertions)]
-        self.update_deferred_start(ui_state.position, ui_state.mission_id, &ui_state.mission_name);
+        self.replay.update_deferred_start(ui_state.position, ui_state.mission_id, &ui_state.mission_name);
 
         // --- RECORD CAPTURE: полное состояние на кадр ---
         #[cfg(debug_assertions)]
-        if self.record_active {
-            self.record_frames.push(types::ReplayFrame {
-                frame_index: self.record_frames.len() as u32,
-                input: self.read_current_input(),
-                state: self.read_player_state().unwrap_or_default(),
-                camera: self.read_camera_state().unwrap_or_default(),
-            });
+        {
+            let input = self.read_current_input();
+            let state = self.read_player_state().unwrap_or_default();
+            let camera = self.read_camera_state().unwrap_or_default();
+            self.replay.capture_frame(input, state, camera);
         }
 
         // --- PLAYBACK: подача кадра по индексу + захват результата ---
         // Кадры подаются строго по индексу (1 кадр на вызов render), а не по dt —
         // dt-сопоставление теряло однокадровые фронты pressed/released.
         // NOTE: override, выставленный здесь, применяется игрой на СЛЕДУЮЩЕМ тике,
-        // поэтому playback_log[N] = результат кадра frame[N-1] (сдвиг на 1 кадр
-        // относительно record[N]); playback_log[0] — состояние спавна до подачи.
+        // поэтому playback.log[N] = результат кадра frame[N-1] (сдвиг на 1 кадр
+        // относительно record[N]); playback.log[0] — состояние спавна до подачи.
         #[cfg(debug_assertions)]
-        if self.playback_active {
-            if self.playback_frame_idx < self.playback_frames.len() {
-                let frame = self.playback_frames[self.playback_frame_idx];
-
-                // Ripper/blade не идут через InputUnit — handleActions читает их
-                // из DirectInput напрямую через isKeybindPressed(11)/isKeybindDown(8).
-                // Подаём их через keybind-эмуляцию, выводя фронт/удержание из
-                // записанного состояния: ripper — перепад ripper_enabled,
-                // blade — blade_mode_type != 0 (hold). Задание в render(K)
-                // применяется на тике K+1, т.е. синхронно с override InputUnit.
-                let prev_ripper = if self.playback_frame_idx > 0 {
-                    self.playback_frames[self.playback_frame_idx - 1].state.ripper_enabled
-                } else {
-                    0
-                };
-                if frame.state.ripper_enabled != prev_ripper {
-                    hooks::set_ripper_frames(1);
-                    logger::log_line(&format!(
-                        "playback: ripper edge {} -> {} at frame {}",
-                        prev_ripper,
-                        frame.state.ripper_enabled,
-                        self.playback_frame_idx
-                    ));
-                }
-                let blade_on = frame.state.blade_mode_type != 0;
-                if blade_on != hooks::blade_hold() {
-                    hooks::set_blade_hold(blade_on);
-                    logger::log_line(&format!(
-                        "playback: blade hold {} at frame {}",
-                        if blade_on { "ON" } else { "OFF" },
-                        self.playback_frame_idx
-                    ));
-                }
-
-                replay::set_input_override(types::InputOverride {
-                    active: true,
-                    input: frame.input,
-                });
-                self.playback_frame_idx += 1;
-                self.playback_log.push(types::ReplayFrame {
-                    frame_index: self.playback_log.len() as u32,
-                    input: self.read_current_input(),
-                    state: self.read_player_state().unwrap_or_default(),
-                    camera: self.read_camera_state().unwrap_or_default(),
-                });
-            } else {
-                // Конец записи — снять override и флашнуть лог воспроизведения.
-                self.stop_playback();
-            }
+        {
+            let input = self.read_current_input();
+            let state = self.read_player_state().unwrap_or_default();
+            let camera = self.read_camera_state().unwrap_or_default();
+            self.replay
+                .playback_tick(self.db_conn.as_ref(), input, state, camera);
         }
 
         // Key handlers (NumPad1/2/3) — debug only
@@ -1443,7 +1044,7 @@ impl ImguiRenderLoop for HelloHud {
             }
             // NumPad4 — скрипт: бег ~1 сек → прыжок на бегу → лёгкий удар
             if ui.is_key_pressed_no_repeat(Key::Keypad4) {
-                self.script_frames = 1;
+                self.replay.inject.script_frames = 1;
             }
         }
 
@@ -1451,10 +1052,10 @@ impl ImguiRenderLoop for HelloHud {
         #[cfg(debug_assertions)]
         {
             if ui.is_key_pressed_no_repeat(Key::Keypad5) {
-                self.toggle_record();
+                self.replay.toggle_record(self.db_conn.as_ref());
             }
             if ui.is_key_pressed_no_repeat(Key::Keypad6) {
-                self.toggle_playback();
+                self.replay.toggle_playback(self.db_conn.as_ref());
             }
             // NumPad7 — эмуляция клавиши R (ripper) через хук isKeybindPressed:
             // handleActions видит "R нажата" и запускает штатную активацию.
