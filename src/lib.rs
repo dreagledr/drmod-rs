@@ -18,6 +18,7 @@ mod ui;
 use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
 use tas::addresses;
+use tas::db;
 use tas::hooks;
 use tas::replay;
 use tas::types;
@@ -67,7 +68,7 @@ fn init_db() -> (String, Option<String>, Option<Connection>) {
         return (current, None, Some(conn));
     }
 
-    if replay::create_replay_tables(&conn).is_err() {
+    if db::create_replay_tables(&conn).is_err() {
         return (current, None, Some(conn));
     }
 
@@ -901,7 +902,7 @@ impl HelloHud {
         self.last_record_id = self
             .db_conn
             .as_ref()
-            .and_then(|conn| replay::flush_replay(conn, &meta, &frames));
+            .and_then(|conn| db::flush_replay(conn, &meta, &frames));
         self.playback_frames = frames;
         replay::log_line(&format!(
             "record: stop frames={} id={:?}",
@@ -938,7 +939,7 @@ impl HelloHud {
             self.last_playback_id = self
                 .db_conn
                 .as_ref()
-                .and_then(|conn| replay::flush_replay(conn, &meta, &log));
+                .and_then(|conn| db::flush_replay(conn, &meta, &log));
             replay::log_line(&format!(
                 "playback: stop frames={} id={:?}",
                 log.len(),

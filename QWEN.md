@@ -33,7 +33,8 @@ src/
 ├── skeleton.rs      # Bone/skeleton data structures
 ├── tas/             # TAS (tool-assisted speedrun) — input record/replay
 │   ├── addresses.rs #   Input memory addresses/constants
-│   ├── replay.rs    #   Record/playback logic, replay DB tables
+│   ├── db.rs        #   Replay SQLite tables + bulk insert
+│   ├── replay.rs    #   Record/playback logic, input override
 │   ├── hooks.rs     #   MinHook input hooks + raw input readers
 │   └── types.rs     #   Input/state DTOs (InputUnit, ReplayFrame, ...)
 server/              # Multiplayer server (tokio, 64-bit, Docker)
