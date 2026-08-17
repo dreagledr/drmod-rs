@@ -862,11 +862,6 @@ impl ImguiRenderLoop for HelloHud {
         }
         // ─────────────────────────────────────────────────────────────
 
-        // Этап 1 (debug): инжекция ввода через override g_InputUnit0 —
-        // выполняется каждый кадр, чтобы debug-панель показывала состояние
-        #[cfg(debug_assertions)]
-        self.replay.update_input_injection();
-
         // Диагностика: дамп m_CurrentInput игрока, позиции и g_unit0.
         // Логируется при КАЖДОМ изменении кнопок (down/pressed) — чтобы
         // поймать однократные фронты (прыжок/атаки), плюс heartbeat каждые
@@ -985,35 +980,26 @@ impl ImguiRenderLoop for HelloHud {
             ));
         }
 
-        // --- ОТЛОЖЕННЫЙ СТАРТ (arm → триггер позиции) ---
-        // Запускается запись/воспроизведение, когда игрок попал в триггерную
-        // зону спавна. Перед блоком захвата/применения — чтобы кадр 0 записывался
-        // в том же render, где сработал триггер.
-        #[cfg(debug_assertions)]
-        self.replay.update_deferred_start(ui_state.position, ui_state.mission_id, &ui_state.mission_name);
-
-        // --- RECORD CAPTURE: полное состояние на кадр ---
+        // --- RECORD/REPLAY: единый покадровый апдейт (debug) ---
+        // Инжекция → отложенный старт (arm → триггер позиции) → захват кадра
+        // записи → подача кадра воспроизведения. Кадр (input/state/camera)
+        // читается один раз и используется и для записи, и для лога
+        // воспроизведения. Отложенный старт выполняется до захвата, чтобы
+        // кадр 0 записывался в том же render, где сработал триггер.
         #[cfg(debug_assertions)]
         {
             let input = self.read_current_input();
             let state = self.read_player_state().unwrap_or_default();
             let camera = self.read_camera_state().unwrap_or_default();
-            self.replay.capture_frame(input, state, camera);
-        }
-
-        // --- PLAYBACK: подача кадра по индексу + захват результата ---
-        // Кадры подаются строго по индексу (1 кадр на вызов render), а не по dt —
-        // dt-сопоставление теряло однокадровые фронты pressed/released.
-        // NOTE: override, выставленный здесь, применяется игрой на СЛЕДУЮЩЕМ тике,
-        // поэтому playback.log[N] = результат кадра frame[N-1] (сдвиг на 1 кадр
-        // относительно record[N]); playback.log[0] — состояние спавна до подачи.
-        #[cfg(debug_assertions)]
-        {
-            let input = self.read_current_input();
-            let state = self.read_player_state().unwrap_or_default();
-            let camera = self.read_camera_state().unwrap_or_default();
-            self.replay
-                .playback_tick(self.db_conn.as_ref(), input, state, camera);
+            self.replay.update(
+                self.db_conn.as_ref(),
+                ui_state.position,
+                ui_state.mission_id,
+                &ui_state.mission_name,
+                input,
+                state,
+                camera,
+            );
         }
 
         // Key handlers (NumPad1/2/3) — debug only

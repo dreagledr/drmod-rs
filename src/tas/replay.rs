@@ -265,8 +265,8 @@ impl ReplayState {
     }
 
     /// Отложенный старт: если arm и игрок в триггере — запускает запись или
-    /// воспроизведение. Вызывается каждый кадр из `render()`.
-    pub(crate) fn update_deferred_start(
+    /// воспроизведение. Вызывается из `update` каждый кадр.
+    fn update_deferred_start(
         &mut self,
         pos: Option<segment::Vec3>,
         mission_id: i32,
@@ -322,7 +322,8 @@ impl ReplayState {
     /// Все действия пишутся в глобальный InputUnit[0] — реальный источник
     /// входа игрока (прямая запись в поля Pl0000 в Present не работает:
     /// поздно — после handleActions). Биты — см. `addresses::input_bits`.
-    pub(crate) fn update_input_injection(&mut self) {
+    /// Вызывается из `update` каждый кадр.
+    fn update_input_injection(&mut self) {
         // Во время воспроизведения override управляется исключительно playback —
         // debug-инъекция не должна затирать применяемый кадр.
         if self.playback.active {
@@ -405,8 +406,29 @@ impl ReplayState {
         });
     }
 
-    /// Захват кадра записи (вызывается из render каждый кадр).
-    pub(crate) fn capture_frame(&mut self, input: InputUnit, state: PlayerState, camera: CameraState) {
+    /// Единый покадровый апдейт Record/Replay (вызывается из render).
+    /// Порядок важен: инжекция → отложенный старт → захват кадра записи →
+    /// подача кадра воспроизведения. Кадр (input/state/camera) читается
+    /// вызывающей стороной один раз и используется и для записи, и для
+    /// лога воспроизведения.
+    pub(crate) fn update(
+        &mut self,
+        conn: Option<&Connection>,
+        pos: Option<segment::Vec3>,
+        mission_id: i32,
+        mission_name: &str,
+        input: InputUnit,
+        state: PlayerState,
+        camera: CameraState,
+    ) {
+        self.update_input_injection();
+        self.update_deferred_start(pos, mission_id, mission_name);
+        self.capture_frame(input, state, camera);
+        self.playback_tick(conn, input, state, camera);
+    }
+
+    /// Захват кадра записи (вызывается из `update` каждый кадр).
+    fn capture_frame(&mut self, input: InputUnit, state: PlayerState, camera: CameraState) {
         if self.record.active {
             self.record.frames.push(ReplayFrame {
                 frame_index: self.record.frames.len() as u32,
@@ -423,7 +445,7 @@ impl ReplayState {
     /// NOTE: override, выставленный здесь, применяется игрой на СЛЕДУЮЩЕМ тике,
     /// поэтому playback.log[N] = результат кадра frame[N-1] (сдвиг на 1 кадр
     /// относительно record[N]); playback.log[0] — состояние спавна до подачи.
-    pub(crate) fn playback_tick(
+    fn playback_tick(
         &mut self,
         conn: Option<&Connection>,
         cur_input: InputUnit,
