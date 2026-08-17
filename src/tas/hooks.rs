@@ -26,6 +26,14 @@ static ORIG_IS_KEYBIND_DOWN: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLo
 static RIPPER_FRAMES: AtomicU32 = AtomicU32::new(0);
 /// Флаг удержания blade mode (isKeybindDown, hold) в детуре.
 static BLADE_HOLD: AtomicU32 = AtomicU32::new(0);
+/// Сэмпл реального удержания blade (keybind 8) за кадр — результат оригинала
+/// `isKeybindDown`, накопленный детуром. Читается записью в render.
+#[cfg(debug_assertions)]
+static BLADE_DOWN_SAMPLED: AtomicU32 = AtomicU32::new(0);
+/// Сэмпл реального фронта ripper (keybind 11) за кадр — результат оригинала
+/// `isKeybindPressed`, накопленный детуром. Читается записью в render.
+#[cfg(debug_assertions)]
+static RIPPER_PRESSED_SAMPLED: AtomicU32 = AtomicU32::new(0);
 
 /// Взводит эмуляцию клавиши R (ripper) на `n` кадров — сырой ввод, который
 /// читается `isKeybindDown(KEYBIND_RIPPERMODE)`, а не `InputUnit`.
@@ -53,6 +61,30 @@ pub(crate) fn clear_keybind_emulation() {
     BLADE_HOLD.store(0, Ordering::Relaxed);
 }
 
+/// Читает сэмпл удержания blade за прошедший тик (накоплен детуром
+/// `isKeybindDown`). Сбрасывается в конце render-кадра через
+/// `reset_keybind_samples`.
+#[cfg(debug_assertions)]
+pub(crate) fn read_blade_down_sampled() -> bool {
+    BLADE_DOWN_SAMPLED.load(Ordering::Relaxed) != 0
+}
+
+/// Читает сэмпл фронта ripper за прошедший тик (накоплен детуром
+/// `isKeybindPressed`). Сбрасывается в конце render-кадра через
+/// `reset_keybind_samples`.
+#[cfg(debug_assertions)]
+pub(crate) fn read_ripper_pressed_sampled() -> bool {
+    RIPPER_PRESSED_SAMPLED.load(Ordering::Relaxed) != 0
+}
+
+/// Сбрасывает сэмплы blade/ripper — вызывается в конце каждого render-кадра,
+/// чтобы следующий тик накапливал сэмплы с нуля.
+#[cfg(debug_assertions)]
+pub(crate) fn reset_keybind_samples() {
+    BLADE_DOWN_SAMPLED.store(0, Ordering::Relaxed);
+    RIPPER_PRESSED_SAMPLED.store(0, Ordering::Relaxed);
+}
+
 /// Детур `cInput::updateInputUnit` (__cdecl). Вызывает оригинал, затем для
 /// `user_index == 0` перезаписывает unit нашим override (подача ввода).
 ///
@@ -75,29 +107,45 @@ unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_
 /// возвращает 1 (нажат фронт), пока эмуляция R активна (`RIPPER_FRAMES > 0`) —
 /// тогда `handleActions` запускает штатную активацию/деактивацию ripper
 /// с проверками условий и анимациями. Остальные keybind'ы идут в оригинал.
+/// Результат оригинала для `KEYBIND_RIPPERMODE` накапливается в
+/// `RIPPER_PRESSED_SAMPLED` — запись читает реальный фронт из этого сэмпла.
 unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
     if keybind == KEYBIND_RIPPERMODE && RIPPER_FRAMES.load(Ordering::Relaxed) > 0 {
         RIPPER_FRAMES.fetch_sub(1, Ordering::Relaxed);
         return 1;
     }
 
-    if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
-        return unsafe { orig(keybind) };
+    let result = if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
+        unsafe { orig(keybind) }
+    } else {
+        0
+    };
+    #[cfg(debug_assertions)]
+    if keybind == KEYBIND_RIPPERMODE && result != 0 {
+        RIPPER_PRESSED_SAMPLED.fetch_or(1, Ordering::Relaxed);
     }
-    0
+    result
 }
 
 /// Детур `cInput::isKeybindDown` (__cdecl, 0x61D280). Для `KEYBIND_BLADEMODE`
 /// возвращает 1 (удержание), пока `BLADE_HOLD` взведён — blade mode это
 /// hold-действие, активируется удержанием клавиши через handleActions.
+/// Результат оригинала для `KEYBIND_BLADEMODE` накапливается в
+/// `BLADE_DOWN_SAMPLED` — запись читает реальное удержание из этого сэмпла.
 unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
     if keybind == KEYBIND_BLADEMODE && BLADE_HOLD.load(Ordering::Relaxed) != 0 {
         return 1;
     }
-    if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
-        return unsafe { orig(keybind) };
+    let result = if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
+        unsafe { orig(keybind) }
+    } else {
+        0
+    };
+    #[cfg(debug_assertions)]
+    if keybind == KEYBIND_BLADEMODE && result != 0 {
+        BLADE_DOWN_SAMPLED.fetch_or(1, Ordering::Relaxed);
     }
-    0
+    result
 }
 
 /// Сохраняет trampoline (адрес оригинальной функции) после создания хука.

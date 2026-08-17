@@ -128,7 +128,7 @@ pub struct CameraState {
 }
 
 /// Один кадр записи: полный InputUnit (m_CurrentInput) + полное состояние
-/// персонажа и камеры + порядковый номер кадра.
+/// персонажа и камеры + порядковый номер кадра + реальные флаги blade/ripper.
 /// Номер монотонно растёт от старта записи — воспроизведение подаёт кадры
 /// строго по индексу (1 кадр на тик), без dt-сопоставления.
 #[repr(C)]
@@ -139,6 +139,12 @@ pub struct ReplayFrame {
     pub input: InputUnit,
     pub state: PlayerState,
     pub camera: CameraState,
+    /// Реальное удержание blade mode (keybind 8) в этом кадре — сэмпл детура
+    /// `isKeybindDown`, а не реконструкция из `blade_mode_type`.
+    pub blade_down: u8,
+    /// Реальный фронт ripper (keybind 11) в этом кадре — сэмпл детура
+    /// `isKeybindPressed`, а не перепад `ripper_enabled`.
+    pub ripper_pressed: u8,
 }
 
 /// Метаданные одного прогона записи/воспроизведения (строка в `replay_runs`).

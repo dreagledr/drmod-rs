@@ -425,9 +425,16 @@ impl ReplayState {
         self.update_deferred_start(pos, mission_id, mission_name);
         self.capture_frame(input, state, camera);
         self.playback_tick(conn, input, state, camera);
+        // Сброс сэмплов blade/ripper в конце кадра: следующий тик накапливает
+        // сэмплы с нуля, а кадр 0 записи (старт в этом же render) уже прочитал
+        // сэмплы прошедшего тика.
+        super::hooks::reset_keybind_samples();
     }
 
     /// Захват кадра записи (вызывается из `update` каждый кадр).
+    /// Флаги blade/ripper берутся из сэмплов детуров `isKeybindDown`/
+    /// `isKeybindPressed` — реальный ввод, который игра видела в прошедшем
+    /// тике, а не реконструкция из состояния.
     fn capture_frame(&mut self, input: InputUnit, state: PlayerState, camera: CameraState) {
         if self.record.active {
             self.record.frames.push(ReplayFrame {
@@ -435,6 +442,8 @@ impl ReplayState {
                 input,
                 state,
                 camera,
+                blade_down: super::hooks::read_blade_down_sampled() as u8,
+                ripper_pressed: super::hooks::read_ripper_pressed_sampled() as u8,
             });
         }
     }
@@ -460,25 +469,18 @@ impl ReplayState {
 
             // Ripper/blade не идут через InputUnit — handleActions читает их
             // из DirectInput напрямую через isKeybindPressed(11)/isKeybindDown(8).
-            // Подаём их через keybind-эмуляцию, выводя фронт/удержание из
-            // записанного состояния: ripper — перепад ripper_enabled,
-            // blade — blade_mode_type != 0 (hold). Задание в render(K)
+            // Подаём их через keybind-эмуляцию прямо из записанных флагов
+            // реального ввода (сэмплы детуров при записи): ripper — фронт
+            // ripper_pressed, blade — удержание blade_down. Задание в render(K)
             // применяется на тике K+1, т.е. синхронно с override InputUnit.
-            let prev_ripper = if self.playback.frame_idx > 0 {
-                self.playback.frames[self.playback.frame_idx - 1].state.ripper_enabled
-            } else {
-                0
-            };
-            if frame.state.ripper_enabled != prev_ripper {
+            if frame.ripper_pressed != 0 {
                 super::hooks::set_ripper_frames(1);
                 logger::log_line(&format!(
-                    "playback: ripper edge {} -> {} at frame {}",
-                    prev_ripper,
-                    frame.state.ripper_enabled,
+                    "playback: ripper pressed at frame {}",
                     self.playback.frame_idx
                 ));
             }
-            let blade_on = frame.state.blade_mode_type != 0;
+            let blade_on = frame.blade_down != 0;
             if blade_on != super::hooks::blade_hold() {
                 super::hooks::set_blade_hold(blade_on);
                 logger::log_line(&format!(
@@ -498,6 +500,8 @@ impl ReplayState {
                 input: cur_input,
                 state,
                 camera,
+                blade_down: frame.blade_down,
+                ripper_pressed: frame.ripper_pressed,
             });
         } else {
             // Конец записи — снять override и флашнуть лог воспроизведения.
