@@ -31,6 +31,8 @@ src/
 ├── settings.rs      # User settings (ghost opacity, show ghost toggle)
 ├── d3d_render.rs    # CylinderRenderer, SphereRenderer for 3D overlays
 ├── skeleton.rs      # Bone/skeleton data structures
+├── tas/             # TAS (tool-assisted speedrun) — input record/replay
+│   └── replay.rs    #   Input hooks, record/playback, replay DB tables
 server/              # Multiplayer server (tokio, 64-bit, Docker)
 protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPacket)
 ref/                 # Git submodules — read-only reference projects

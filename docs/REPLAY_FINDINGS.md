@@ -129,7 +129,7 @@ call 0x785190           ; enableRipperMode()
 - прямой вызов `enableRipperMode()` @ `0x785190` / `disableRipperMode(false)` @ `0x7D9590` (`__thiscall`) — но **без условий и анимаций** (мгновенно, без fade) — только fallback;
 - ✅ **хук `isKeybindPressed` (0x61D2D0)** для ripper + **хук `isKeybindDown` (0x61D280)** для blade — детур возвращает `1` для нужного keybind → `handleActions` запускает штатную цепочку (условия + анимации).
 
-**Реализация** (`src/replay.rs`, debug): `is_keybind_pressed_detour` (RIPPERMODE, счётчик `RIPPER_FRAMES`) + `is_keybind_down_detour` (BLADEMODE, флаг `BLADE_HOLD`). NumPad7 = фронт ripper, NumPad8 = toggle blade-удержания.
+**Реализация** (`src/tas/replay.rs`, debug): `is_keybind_pressed_detour` (RIPPERMODE, счётчик `RIPPER_FRAMES`) + `is_keybind_down_detour` (BLADEMODE, флаг `BLADE_HOLD`). NumPad7 = фронт ripper, NumPad8 = toggle blade-удержания.
 
 ## Опровергнутые гипотезы (не тратить время повторно)
 

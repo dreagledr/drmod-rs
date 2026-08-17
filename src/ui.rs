@@ -3,7 +3,7 @@ use crate::net;
 #[cfg(debug_assertions)]
 use crate::overlay;
 #[cfg(debug_assertions)]
-use crate::replay;
+use crate::tas::replay;
 use crate::segment;
 use crate::HelloHud;
 use imgui::*;

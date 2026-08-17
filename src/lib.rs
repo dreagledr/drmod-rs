@@ -9,14 +9,15 @@ mod d3d_render;
 mod game;
 mod net;
 mod overlay;
-mod replay;
 mod segment;
 mod settings;
 mod skeleton;
+mod tas;
 mod ui;
 
 use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
+use tas::replay;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
 

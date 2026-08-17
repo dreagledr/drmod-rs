@@ -90,7 +90,7 @@ bit   = 1 << (code & 31)
 | Numpad Enter | `0xAA` | `keys[5] |= 0x00000400` |
 | Numpad 0…9 | `0xB9…0xB0` (`0xB9 − n`) | `keys[5]` |
 
-Проверено: WASD, 1, Space, Enter, Tab, Shift, Ctrl, Alt, Esc, все стрелки, F1–F3, Numpad 0–2, Numpad Enter. F4–F12 и Numpad 3–9 — по экстраполяции (`Fn = 0xA0 − n`, `Numpad n = 0xB9 − n`); неизвестные коды в debug-панели показываются как `0xXX`. Для Record/Replay маппинг не нужен (битмаски копируются как есть), для конструирования ввода — см. `replay::vk_to_key_code` / `replay::key_code_name` (`src/replay.rs`).
+Проверено: WASD, 1, Space, Enter, Tab, Shift, Ctrl, Alt, Esc, все стрелки, F1–F3, Numpad 0–2, Numpad Enter. F4–F12 и Numpad 3–9 — по экстраполяции (`Fn = 0xA0 − n`, `Numpad n = 0xB9 − n`); неизвестные коды в debug-панели показываются как `0xXX`. Для Record/Replay маппинг не нужен (битмаски копируются как есть), для конструирования ввода — см. `replay::vk_to_key_code` / `replay::key_code_name` (`src/tas/replay.rs`).
 
 **Мышь** — `cInput::ms_MouseInput = base + 0x177B798` (тип `MouseInput`):
 
@@ -267,7 +267,7 @@ Ripper и blade mode **не идут через `InputUnit`** — они акт�
 
 ## 4. Архитектура решения
 
-### 4.1. Новый модуль `src/replay.rs`
+### 4.1. Новый модуль `src/tas/replay.rs`
 
 ```rust
 pub enum ReplayMode {
@@ -303,7 +303,7 @@ const UPDATE_INPUT_UNIT: usize = 0x9DAFE0;    // cInput::updateInputUnit (точ
 const GLOBAL_INPUT_UNIT0: usize = 0x177B850;  // g_InputUnit0 (источник входа игрока)
 ```
 
-Методы (уже реализованы в `src/replay.rs` / `HelloHud`):
+Методы (уже реализованы в `src/tas/replay.rs` / `HelloHud`):
 
 ```rust
 fn read_global_input_unit(&self) -> InputUnit;   // чтение g_InputUnit0
@@ -412,7 +412,7 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 | Тяжёлая атака | ПКМ (`mouse=2`) | `0x80` (бит 7) |
 | Камера | мышь | `right_stick` (дельта мыши, до ~±2000) |
 
-Константы — `replay::input_bits` (`src/replay.rs`).
+Константы — `replay::input_bits` (`src/tas/replay.rs`).
 
 **Проверено:** персонаж бежит/прыгает/атакует/камера крутится без реального ввода; после снятия override реальный ввод возвращается.
 
@@ -430,7 +430,7 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 **Отложенный старт:** NumPad5/6 взводит arm; запись/воспроизведение стартуют автоматически, когда игрок попадает в триггерную зону спавна R-01 beach (`-24.7, 12.14, 120.7`, допуск ±0.1 XY / ±1.0 Y). Триггер — хардкод `BARE_START_TRIGGER` в `src/lib.rs` (зеркалит `segment::START_CONDITIONS[0x0118]`). Это убирает ручной тайминг/дрейф: запись и воспроизведение стартуют в одной точке пространства.
 
 **Реализация:**
-1. В `src/replay.rs` — буфер короткой записи `BareRecording { active, frames }` (static `Mutex`, независим от БД): `start_bare_recording()` / `stop_bare_recording()` / `is_bare_recording()` / `bare_recording_frame_count()`, приватный `record_bare_frame()`. Кадры пишутся с порядковым номером `frame_index` (`st.frames.len() as u32`), а не с `duration_ms`.
+1. В `src/tas/replay.rs` — буфер короткой записи `BareRecording { active, frames }` (static `Mutex`, независим от БД): `start_bare_recording()` / `stop_bare_recording()` / `is_bare_recording()` / `bare_recording_frame_count()`, приватный `record_bare_frame()`. Кадры пишутся с порядковым номером `frame_index` (`st.frames.len() as u32`), а не с `duration_ms`.
 2. `InputOverride` расширен до полного `InputUnit`: `{ active, input }`, детур делает `*unit = guard.input` (полная запись).
 3. В детуре `update_input_unit_detour` запись читается **до** вызова оригинала (unit ещё содержит реальный ввод — оригинал сбрасывает его в ноль), override пишется **после** оригинала.
 4. В `src/lib.rs` (`HelloHud`) — поля `bare_playback` / `bare_playback_frames` / `bare_playback_frame_idx` / `bare_record_armed` / `bare_playback_armed`; методы `toggle_bare_record` / `toggle_bare_playback` (arm/стоп/отмена) / `update_bare_deferred_start` / `stop_bare_playback`; в `render()` сначала `update_bare_deferred_start` (arm → триггер), затем применение кадра строго по индексу (`bare_playback_frame_idx` растёт на 1 за кадр, без dt). `update_input_injection` делает early-return при `bare_playback`.
@@ -447,7 +447,7 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 > `replay_record_frames`/`replay_playback_frames` по завершении. Пункты 4–5 ниже
 > (сегментная интеграция `SegmentAction::End`) — не сделаны.
 
-1. Добавить в `src/replay.rs`: `ReplayMode`, `ReplayFrame { frame_index, input: InputUnit }` (dt не воспроизводит геймплей — см. Этап 1.5).
+1. Добавить в `src/tas/replay.rs`: `ReplayMode`, `ReplayFrame { frame_index, input: InputUnit }` (dt не воспроизводит геймплей — см. Этап 1.5).
 2. **Расширить `InputOverride` до полного `InputUnit`** (сейчас только `buttons_down`/`pressed`/`left_stick`/`right_stick`; добавить `buttons_released`, `buttons_alternated`, `left_trigger`, `right_trigger`, `valid_input`, `repeat_count`) — нужно для точной записи и воспроизведения.
 3. **Точка записи:** в детуре `update_input_unit_detour` (после вызова оригинала, при **выключенном** override) читать реальный `InputUnit` и пушить `ReplayFrame` с `frame_index` (счётчик кадров от старта). В `Present` читать нельзя — unit сброшен (`valid=0`).
 4. Добавить таблицы `replays`/`replay_frames` (`input_unit BLOB`, 48 байт). WAL уже включён в `init_db`.
@@ -477,7 +477,7 @@ DirectInput → updateInputUnit (заполняет 4 глобальных Input
 
 ### Этап 6 — Документация
 
-1. Обновить `QWEN.md`: новая секция «Record/Replay» с адресами ввода (`ms_KeyInput`, `ms_MouseInput`, `ms_aControllers`, `ms_bUpdateKeyboard/ms_bUpdateMouse`), новый модуль `src/replay.rs`, новые таблицы БД `replays`/`replay_frames`.
+1. Обновить `QWEN.md`: новая секция «Record/Replay» с адресами ввода (`ms_KeyInput`, `ms_MouseInput`, `ms_aControllers`, `ms_bUpdateKeyboard/ms_bUpdateMouse`), новый модуль `src/tas/replay.rs`, новые таблицы БД `replays`/`replay_frames`.
 
 ---
 
