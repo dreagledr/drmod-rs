@@ -1,9 +1,18 @@
 //! HTTP API автоматизации: скрипты ввода, состояние игры, кольцевой буфер логов.
 //!
-//! Сервер слушает `127.0.0.1:5223` (tiny_http) в отдельном потоке. Render-цикл
-//! продвигает активный скрипт (подача ввода через `replay::set_input_override`
-//! и keybind-эмуляцию ripper/blade), пишет кадры в кольцевой буфер и обновляет
-//! снимок `/state`. HTTP-поток только читает `SharedState` (Arc<Mutex>).
+//! Сервер слушает `127.0.0.1:5223` (собственный минимальный HTTP-сервер на
+//! `TcpListener`) в отдельном потоке. Render-цикл продвигает активный скрипт
+//! (подача ввода через `replay::set_input_override` и keybind-эмуляцию
+//! ripper/blade), пишет кадры в кольцевой буфер и обновляет снимок `/state`.
+//! HTTP-поток только читает `SharedState` (Arc<Mutex>).
+//!
+//! Собственный сервер вместо tiny_http: tiny_http не выставляет таймауты на
+//! сокетах (клиент может заблокировать поток навсегда в `respond`/чтении тела)
+//! и порождает неуправляемые внутренние потоки (accept + TaskPool + на каждое
+//! соединение), которые остаются живыми на выгруженном коде DLL при eject.
+//! Здесь один поток, неблокирующий accept с опросом stop-флага и таймауты
+//! read/write на каждом соединении — `shutdown()` гарантированно завершает
+//! поток за ограниченное время.
 //!
 //! Дизайн — `docs/API.md`.
 
@@ -16,11 +25,11 @@ use crate::ui::UiState;
 use serde::Serialize;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
-use std::io::Read;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use tiny_http::{Header, Method, Request, Response, Server};
+use std::time::{Duration, Instant};
 
 /// Адрес и порт HTTP API.
 const BIND_ADDR: &str = "127.0.0.1:5223";
@@ -32,6 +41,15 @@ const RING_CAPACITY: usize = 3600;
 const MAX_BODY_BYTES: u64 = 64 * 1024;
 /// Максимум кадров в ответе /logs.
 const MAX_LOG_LIMIT: usize = 5000;
+/// Таймаут чтения/записи на клиентском сокете: клиент, который не читает
+/// ответ или не досылает тело, не может заблокировать HTTP-поток навсегда
+/// (иначе join в shutdown() зависнет на выгрузке DLL).
+const IO_TIMEOUT: Duration = Duration::from_secs(1);
+/// Пауза accept-цикла при отсутствии соединений (неблокирующий listener) —
+/// shutdown() будит поток максимум за это время.
+const ACCEPT_POLL_MS: u64 = 10;
+/// Лимит заголовков запроса (защита от гигантских заголовков).
+const MAX_HEADER_BYTES: usize = 16 * 1024;
 
 /// Встроенный скрипт NumPad4: бег ~1 сек → прыжок на бегу → лёгкий удар →
 /// поворот камеры. Ровно текущее поведение `update_input_injection`.
@@ -218,15 +236,15 @@ impl ApiServer {
         }));
 
         let stop = Arc::new(AtomicBool::new(false));
-        let handle = match Server::http(BIND_ADDR) {
-            Ok(server) => {
+        let handle = match TcpListener::bind(BIND_ADDR) {
+            Ok(listener) => {
                 logger::log_line(&format!("api: http server on {}", BIND_ADDR));
                 let state = Arc::clone(&state);
                 let stop = Arc::clone(&stop);
                 Some(
                     std::thread::Builder::new()
                         .name("drmod-api".into())
-                        .spawn(move || api_thread(server, state, stop))
+                        .spawn(move || api_thread(listener, state, stop))
                         .expect("api thread spawn"),
                 )
             }
@@ -393,46 +411,121 @@ impl Drop for ApiServer {
     }
 }
 
-/// Цикл HTTP-потока: принимает запросы, пока не взведён `stop`.
-/// `recv_timeout` вместо блокирующего `recv` — поток выходит максимум через
-/// 100 мс после `shutdown` (Server не Clone, unblock из другого потока недоступен).
-fn api_thread(server: Server, state: Arc<Mutex<SharedState>>, stop: Arc<AtomicBool>) {
+/// Цикл HTTP-потока: неблокирующий accept + опрос stop-флага. Поток выходит
+/// максимум через ACCEPT_POLL_MS после shutdown (или после текущего
+/// соединения, ограниченного IO_TIMEOUT) — join в shutdown() не виснет.
+fn api_thread(listener: TcpListener, state: Arc<Mutex<SharedState>>, stop: Arc<AtomicBool>) {
+    let _ = listener.set_nonblocking(true);
     while !stop.load(Ordering::Relaxed) {
-        match server.recv_timeout(std::time::Duration::from_millis(100)) {
-            Ok(Some(request)) => handle_request(request, &state),
-            Ok(None) => continue,
+        match listener.accept() {
+            Ok((stream, _)) => {
+                // Таймауты на сокете: клиент, который не читает ответ или не
+                // досылает тело, не может заблокировать поток навсегда.
+                let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
+                let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
+                handle_connection(stream, &state);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(ACCEPT_POLL_MS));
+            }
             Err(_) => break,
         }
     }
 }
 
-/// Разбирает запрос и возвращает ответ.
-fn handle_request(mut request: Request, state: &Arc<Mutex<SharedState>>) {
-    let method = request.method().clone();
-    let url = request.url().to_string();
-    let response = route(&method, &url, &mut request, state);
-    let _ = request.respond(response);
+/// Обслуживает одно соединение: читает заголовки и тело, маршрутизирует,
+/// пишет ответ и закрывает соединение (Connection: close — без keep-alive,
+/// висящих соединений не остаётся).
+fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>) {
+    // Читаем заголовки до \r\n\r\n (лимит MAX_HEADER_BYTES).
+    let mut buf = [0u8; 2048];
+    let mut head = Vec::new();
+    let header_end = loop {
+        if let Some(p) = head.windows(4).position(|w| w == b"\r\n\r\n") {
+            break p + 4;
+        }
+        if head.len() > MAX_HEADER_BYTES {
+            respond(&mut stream, 400, &json!({ "error": "headers too large" }));
+            return;
+        }
+        match stream.read(&mut buf) {
+            Ok(0) => return, // клиент закрыл соединение
+            Ok(n) => head.extend_from_slice(&buf[..n]),
+            Err(_) => return, // таймаут/ошибка — бросаем соединение
+        }
+    };
+
+    // Первая строка: METHOD SP TARGET SP HTTP/x.y.
+    let head_str = String::from_utf8_lossy(&head[..header_end]);
+    let mut lines = head_str.split("\r\n");
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("").to_string();
+    let target = parts.next().unwrap_or("").to_string();
+
+    // Content-Length и Transfer-Encoding из заголовков.
+    let mut content_length = 0usize;
+    let mut chunked = false;
+    for line in lines {
+        if let Some((name, value)) = line.split_once(':') {
+            let name = name.trim();
+            let value = value.trim();
+            if name.eq_ignore_ascii_case("content-length") {
+                content_length = value.parse().unwrap_or(0);
+            } else if name.eq_ignore_ascii_case("transfer-encoding") {
+                chunked = !value.eq_ignore_ascii_case("identity");
+            }
+        }
+    }
+    if chunked {
+        respond(&mut stream, 400, &json!({ "error": "chunked transfer not supported" }));
+        return;
+    }
+    if content_length > MAX_BODY_BYTES as usize {
+        respond(&mut stream, 413, &json!({ "error": "body too large" }));
+        return;
+    }
+
+    // Тело: остаток после заголовков (мог прийти в том же пакете) +
+    // дозапись до Content-Length.
+    let mut body_bytes = head[header_end..].to_vec();
+    let mut remaining = content_length.saturating_sub(body_bytes.len());
+    while remaining > 0 {
+        match stream.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => {
+                let take = n.min(remaining);
+                body_bytes.extend_from_slice(&buf[..take]);
+                remaining -= take;
+            }
+            Err(_) => return,
+        }
+    }
+    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+
+    let (code, value) = route(&method, &target, &body, state);
+    respond(&mut stream, code, &value);
 }
 
-/// Маршрутизация по (метод, путь).
+/// Маршрутизация по (метод, путь). Возвращает (код, JSON-тело ответа).
 fn route(
-    method: &Method,
-    url: &str,
-    request: &mut Request,
+    method: &str,
+    target: &str,
+    body: &str,
     state: &Arc<Mutex<SharedState>>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
-    let (path, query) = match url.split_once('?') {
+) -> (u16, serde_json::Value) {
+    let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p, q),
-        None => (url, ""),
+        None => (target, ""),
     };
     match (method, path) {
-        (&Method::Get, "/health") => json_response(200, &health_json(state)),
-        (&Method::Get, "/state") => json_response(200, &state_json(state)),
-        (&Method::Post, "/script/run") => handle_script_run(request, state),
-        (&Method::Post, "/script/stop") => handle_script_stop(state),
-        (&Method::Get, path) if path.starts_with("/script/") => handle_script_get(path, state),
-        (&Method::Get, "/logs") => handle_logs(query, state),
-        _ => json_response(404, &json!({ "error": "not found" })),
+        ("GET", "/health") => (200, health_json(state)),
+        ("GET", "/state") => (200, state_json(state)),
+        ("POST", "/script/run") => handle_script_run(body, state),
+        ("POST", "/script/stop") => handle_script_stop(state),
+        ("GET", path) if path.starts_with("/script/") => handle_script_get(path, state),
+        ("GET", "/logs") => handle_logs(query, state),
+        _ => (404, json!({ "error": "not found" })),
     }
 }
 
@@ -481,22 +574,10 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> serde_json::Value {
 }
 
 /// `POST /script/run` — запуск скрипта из JSON-тела.
-fn handle_script_run(
-    request: &mut Request,
-    state: &Arc<Mutex<SharedState>>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
-    let mut body = String::new();
-    if request
-        .as_reader()
-        .take(MAX_BODY_BYTES)
-        .read_to_string(&mut body)
-        .is_err()
-    {
-        return json_response(400, &json!({ "error": "failed to read body" }));
-    }
-    let (name, commands) = match parse_script(&body) {
+fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
+    let (name, commands) = match parse_script(body) {
         Ok(v) => v,
-        Err(e) => return json_response(400, &json!({ "error": e })),
+        Err(e) => return (400, json!({ "error": e })),
     };
     let mut guard = state.lock().unwrap();
     if guard
@@ -505,9 +586,9 @@ fn handle_script_run(
         .is_some_and(|s| s.status == ScriptStatus::Running)
     {
         let s = guard.script.as_ref().unwrap();
-        return json_response(
+        return (
             409,
-            &json!({ "error": format!("script already running: id={} name={}", s.id, s.name) }),
+            json!({ "error": format!("script already running: id={} name={}", s.id, s.name) }),
         );
     }
     let id = guard.next_script_id;
@@ -527,41 +608,38 @@ fn handle_script_run(
         "api: script {} '{}' started ({} frames)",
         id, name, total_frames
     ));
-    json_response(
+    (
         200,
-        &json!({ "script_id": id, "name": name, "total_frames": total_frames }),
+        json!({ "script_id": id, "name": name, "total_frames": total_frames }),
     )
 }
 
 /// `POST /script/stop` — остановка активного скрипта.
-fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> Response<std::io::Cursor<Vec<u8>>> {
+fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
     let mut guard = state.lock().unwrap();
     match guard.script.as_mut() {
         Some(s) if s.status == ScriptStatus::Running => {
             let id = s.id;
             stop_script(s);
             logger::log_line(&format!("api: script {} stopped by request", id));
-            json_response(200, &json!({ "stopped": true, "script_id": id }))
+            (200, json!({ "stopped": true, "script_id": id }))
         }
-        _ => json_response(404, &json!({ "error": "no active script" })),
+        _ => (404, json!({ "error": "no active script" })),
     }
 }
 
 /// `GET /script/{id}` — статус скрипта.
-fn handle_script_get(
-    path: &str,
-    state: &Arc<Mutex<SharedState>>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+fn handle_script_get(path: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
     let id_str = &path["/script/".len()..];
     let id: u32 = match id_str.parse() {
         Ok(v) => v,
-        Err(_) => return json_response(400, &json!({ "error": "invalid script id" })),
+        Err(_) => return (400, json!({ "error": "invalid script id" })),
     };
     let guard = state.lock().unwrap();
     match guard.script.as_ref().filter(|s| s.id == id) {
-        Some(s) => json_response(
+        Some(s) => (
             200,
-            &json!({
+            json!({
                 "id": s.id,
                 "name": s.name,
                 "status": s.status,
@@ -569,15 +647,12 @@ fn handle_script_get(
                 "total_frames": s.total_frames,
             }),
         ),
-        None => json_response(404, &json!({ "error": format!("script {} not found", id) })),
+        None => (404, json!({ "error": format!("script {} not found", id) })),
     }
 }
 
 /// `GET /logs` — кадры из кольцевого буфера по интервалу/скрипту.
-fn handle_logs(
-    query: &str,
-    state: &Arc<Mutex<SharedState>>,
-) -> Response<std::io::Cursor<Vec<u8>>> {
+fn handle_logs(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
     let params = parse_query(query);
     let guard = state.lock().unwrap();
     let now = guard.start.elapsed().as_millis() as u64;
@@ -601,9 +676,9 @@ fn handle_logs(
         .iter()
         .map(|f| f.to_json())
         .collect();
-    json_response(
+    (
         200,
-        &json!({
+        json!({
             "from_ms": from_ms,
             "to_ms": to_ms,
             "count": frames.len(),
@@ -612,15 +687,25 @@ fn handle_logs(
     )
 }
 
-/// JSON-ответ с кодом и Content-Type: application/json.
-fn json_response<T: Serialize>(code: u16, data: &T) -> Response<std::io::Cursor<Vec<u8>>> {
-    let body = serde_json::to_string(data).unwrap_or_else(|_| "{}".to_string());
-    Response::from_string(body)
-        .with_status_code(code)
-        .with_header(
-            Header::from_bytes(&b"Content-Type"[..], &b"application/json; charset=utf-8"[..])
-                .expect("static header"),
-        )
+/// Пишет HTTP-ответ с JSON-телом и Connection: close (без keep-alive —
+/// соединение живёт ровно один запрос, висящих соединений нет).
+fn respond(stream: &mut TcpStream, code: u16, value: &serde_json::Value) {
+    let body = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+    let reason = match code {
+        200 => "OK",
+        400 => "Bad Request",
+        404 => "Not Found",
+        409 => "Conflict",
+        413 => "Payload Too Large",
+        _ => "Error",
+    };
+    let head = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        code, reason, body.len()
+    );
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(body.as_bytes());
+    let _ = stream.flush();
 }
 
 /// Разбор query-строки в map (без URL-декодирования — параметры числовые).

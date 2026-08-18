@@ -185,6 +185,11 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 - `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary (DLL embedded via `include_bytes!`, extracted to `%TEMP%` at runtime)
 
+### Smoke tests
+
+- `test_connect.ps1` — multiplayer server (TCP connect/disconnect, dashboard)
+- `test_api.ps1` — HTTP API (health/state/script run+get+stop/logs, error paths, 20 parallel requests); requires the game running with the mod injected
+
 ## Development
 
 ### Commit Rules
@@ -206,7 +211,6 @@ cargo run --release -- -n "Custom Window Name.exe"
 | `rusqlite` (0.40.1, bundled) | SQLite for persisting run data |
 | `chrono` (0.4.45) | Time formatting for run timestamps |
 | `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol and HTTP API |
-| `tiny_http` (0.12) | HTTP server for the automation API (127.0.0.1:5223) |
 | `drmod-protocol` | Shared types for client-server communication |
 
 ### Notes
@@ -214,7 +218,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 - **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since addresses are computed once in `new()` and never mutated.
 - All static addresses are calculated once at init time, not per-frame.
 - **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window (record/playback status, segment timer, mission/menu status, compact player state), `Actions` window (numpad hotkey reference), Numpad keys, saved position display. Release builds keep only Multiplayer and Settings windows.
-- **HTTP API** (`src/api.rs`, debug + release): tiny_http on `127.0.0.1:5223` — `POST /script/run` (JSON scripts in frames), `GET /state`, `GET /logs?from_ms&to_ms&script_id`, `GET /health`. Ring buffer of 3600 frames (60 s). Scripts stop automatically on loading and before eject. NumPad4 runs the builtin script through the same `ScriptRunner`. Design: `docs/API.md`.
+- **HTTP API** (`src/api.rs`, debug + release): own minimal HTTP server (raw `TcpListener`, no tiny_http) on `127.0.0.1:5223` — `POST /script/run` (JSON scripts in frames), `GET /state`, `GET /logs?from_ms&to_ms&script_id`, `GET /health`. Ring buffer of 3600 frames (60 s). Scripts stop automatically on loading and before eject. NumPad4 runs the builtin script through the same `ScriptRunner`. Design: `docs/API.md`. The server is a single thread with non-blocking accept (10 ms stop-flag poll) and 1 s read/write timeouts per connection — `shutdown()` joins it in bounded time, so DLL eject never hangs (tiny_http was replaced because it had no socket timeouts and spawned unjoinable internal threads).
 - Error handling uses Windows `MessageBoxW` for user-facing errors.
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
 
