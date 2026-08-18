@@ -1,6 +1,8 @@
 //! Типы данных (DTO) системы ввода и записи/воспроизведения —
 //! снимки памяти игры и кадры записи.
 
+use serde::Serialize;
+
 /// Сырой ввод клавиатуры (cInput::KeyInput).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -28,7 +30,7 @@ pub(crate) struct MouseState {
 
 /// Нормализованный ввод игрока (cInput::InputUnit).
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct InputUnit {
     /// +0x00 m_nButtonsDown
     pub buttons_down: u32,
@@ -79,7 +81,7 @@ pub struct InputOverride {
 /// velocity (0x890) — только вертикальная составляющая (прыжок/гравитация),
 /// x/z всегда 0: горизонтального поля скорости нет (движение кинематическое).
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct PlayerState {
     /// cParts::m_vecTransPos (+0x50)
     pub pos: [f32; 3],
@@ -119,7 +121,7 @@ pub struct PlayerState {
 /// Состояние камеры на кадр: позиция + view-proj матрица (углы извлекаются
 /// офлайн из матрицы).
 #[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct CameraState {
     /// позиция камеры (camera + 0x1B0)
     pub pos: [f32; 3],

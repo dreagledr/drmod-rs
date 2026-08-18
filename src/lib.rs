@@ -5,6 +5,7 @@ use rusqlite::Connection;
 use std::ptr::NonNull;
 use std::time::Instant;
 
+mod api;
 mod d3d_render;
 mod game;
 mod logger;
@@ -132,6 +133,8 @@ struct HelloHud {
     last_sent_mission_id: i32,
     last_skeleton_send: Instant,
     pub(crate) viewport: [f32; 4], // [X, Y, Width, Height] from D3D GetViewport
+    // HTTP API автоматизации (скрипты ввода, состояние, кольцевой буфер логов).
+    pub(crate) api: api::ApiServer,
 }
 
 /// Re-entrancy guard для VEH-обработчика. Если исключение случается внутри
@@ -248,6 +251,9 @@ impl HelloHud {
         // перезатирается при старте мода — см. `logger::init_state_log`.
         logger::init_state_log();
 
+        // HTTP API автоматизации — работает в debug и release.
+        let api = api::ApiServer::new(base_addr);
+
         Self {
             current_run_start,
             prev_run_start,
@@ -284,6 +290,7 @@ impl HelloHud {
             last_sent_mission_id: 0,
             last_skeleton_send: Instant::now(),
             viewport: [0.0; 4],
+            api,
         }
     }
 
@@ -733,8 +740,6 @@ impl ImguiRenderLoop for HelloHud {
         // cached_player_obj_ptr (в loading игра обнуляет static_ptr → кэш = null),
         // иначе диагностика ниже читает stale-указатель освобождённого игрока.
         let ui_state = self.read_game_state();
-        #[cfg(not(debug_assertions))]
-        let _ = &ui_state; // suppress unused warning in release
 
         // ── Multiplayer network (выполняется каждый кадр, независимо от UI) ──
         if let Some(ref mut nc) = self.net_client {
@@ -913,17 +918,23 @@ impl ImguiRenderLoop for HelloHud {
             ));
         }
 
+        // --- API: продвижение скрипта + кольцевой буфер + снимок (debug+release) ---
+        // Чтение ввода/состояния — общий код: нужно и API, и record/replay.
+        let input = self.read_current_input();
+        let state = self.read_player_state().unwrap_or_default();
+        #[cfg(debug_assertions)]
+        let camera = self.read_camera_state().unwrap_or_default();
+
+        self.api.frame_update(&ui_state, input, state);
+
         // --- RECORD/REPLAY: единый покадровый апдейт (debug) ---
         // Инжекция → отложенный старт (arm → триггер позиции) → захват кадра
         // записи → подача кадра воспроизведения. Кадр (input/state/camera)
         // читается один раз и используется и для записи, и для лога
-        // воспроизведения. Отложенный старт выполняется до захвата, чтобы
-        // кадр 0 записывался в том же render, где сработал триггер.
+        // воспроизведения. Не выполняется, пока активен API-скрипт — скрипт
+        // эксклюзивно владеет override ввода.
         #[cfg(debug_assertions)]
-        {
-            let input = self.read_current_input();
-            let state = self.read_player_state().unwrap_or_default();
-            let camera = self.read_camera_state().unwrap_or_default();
+        if !self.api.is_script_running() {
             self.replay.update(
                 self.db_conn.as_ref(),
                 ui_state.position,
@@ -961,9 +972,10 @@ impl ImguiRenderLoop for HelloHud {
                     *(p.add(0x58) as *mut f32) = sz;
                 }
             }
-            // NumPad4 — скрипт: бег ~1 сек → прыжок на бегу → лёгкий удар
+            // NumPad4 — встроенный скрипт (бег → прыжок → удар → камера) через
+            // общий ScriptRunner API — тот же механизм, что POST /script/run.
             if ui.is_key_pressed_no_repeat(Key::Keypad4) {
-                self.replay.inject.script_frames = 1;
+                self.api.start_builtin_script();
             }
         }
 

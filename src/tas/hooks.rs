@@ -52,10 +52,9 @@ pub(crate) fn blade_hold() -> bool {
 }
 
 /// Сбрасывает keybind-эмуляцию (ripper/blade) — вызывается при остановке
-/// воспроизведения, старте записи и входе в loading, чтобы hold-действие
-/// (blade) и однокадровый фронт (ripper) не «зависали» и не подмешивались
-/// в реальный ввод.
-#[cfg(debug_assertions)]
+/// воспроизведения, старте записи, остановке API-скрипта и входе в loading,
+/// чтобы hold-действие (blade) и однокадровый фронт (ripper) не «зависали»
+/// и не подмешивались в реальный ввод.
 pub(crate) fn clear_keybind_emulation() {
     RIPPER_FRAMES.store(0, Ordering::Relaxed);
     BLADE_HOLD.store(0, Ordering::Relaxed);

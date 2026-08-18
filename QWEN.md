@@ -14,6 +14,7 @@ Features:
 - Multiplayer position sync (TCP + UDP)
 - World-to-screen projection (camera matrix, D3D viewport)
 - Debug panel with live game state (debug builds only)
+- HTTP automation API (127.0.0.1:5223) — input scripts, game state, ring-buffer logs (design: `docs/API.md`)
 
 Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and [imgui-rs](https://github.com/imgui-rs/imgui-rs) for the UI.
 
@@ -23,6 +24,7 @@ Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and 
 src/
 ├── main.rs          # Injector binary — finds game process, injects DLL
 ├── lib.rs           # HUD library — DX9 hook, ImGui overlay, game memory, main loop
+├── api.rs           # HTTP API (127.0.0.1:5223) — scripts, state, ring-buffer logs
 ├── segment.rs       # Segment tracking — start conditions, ASL-based finish triggers, DB cleanup
 ├── ui.rs            # ImGui windows — debug panel (debug only), multiplayer, settings
 ├── game.rs          # GameMenuStatus enum, weapon name helpers
@@ -203,7 +205,8 @@ cargo run --release -- -n "Custom Window Name.exe"
 | `windows` (0.62.2) | Windows API (UI windows, module loading) |
 | `rusqlite` (0.40.1, bundled) | SQLite for persisting run data |
 | `chrono` (0.4.45) | Time formatting for run timestamps |
-| `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol |
+| `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol and HTTP API |
+| `tiny_http` (0.12) | HTTP server for the automation API (127.0.0.1:5223) |
 | `drmod-protocol` | Shared types for client-server communication |
 
 ### Notes
@@ -211,6 +214,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 - **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since addresses are computed once in `new()` and never mutated.
 - All static addresses are calculated once at init time, not per-frame.
 - **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window (record/playback status, segment timer, mission/menu status, compact player state), `Actions` window (numpad hotkey reference), Numpad keys, saved position display. Release builds keep only Multiplayer and Settings windows.
+- **HTTP API** (`src/api.rs`, debug + release): tiny_http on `127.0.0.1:5223` — `POST /script/run` (JSON scripts in frames), `GET /state`, `GET /logs?from_ms&to_ms&script_id`, `GET /health`. Ring buffer of 3600 frames (60 s). Scripts stop automatically on loading and before eject. NumPad4 runs the builtin script through the same `ScriptRunner`. Design: `docs/API.md`.
 - Error handling uses Windows `MessageBoxW` for user-facing errors.
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
 
