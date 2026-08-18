@@ -1,0 +1,9 @@
+{
+  "name": "test-ripper-toggle",
+  "commands": [
+    { "t": 0,   "duration": 5, "input": { "ripper": true } },
+    { "t": 60,  "duration": 5, "input": { "ripper": true } },
+    { "t": 120, "duration": 5, "input": { "ripper": true } },
+    { "t": 180, "duration": 5, "input": { "ripper": true } }
+  ]
+}

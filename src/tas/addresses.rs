@@ -43,6 +43,10 @@ pub(crate) const KEYBIND_BACK: i32 = 1;
 pub(crate) const KEYBIND_LEFT: i32 = 2;
 #[allow(dead_code)]
 pub(crate) const KEYBIND_RIGHT: i32 = 3;
+/// Walk (Tab) — ⚠️ игра НЕ читает через isKeybindDown (дизассемблирование
+/// 2026-08-18: call sites только 1/2/3/9/20 + цикл 5..22). Ходьба кодируется
+/// магнитудой стика (×0.5) — см. `script_tick` в api.rs. Справочная.
+#[allow(dead_code)]
 pub(crate) const KEYBIND_WALK: i32 = 4;
 #[allow(dead_code)]
 pub(crate) const KEYBIND_JUMP: i32 = 5;
@@ -102,9 +106,11 @@ pub(crate) const GLOBAL_INPUT_UNIT0: usize = 0x177B850;
 /// Биты действий в `InputUnit.buttons_down`/`buttons_pressed` (эмпирически,
 /// подтверждено сопоставлением с сырыми клавишами/мышью в debug-логе).
 pub(crate) mod input_bits {
-    /// Прыжок (Space) — ⚠️ бит 0x1 открывает меню выбора оружия, а не прыжок
-    /// (см. docs/API.md §10.1). Оставлен как есть — не используется новыми входами.
-    pub const JUMP: u32 = 0x0000_0001;
+    /// Прыжок (Space) — бит 0x10 (эмпирически, 2026-08-18: ручной прыжок даёт
+    /// `cur_in down=00000010 pressed=00000010` + `space=true`, y поднимается;
+    /// удержание держит down). Бит 0x1 — кнопка меню выбора оружия (открывает
+    /// меню и навигирует по слотам), НЕ прыжок.
+    pub const JUMP: u32 = 0x0000_0010;
     /// Лёгкая атака (ЛКМ)
     pub const LIGHT_ATTACK: u32 = 0x0000_0040;
     /// Тяжёлая атака (ПКМ)

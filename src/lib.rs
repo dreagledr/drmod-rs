@@ -576,7 +576,9 @@ impl HelloHud {
         })
     }
 
-    /// Читает состояние камеры: позиция (+0x1B0) и view-proj матрица (+0x200).
+    /// Читает состояние камеры: позиция (+0x1B0), look-at (+0x1C0), крен
+    /// (+0x1F0) и view-proj матрица (+0x200). Смещения — из
+    /// `Hw::cCameraBase`/`cCameraViewProj` (ref/mgr-plugin-sdk).
     pub(crate) fn read_camera_state(&self) -> Option<types::CameraState> {
         let addr = self.camera_ptr_addr?.as_ptr();
         Some(unsafe {
@@ -586,6 +588,12 @@ impl HelloHud {
                     *(addr.add(0x1B4) as *const f32),
                     *(addr.add(0x1B8) as *const f32),
                 ],
+                look_at: [
+                    *(addr.add(0x1C0) as *const f32),
+                    *(addr.add(0x1C4) as *const f32),
+                    *(addr.add(0x1C8) as *const f32),
+                ],
+                roll: *(addr.add(0x1F0) as *const f32),
                 view_proj: *(addr.add(0x200) as *const [f32; 16]),
             }
         })
@@ -931,10 +939,9 @@ impl ImguiRenderLoop for HelloHud {
         // Чтение ввода/состояния — общий код: нужно и API, и record/replay.
         let input = self.read_current_input();
         let state = self.read_player_state().unwrap_or_default();
-        #[cfg(debug_assertions)]
         let camera = self.read_camera_state().unwrap_or_default();
 
-        self.api.frame_update(&ui_state, input, state);
+        self.api.frame_update(&ui_state, input, state, camera);
 
         // --- RECORD/REPLAY: единый покадровый апдейт (debug) ---
         // Инжекция → отложенный старт (arm → триггер позиции) → захват кадра

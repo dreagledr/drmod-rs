@@ -1,0 +1,6 @@
+{
+  "name": "test-jump-hold45",
+  "commands": [
+    { "t": 0, "duration": 45, "input": { "jump": true } }
+  ]
+}

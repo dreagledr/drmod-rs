@@ -1,0 +1,6 @@
+{
+  "name": "test-blade-run",
+  "commands": [
+    { "t": 0, "duration": 60, "input": { "forward": true, "blade": true } }
+  ]
+}

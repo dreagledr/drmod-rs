@@ -1,0 +1,6 @@
+{
+  "name": "test-run-control",
+  "commands": [
+    { "t": 0, "duration": 200, "input": { "forward": true } }
+  ]
+}

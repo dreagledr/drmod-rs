@@ -1,0 +1,7 @@
+{
+  "name": "test-ripper-hold5",
+  "commands": [
+    { "t": 0,  "duration": 2,  "input": { "light_attack": true } },
+    { "t": 15, "duration": 5,  "input": { "ripper": true } }
+  ]
+}

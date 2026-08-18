@@ -1,0 +1,7 @@
+{
+  "name": "test-camera",
+  "commands": [
+    { "t": 0,   "duration": 90, "input": { "camera": [300, 0] } },
+    { "t": 120, "duration": 90, "input": { "camera": [0, 2000] } }
+  ]
+}

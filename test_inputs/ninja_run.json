@@ -1,0 +1,6 @@
+{
+  "name": "test-ninja-run",
+  "commands": [
+    { "t": 0, "duration": 120, "input": { "forward": true, "ninja_run": true } }
+  ]
+}

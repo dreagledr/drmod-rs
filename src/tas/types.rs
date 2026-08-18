@@ -118,14 +118,19 @@ pub struct PlayerState {
     pub blade_mode_type: i32,
 }
 
-/// Состояние камеры на кадр: позиция + view-proj матрица (углы извлекаются
-/// офлайн из матрицы).
+/// Состояние камеры на кадр: позиция, look-at точка, крен и view-proj матрица
+/// (углы yaw/pitch выводятся из pos→lookAt офлайн или в API).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 pub struct CameraState {
-    /// позиция камеры (camera + 0x1B0)
+    /// позиция камеры (cCameraBase.m_CameraMatrix.m_vecPosition, +0x1B0)
     pub pos: [f32; 3],
-    /// view-proj матрица (camera + 0x200)
+    /// точка, куда камера смотрит (m_vecLookAtPosition, +0x1C0) — из pos→lookAt
+    /// вычисляются yaw/pitch (наклон камеры)
+    pub look_at: [f32; 3],
+    /// крен камеры (m_fRoll, +0x1F0)
+    pub roll: f32,
+    /// view-proj матрица (cCameraViewProj.m_viewProjectionMatrix, +0x200)
     pub view_proj: [f32; 16],
 }
 

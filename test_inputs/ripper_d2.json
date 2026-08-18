@@ -1,0 +1,6 @@
+{
+  "name": "test-ripper-d2",
+  "commands": [
+    { "t": 0, "duration": 2, "input": { "ripper": true } }
+  ]
+}

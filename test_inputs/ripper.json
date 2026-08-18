@@ -1,0 +1,6 @@
+{
+  "name": "test-ripper",
+  "commands": [
+    { "t": 0, "duration": 1, "input": { "ripper": true } }
+  ]
+}

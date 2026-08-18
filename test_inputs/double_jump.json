@@ -1,0 +1,11 @@
+{
+  "name": "test-double-jump",
+  "commands": [
+    { "t": 0,   "duration": 2, "input": { "jump": true } },
+    { "t": 8,   "duration": 2, "input": { "jump": true } },
+    { "t": 60,  "duration": 2, "input": { "jump": true } },
+    { "t": 75,  "duration": 2, "input": { "jump": true } },
+    { "t": 120, "duration": 2, "input": { "jump": true } },
+    { "t": 150, "duration": 2, "input": { "jump": true } }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "test-camera-pitch-big",
+  "commands": [
+    { "t": 0, "duration": 60, "input": { "camera": [0, 2000] } }
+  ]
+}

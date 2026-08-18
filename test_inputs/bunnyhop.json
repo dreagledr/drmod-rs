@@ -1,0 +1,13 @@
+{
+  "name": "test-bunnyhop",
+  "commands": [
+    { "t": 0,   "duration": 200, "input": { "forward": true } },
+    { "t": 0,   "duration": 2,   "input": { "jump": true } },
+    { "t": 30,  "duration": 2,   "input": { "jump": true } },
+    { "t": 60,  "duration": 2,   "input": { "jump": true } },
+    { "t": 90,  "duration": 2,   "input": { "jump": true } },
+    { "t": 120, "duration": 2,   "input": { "jump": true } },
+    { "t": 150, "duration": 2,   "input": { "jump": true } },
+    { "t": 180, "duration": 2,   "input": { "jump": true } }
+  ]
+}

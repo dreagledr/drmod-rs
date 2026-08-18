@@ -1,0 +1,6 @@
+{
+  "name": "test-ripper-d3",
+  "commands": [
+    { "t": 0, "duration": 3, "input": { "ripper": true } }
+  ]
+}

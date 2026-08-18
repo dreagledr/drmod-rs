@@ -1,0 +1,6 @@
+{
+  "name": "test-walk",
+  "commands": [
+    { "t": 0, "duration": 120, "input": { "forward": true, "walk": true } }
+  ]
+}

@@ -30,8 +30,12 @@ static ORIG_IS_KEYBIND_DOWN: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLo
 /// возвращает 1 для этого keybind. Индексы — `addresses::KEYBIND_*`.
 static KEYBIND_HOLD: [AtomicU32; addresses::KEYBIND_TOTAL] =
     [const { AtomicU32::new(0) }; addresses::KEYBIND_TOTAL];
-/// Эмуляция фронта keybind'ов (`isKeybindPressed`): `[keybind]` — остаток
-/// кадров, в которых детур возвращает 1 (декремент на каждый вызов).
+/// Эмуляция фронта keybind'ов (`isKeybindPressed`): `[keybind] != 0` — детур
+/// возвращает 1. Флаг НЕ декрементируется на каждый вызов (игра вызывает
+/// `isKeybindPressed(11)` спорадически — на разных кадрах, и счётчик
+/// «растекался» на несколько переключений ripper); живёт ровно один игровой
+/// тик: ставится в `script_tick` (render K), сбрасывается в начале следующего
+/// `script_tick` (render K+1) или при остановке скрипта.
 static KEYBIND_PRESSED: [AtomicU32; addresses::KEYBIND_TOTAL] =
     [const { AtomicU32::new(0) }; addresses::KEYBIND_TOTAL];
 /// Эмуляция raw-клавиш меню (`ms_KeyInput.m_aKeysDown`): битмаски по индексам
@@ -52,12 +56,12 @@ static BLADE_DOWN_SAMPLED: AtomicU32 = AtomicU32::new(0);
 #[cfg(debug_assertions)]
 static RIPPER_PRESSED_SAMPLED: AtomicU32 = AtomicU32::new(0);
 
-/// Взводит эмуляцию фронта keybind'а на `n` кадров — детур
-/// `isKeybindPressed` возвращает 1 для этого keybind'а (toggle-действия:
-/// ripper, lock-on, меню и т.д.).
+/// Взводит эмуляцию фронта keybind'а — детур `isKeybindPressed` возвращает 1,
+/// пока флаг не сброшен (toggle-действия: ripper). Сброс — `script_tick`
+/// (начало следующего render-кадра) или `clear_keybind_emulation`.
 pub(crate) fn set_keybind_pressed(keybind: i32, n: u32) {
     if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind) {
-        KEYBIND_PRESSED[keybind as usize].store(n, Ordering::Relaxed);
+        KEYBIND_PRESSED[keybind as usize].store(if n == 0 { 0 } else { 1 }, Ordering::Relaxed);
     }
 }
 
@@ -206,16 +210,20 @@ fn apply_raw_keys() {
 }
 
 /// Детур `cInput::isKeybindPressed` (__cdecl, 0x61D2D0). Для эмулируемых
-/// keybind'ов (`KEYBIND_PRESSED[keybind] > 0`) возвращает 1 (нажат фронт) —
+/// keybind'ов (`KEYBIND_PRESSED[keybind] != 0`) возвращает 1 (нажат фронт) —
 /// тогда `handleActions` запускает штатную активацию/деактивацию toggle-действий
 /// (ripper, lock-on, меню) с проверками условий и анимациями. Остальные
 /// keybind'ы идут в оригинал. Результат оригинала для `KEYBIND_RIPPERMODE`
 /// накапливается в `RIPPER_PRESSED_SAMPLED` — запись читает реальный фронт.
+///
+/// Флаг не декрементируется: игра вызывает `isKeybindPressed(11)` спорадически
+/// (disable-проверка и enable-проверка — на разных кадрах), и счётчик
+/// «растекался» — каждый остаток давал отдельное переключение ripper.
+/// Сброс — в начале следующего `script_tick` (см. api.rs).
 unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
     if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind)
-        && KEYBIND_PRESSED[keybind as usize].load(Ordering::Relaxed) > 0
+        && KEYBIND_PRESSED[keybind as usize].load(Ordering::Relaxed) != 0
     {
-        KEYBIND_PRESSED[keybind as usize].fetch_sub(1, Ordering::Relaxed);
         return 1;
     }
 

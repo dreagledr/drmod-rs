@@ -224,6 +224,9 @@ struct LogFrame {
     r_anim: i32,
     ripper: i32,
     blade: i32,
+    camera_pos: [f32; 3],
+    camera_look_at: [f32; 3],
+    camera_roll: f32,
     input: InputUnit,
 }
 
@@ -240,6 +243,9 @@ struct LogFrameJson {
     r_anim: i32,
     ripper: i32,
     blade: i32,
+    camera_pos: [f32; 3],
+    camera_look_at: [f32; 3],
+    camera_rot: [f32; 3],
     input: InputJson,
 }
 
@@ -266,6 +272,14 @@ struct StateSnapshot {
     r_anim: i32,
     ripper: i32,
     blade: i32,
+    /// Позиция камеры (cCameraGame + 0x1B0) — позволяет проверять эффект
+    /// camera/right_stick по логам (орбита при yaw, y при pitch), без
+    /// визуального контроля.
+    camera_pos: [f32; 3],
+    /// Точка, куда камера смотрит (+0x1C0) — вместе с позицией даёт yaw/pitch.
+    camera_look_at: [f32; 3],
+    /// Крен камеры (+0x1F0).
+    camera_roll: f32,
 }
 
 /// `GET /health` — живость, версия, base_addr, uptime.
@@ -300,6 +314,15 @@ struct ScriptStatusJson {
     total_frames: u32,
 }
 
+/// `GET /state` — снимок камеры: позиция, look-at точка, углы
+/// (yaw/pitch/roll, выводятся из pos→lookAt и m_fRoll).
+#[derive(Serialize)]
+struct CameraSnapshot {
+    pos: [f32; 3],
+    look_at: [f32; 3],
+    rot: [f32; 3],
+}
+
 /// `GET /state` — текущий снимок игры + статус скрипта + fps.
 #[derive(Serialize)]
 struct StateResponse {
@@ -308,6 +331,7 @@ struct StateResponse {
     mission_name: String,
     menu_status: String,
     player: PlayerSnapshot,
+    camera: CameraSnapshot,
     script: Option<ScriptStatusJson>,
     fps: f32,
 }
@@ -466,7 +490,18 @@ impl ApiServer {
 
     /// Покадровый апдейт из render: продвижение скрипта, запись кадра в буфер,
     /// обновление снимка. Вызывается каждый кадр, независимо от UI.
-    pub fn frame_update(&self, ui_state: &UiState, input: InputUnit, state: PlayerState) {
+    pub fn frame_update(
+        &self,
+        ui_state: &UiState,
+        input: InputUnit,
+        state: PlayerState,
+        camera: crate::tas::types::CameraState,
+    ) {
+        // Общий сброс фронта ripper каждый render-кадр: флаг isKeybindPressed(11)
+        // живёт ровно один игровой тик (ставится script_tick/playback/NumPad7,
+        // виден игре на тике K+1, сбрасывается здесь на кадре K+1). Детур не
+        // декрементит — игра вызывает isKeybindPressed(11) спорадически.
+        hooks::set_ripper_frames(0);
         let mut guard = self.state.lock().unwrap();
         guard.frame_count += 1;
         let elapsed = guard.start.elapsed();
@@ -520,6 +555,9 @@ impl ApiServer {
             r_anim: state.r_anim,
             ripper: state.ripper_enabled,
             blade: state.blade_mode_type,
+            camera_pos: camera.pos,
+            camera_look_at: camera.look_at,
+            camera_roll: camera.roll,
         };
 
         if ui_state.player_found {
@@ -535,6 +573,9 @@ impl ApiServer {
                 r_anim: state.r_anim,
                 ripper: state.ripper_enabled,
                 blade: state.blade_mode_type,
+                camera_pos: camera.pos,
+                camera_look_at: camera.look_at,
+                camera_roll: camera.roll,
                 input,
             });
         }
@@ -809,6 +850,11 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
             r_anim: s.r_anim,
             ripper: s.ripper,
             blade: s.blade,
+        },
+        camera: CameraSnapshot {
+            pos: s.camera_pos,
+            look_at: s.camera_look_at,
+            rot: camera_angles(s.camera_pos, s.camera_look_at, s.camera_roll),
         },
         script,
         fps: guard.fps,
@@ -1116,6 +1162,16 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
         }
         // Hold-действия (isKeybindDown): удержание на все кадры команды.
         if inp.ninja_run {
+            // Ниндзя-бег: для unit 0 игра читает бит 0x4000 в InputUnit
+            // (реальный ввод LCtrl+W: cur_in down=00404000), а не
+            // isKeybindDown(9) — call site 0x61DBE0 ставит биты 0x1000/0x8000
+            // только для unit 1..3. Вход в состояние — по ФРОНТУ pressed=0x4000
+            // (ручной бег: pressed=00004000 на 1-м кадре, r_anim=79); без
+            // фронта игра не активирует ниндзя-бег (r_anim=71).
+            unit.buttons_down |= addresses::input_bits::NINJA_RUN;
+            if k == cmd.t {
+                unit.buttons_pressed |= addresses::input_bits::NINJA_RUN;
+            }
             ninja_on = true;
             active = true;
         }
@@ -1181,14 +1237,22 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
         }
         if let Some(ls) = inp.left_stick {
             unit.left_stick = ls;
+            active = true;
         }
+    }
+    // Ходьба: игра кодирует её магнитудой стика — Tab масштабирует стик ×0.5
+    // (ручная ходьба: L=(0,-500), r_anim=2). Keybind 4 (walk) игра НЕ читает
+    // через isKeybindDown (дизассемблирование 2026-08-18: call sites только
+    // 1/2/3/9/20 + цикл 5..22) — эмуляция keybind'а не работает, персонаж
+    // бежал (r_anim=3). Масштабируем итоговый стик (направления или явный).
+    if walk_on {
+        unit.left_stick = [unit.left_stick[0] * 0.5, unit.left_stick[1] * 0.5];
     }
     if ripper_edge {
         hooks::set_ripper_frames(1);
     }
     hooks::set_blade_hold(blade_on);
     hooks::set_keybind_hold(addresses::KEYBIND_NINJARUN, ninja_on);
-    hooks::set_keybind_hold(addresses::KEYBIND_WALK, walk_on);
     hooks::set_keybind_hold(addresses::KEYBIND_DEFFENSIVE_OFFENSIVE, dodge_on);
     hooks::set_keybind_hold(addresses::KEYBIND_SWITCH_LOCK_ON, lock_on);
     hooks::set_keybind_hold(addresses::KEYBIND_USE_SUBWEAPON, subweapon);
@@ -1214,6 +1278,18 @@ fn stop_script(script: &mut ScriptState) {
     hooks::clear_keybind_emulation();
 }
 
+/// Углы камеры из pos→lookAt: yaw — поворот вокруг Y (atan2(dx, dz)),
+/// pitch — наклон (atan2(dy, горизонталь)), roll — крен напрямую из m_fRoll.
+/// Позволяет проверять camera/right_stick по логам: yaw меняется при повороте,
+/// pitch — при наклоне (в отличие от позиции, где наклон даёт только малый y).
+fn camera_angles(pos: [f32; 3], look_at: [f32; 3], roll: f32) -> [f32; 3] {
+    let dx = look_at[0] - pos[0];
+    let dy = look_at[1] - pos[1];
+    let dz = look_at[2] - pos[2];
+    let horiz = (dx * dx + dz * dz).sqrt();
+    [dx.atan2(dz), dy.atan2(horiz), roll]
+}
+
 impl LogFrame {
     fn to_json(&self) -> LogFrameJson {
         LogFrameJson {
@@ -1227,6 +1303,9 @@ impl LogFrame {
             r_anim: self.r_anim,
             ripper: self.ripper,
             blade: self.blade,
+            camera_pos: self.camera_pos,
+            camera_look_at: self.camera_look_at,
+            camera_rot: camera_angles(self.camera_pos, self.camera_look_at, self.camera_roll),
             input: InputJson {
                 buttons: decode_buttons(self.input.buttons_down),
                 left_stick: self.input.left_stick,

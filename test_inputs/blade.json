@@ -1,0 +1,6 @@
+{
+  "name": "test-blade",
+  "commands": [
+    { "t": 0, "duration": 60, "input": { "blade": true } }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "test-movement-4dir",
+  "commands": [
+    { "t": 0,   "duration": 60, "input": { "forward": true } },
+    { "t": 90,  "duration": 60, "input": { "backward": true } },
+    { "t": 180, "duration": 60, "input": { "left": true } },
+    { "t": 270, "duration": 60, "input": { "right": true } }
+  ]
+}

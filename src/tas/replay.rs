@@ -473,6 +473,7 @@ impl ReplayState {
             // реального ввода (сэмплы детуров при записи): ripper — фронт
             // ripper_pressed, blade — удержание blade_down. Задание в render(K)
             // применяется на тике K+1, т.е. синхронно с override InputUnit.
+            // Флаг ripper сбрасывается каждый кадр в api::frame_update.
             if frame.ripper_pressed != 0 {
                 super::hooks::set_ripper_frames(1);
                 logger::log_line(&format!(

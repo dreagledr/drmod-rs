@@ -1,0 +1,7 @@
+{
+  "name": "test-ripper-run",
+  "commands": [
+    { "t": 0,  "duration": 90, "input": { "forward": true } },
+    { "t": 20, "duration": 5,  "input": { "ripper": true } }
+  ]
+}

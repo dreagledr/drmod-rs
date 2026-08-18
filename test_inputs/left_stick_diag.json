@@ -1,0 +1,7 @@
+{
+  "name": "test-left-stick-diag",
+  "commands": [
+    { "t": 0,   "duration": 90, "input": { "left_stick": [1000, -1000] } },
+    { "t": 120, "duration": 90, "input": { "left_stick": [-1000, -1000] } }
+  ]
+}
