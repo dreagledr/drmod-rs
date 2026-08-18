@@ -6,7 +6,7 @@ use hudhook::mh::{MH_ApplyQueued, MhHook};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
-use super::addresses::{self, KEYBIND_BLADEMODE, KEYBIND_RIPPERMODE};
+use super::addresses;
 use super::replay;
 use super::types;
 use crate::logger;
@@ -15,6 +15,10 @@ use crate::logger;
 static KEY_INPUT_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// cInput::ms_MouseInput — адрес сырого ввода мыши (вычисляется в `install`).
 static MOUSE_INPUT_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// cInput::ms_bUpdateKeyboard — флаг автообновления кэша клавиш из DirectInput.
+/// Замораживается на время подачи raw-клавиш меню (иначе DirectInput
+/// перезапишет наши значения в `ms_KeyInput`).
+static UPDATE_KEYBOARD_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline оригинальной `cInput::updateInputUnit` (устанавливается в `create_input_hook`).
 static ORIG_UPDATE_INPUT_UNIT: OnceLock<unsafe extern "C" fn(*mut types::InputUnit, i32)> =
     OnceLock::new();
@@ -22,10 +26,23 @@ static ORIG_UPDATE_INPUT_UNIT: OnceLock<unsafe extern "C" fn(*mut types::InputUn
 static ORIG_IS_KEYBIND_PRESSED: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
 /// Trampoline оригинальной `cInput::isKeybindDown`.
 static ORIG_IS_KEYBIND_DOWN: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
-/// Остаток кадров эмуляции клавиши R (ripper) в детуре.
-static RIPPER_FRAMES: AtomicU32 = AtomicU32::new(0);
-/// Флаг удержания blade mode (isKeybindDown, hold) в детуре.
-static BLADE_HOLD: AtomicU32 = AtomicU32::new(0);
+/// Эмуляция удержания keybind'ов (`isKeybindDown`): `[keybind] != 0` — детур
+/// возвращает 1 для этого keybind. Индексы — `addresses::KEYBIND_*`.
+static KEYBIND_HOLD: [AtomicU32; addresses::KEYBIND_TOTAL] =
+    [const { AtomicU32::new(0) }; addresses::KEYBIND_TOTAL];
+/// Эмуляция фронта keybind'ов (`isKeybindPressed`): `[keybind]` — остаток
+/// кадров, в которых детур возвращает 1 (декремент на каждый вызов).
+static KEYBIND_PRESSED: [AtomicU32; addresses::KEYBIND_TOTAL] =
+    [const { AtomicU32::new(0) }; addresses::KEYBIND_TOTAL];
+/// Эмуляция raw-клавиш меню (`ms_KeyInput.m_aKeysDown`): битмаски по индексам
+/// 0..6. Меню читает стрелки/Enter через `isKeyDown`/`isKeyPressed`, а не
+/// через keybind'ы — подача идёт записью в кэш `ms_KeyInput` (см. `apply_raw_keys`).
+static RAW_KEYS_DOWN: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
+/// Эмуляция raw-клавиш меню (`ms_KeyInput.m_aKeysPressed`).
+static RAW_KEYS_PRESSED: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
+/// Активна ли подача raw-клавиш: кэш `ms_KeyInput` заморожен
+/// (`ms_bUpdateKeyboard = false`) и перезаписывается нашими битмасками.
+static RAW_KEYS_ACTIVE: AtomicU32 = AtomicU32::new(0);
 /// Сэмпл реального удержания blade (keybind 8) за кадр — результат оригинала
 /// `isKeybindDown`, накопленный детуром. Читается записью в render.
 #[cfg(debug_assertions)]
@@ -35,29 +52,85 @@ static BLADE_DOWN_SAMPLED: AtomicU32 = AtomicU32::new(0);
 #[cfg(debug_assertions)]
 static RIPPER_PRESSED_SAMPLED: AtomicU32 = AtomicU32::new(0);
 
+/// Взводит эмуляцию фронта keybind'а на `n` кадров — детур
+/// `isKeybindPressed` возвращает 1 для этого keybind'а (toggle-действия:
+/// ripper, lock-on, меню и т.д.).
+pub(crate) fn set_keybind_pressed(keybind: i32, n: u32) {
+    if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind) {
+        KEYBIND_PRESSED[keybind as usize].store(n, Ordering::Relaxed);
+    }
+}
+
+/// Взводит/снимает эмуляцию удержания keybind'а — детур `isKeybindDown`
+/// возвращает 1 для этого keybind'а (hold-действия: blade, ninja run, walk,
+/// dodge).
+pub(crate) fn set_keybind_hold(keybind: i32, on: bool) {
+    if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind) {
+        KEYBIND_HOLD[keybind as usize].store(if on { 1 } else { 0 }, Ordering::Relaxed);
+    }
+}
+
 /// Взводит эмуляцию клавиши R (ripper) на `n` кадров — сырой ввод, который
 /// читается `isKeybindDown(KEYBIND_RIPPERMODE)`, а не `InputUnit`.
 pub(crate) fn set_ripper_frames(n: u32) {
-    RIPPER_FRAMES.store(n, Ordering::Relaxed);
+    set_keybind_pressed(addresses::KEYBIND_RIPPERMODE, n);
 }
 
 /// Взводит/снимает удержание blade mode (isKeybindDown, hold-действие).
 pub(crate) fn set_blade_hold(on: bool) {
-    BLADE_HOLD.store(if on { 1 } else { 0 }, Ordering::Relaxed);
+    set_keybind_hold(addresses::KEYBIND_BLADEMODE, on);
 }
 
 /// Удерживается ли blade mode сейчас (для debug-панели).
 pub(crate) fn blade_hold() -> bool {
-    BLADE_HOLD.load(Ordering::Relaxed) != 0
+    KEYBIND_HOLD[addresses::KEYBIND_BLADEMODE as usize].load(Ordering::Relaxed) != 0
 }
 
-/// Сбрасывает keybind-эмуляцию (ripper/blade) — вызывается при остановке
-/// воспроизведения, старте записи, остановке API-скрипта и входе в loading,
-/// чтобы hold-действие (blade) и однокадровый фронт (ripper) не «зависали»
-/// и не подмешивались в реальный ввод.
+/// Взводит эмуляцию raw-клавиши меню (стрелки/Enter): бит в `ms_KeyInput`
+/// (down или pressed) + заморозка кэша. `pressed = true` — однократный фронт
+/// (навигация в меню), `false` — удержание.
+pub(crate) fn set_raw_key(code: u8, pressed: bool) {
+    let index = (code >> 5) as usize;
+    let bit = 1u32 << (code & 31);
+    if index < 6 {
+        if pressed {
+            RAW_KEYS_PRESSED[index].fetch_or(bit, Ordering::Relaxed);
+        } else {
+            RAW_KEYS_DOWN[index].fetch_or(bit, Ordering::Relaxed);
+        }
+        RAW_KEYS_ACTIVE.store(1, Ordering::Relaxed);
+    }
+}
+
+/// Сбрасывает keybind-эмуляцию (ripper/blade/новые входы) и raw-клавиши меню —
+/// вызывается при остановке воспроизведения, старте записи, остановке
+/// API-скрипта и входе в loading, чтобы hold-действия и однокадровые фронты
+/// не «зависали» и не подмешивались в реальный ввод.
 pub(crate) fn clear_keybind_emulation() {
-    RIPPER_FRAMES.store(0, Ordering::Relaxed);
-    BLADE_HOLD.store(0, Ordering::Relaxed);
+    for slot in &KEYBIND_PRESSED {
+        slot.store(0, Ordering::Relaxed);
+    }
+    for slot in &KEYBIND_HOLD {
+        slot.store(0, Ordering::Relaxed);
+    }
+    clear_raw_keys();
+}
+
+/// Сбрасывает raw-клавиши меню и размораживает кэш клавиш. Вызывается из
+/// `script_tick` каждый кадр без активных raw-команд (биты живут 1 кадр —
+/// иначе меню увидит «залипшую» стрелку) и из `clear_keybind_emulation`.
+pub(crate) fn clear_raw_keys() {
+    for slot in &RAW_KEYS_DOWN {
+        slot.store(0, Ordering::Relaxed);
+    }
+    for slot in &RAW_KEYS_PRESSED {
+        slot.store(0, Ordering::Relaxed);
+    }
+    RAW_KEYS_ACTIVE.store(0, Ordering::Relaxed);
+    let addr = UPDATE_KEYBOARD_ADDR.load(Ordering::Relaxed);
+    if addr != 0 {
+        unsafe { *(addr as *mut u8) = 1 };
+    }
 }
 
 /// Читает сэмпл удержания blade за прошедший тик (накоплен детуром
@@ -85,11 +158,12 @@ pub(crate) fn reset_keybind_samples() {
 }
 
 /// Детур `cInput::updateInputUnit` (__cdecl). Вызывает оригинал, затем для
-/// `user_index == 0` перезаписывает unit нашим override (подача ввода).
+/// `user_index == 0` перезаписывает unit нашим override (подача ввода) и
+/// подаёт raw-клавиши меню в кэш `ms_KeyInput`.
 ///
 /// Детур вызывается игрой несколько раз за кадр и должен быть ЛЁГКИМ: только
-/// чтение/запись атомиков. Никакого `log_line` (chrono + файловый I/O) — при
-/// рестарте это даёт рекурсию access violation (см. docs/REPLAY_FINDINGS.md).
+/// чтение/запись атомиков и памяти. Никакого `log_line` (chrono + файловый
+/// I/O) — при рестарте это даёт рекурсию access violation (см. docs/REPLAY_FINDINGS.md).
 unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_index: i32) {
     if let Some(&orig) = ORIG_UPDATE_INPUT_UNIT.get() {
         unsafe { orig(unit, user_index) };
@@ -99,18 +173,49 @@ unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_
         return;
     }
 
+    // Подача raw-клавиш меню: кэш ms_KeyInput заморожен и перезаписан нашими
+    // битмасками — меню читает стрелки/Enter через isKeyDown/isKeyPressed
+    // (0x9D93A0/0x9D9400), а не через keybind'ы.
+    if RAW_KEYS_ACTIVE.load(Ordering::Relaxed) != 0 {
+        apply_raw_keys();
+    }
+
     replay::apply_override(unit);
 }
 
-/// Детур `cInput::isKeybindPressed` (__cdecl, 0x61D2D0). Для `KEYBIND_RIPPERMODE`
-/// возвращает 1 (нажат фронт), пока эмуляция R активна (`RIPPER_FRAMES > 0`) —
-/// тогда `handleActions` запускает штатную активацию/деактивацию ripper
-/// с проверками условий и анимациями. Остальные keybind'ы идут в оригинал.
-/// Результат оригинала для `KEYBIND_RIPPERMODE` накапливается в
-/// `RIPPER_PRESSED_SAMPLED` — запись читает реальный фронт из этого сэмпла.
+/// Записывает эмулируемые raw-клавиши в `ms_KeyInput` и замораживает кэш
+/// (`ms_bUpdateKeyboard = false`), чтобы DirectInput не перезаписал их.
+/// Вызывается из детура `updateInputUnit` после оригинала — до `handleActions`,
+/// который читает кэш через `isKeyDown`/`isKeyPressed`.
+fn apply_raw_keys() {
+    let addr = KEY_INPUT_ADDR.load(Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let k = addr as *mut types::KeyInput;
+    unsafe {
+        for i in 0..6 {
+            (*k).keys_down[i] = RAW_KEYS_DOWN[i].load(Ordering::Relaxed);
+            (*k).keys_pressed[i] = RAW_KEYS_PRESSED[i].load(Ordering::Relaxed);
+        }
+    }
+    let ua = UPDATE_KEYBOARD_ADDR.load(Ordering::Relaxed);
+    if ua != 0 {
+        unsafe { *(ua as *mut u8) = 0 };
+    }
+}
+
+/// Детур `cInput::isKeybindPressed` (__cdecl, 0x61D2D0). Для эмулируемых
+/// keybind'ов (`KEYBIND_PRESSED[keybind] > 0`) возвращает 1 (нажат фронт) —
+/// тогда `handleActions` запускает штатную активацию/деактивацию toggle-действий
+/// (ripper, lock-on, меню) с проверками условий и анимациями. Остальные
+/// keybind'ы идут в оригинал. Результат оригинала для `KEYBIND_RIPPERMODE`
+/// накапливается в `RIPPER_PRESSED_SAMPLED` — запись читает реальный фронт.
 unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
-    if keybind == KEYBIND_RIPPERMODE && RIPPER_FRAMES.load(Ordering::Relaxed) > 0 {
-        RIPPER_FRAMES.fetch_sub(1, Ordering::Relaxed);
+    if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind)
+        && KEYBIND_PRESSED[keybind as usize].load(Ordering::Relaxed) > 0
+    {
+        KEYBIND_PRESSED[keybind as usize].fetch_sub(1, Ordering::Relaxed);
         return 1;
     }
 
@@ -120,19 +225,22 @@ unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
         0
     };
     #[cfg(debug_assertions)]
-    if keybind == KEYBIND_RIPPERMODE && result != 0 {
+    if keybind == addresses::KEYBIND_RIPPERMODE && result != 0 {
         RIPPER_PRESSED_SAMPLED.fetch_or(1, Ordering::Relaxed);
     }
     result
 }
 
-/// Детур `cInput::isKeybindDown` (__cdecl, 0x61D280). Для `KEYBIND_BLADEMODE`
-/// возвращает 1 (удержание), пока `BLADE_HOLD` взведён — blade mode это
-/// hold-действие, активируется удержанием клавиши через handleActions.
-/// Результат оригинала для `KEYBIND_BLADEMODE` накапливается в
-/// `BLADE_DOWN_SAMPLED` — запись читает реальное удержание из этого сэмпла.
+/// Детур `cInput::isKeybindDown` (__cdecl, 0x61D280). Для эмулируемых
+/// keybind'ов (`KEYBIND_HOLD[keybind] != 0`) возвращает 1 (удержание) —
+/// hold-действия (blade mode, ninja run, walk, dodge) активируются через
+/// `handleActions`. Остальные keybind'ы идут в оригинал. Результат оригинала
+/// для `KEYBIND_BLADEMODE` накапливается в `BLADE_DOWN_SAMPLED` — запись
+/// читает реальное удержание из этого сэмпла.
 unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
-    if keybind == KEYBIND_BLADEMODE && BLADE_HOLD.load(Ordering::Relaxed) != 0 {
+    if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind)
+        && KEYBIND_HOLD[keybind as usize].load(Ordering::Relaxed) != 0
+    {
         return 1;
     }
     let result = if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
@@ -141,7 +249,7 @@ unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
         0
     };
     #[cfg(debug_assertions)]
-    if keybind == KEYBIND_BLADEMODE && result != 0 {
+    if keybind == addresses::KEYBIND_BLADEMODE && result != 0 {
         BLADE_DOWN_SAMPLED.fetch_or(1, Ordering::Relaxed);
     }
     result
@@ -191,6 +299,14 @@ impl InputHooks {
                 0
             } else {
                 base_addr + addresses::MOUSE_INPUT
+            },
+            Ordering::Relaxed,
+        );
+        UPDATE_KEYBOARD_ADDR.store(
+            if base_addr == 0 {
+                0
+            } else {
+                base_addr + addresses::UPDATE_KEYBOARD
             },
             Ordering::Relaxed,
         );

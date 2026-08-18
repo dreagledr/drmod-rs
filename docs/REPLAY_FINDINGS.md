@@ -129,7 +129,41 @@ call 0x785190           ; enableRipperMode()
 - прямой вызов `enableRipperMode()` @ `0x785190` / `disableRipperMode(false)` @ `0x7D9590` (`__thiscall`) — но **без условий и анимаций** (мгновенно, без fade) — только fallback;
 - ✅ **хук `isKeybindPressed` (0x61D2D0)** для ripper + **хук `isKeybindDown` (0x61D280)** для blade — детур возвращает `1` для нужного keybind → `handleActions` запускает штатную цепочку (условия + анимации).
 
-**Реализация** (`src/tas/replay.rs`, debug): `is_keybind_pressed_detour` (RIPPERMODE, счётчик `RIPPER_FRAMES`) + `is_keybind_down_detour` (BLADEMODE, флаг `BLADE_HOLD`). NumPad7 = фронт ripper, NumPad8 = toggle blade-удержания.
+**Реализация** (`src/tas/hooks.rs`): обобщённая keybind-эмуляция — `set_keybind_pressed(keybind, frames)` (фронт `isKeybindPressed`) + `set_keybind_hold(keybind, on)` (удержание `isKeybindDown`) для произвольных индексов. NumPad7 = фронт ripper, NumPad8 = toggle blade-удержания.
+
+## Keybind-механизм всех действий (дизассемблирование, 2026-08-18)
+
+Полный скан call sites `isKeybindDown` (0x61D280) / `isKeybindPressed` (0x61D2D0) в exe:
+
+**`isKeybindPressed` — только 2 call sites, оба ripper:** `0x810599` (disable-путь) и `0x8106AF` (enable-путь, `canActivateRipperMode() && isKeybindPressed(11)`). **Все остальные действия активируются через `isKeybindDown`.**
+
+**`isKeybindDown` — 14 call sites:**
+
+| Call site | Keybind | Действие |
+|-----------|---------|----------|
+| `0x61DBE7` | `push 9` | NINJARUN (ниндзя-бег) |
+| `0x61DCB6` | `push 1` | BACK (движение назад) |
+| `0x61DCFB`/`0x61DD1D` | `push 3` | RIGHT (движение вправо; `isKeyDown(клавиша) || isKeybindDown(3)`) |
+| `0x61DD2B` | `push 2` | LEFT (движение влево) |
+| `0x61DE21` | цикл `esi=5..22` | JUMP..FIRE_SUBWEAPON: `if (isKeybindDown(k)) { m_button = getButton(k); or [esp+0x4C], m_button }` — сборка нормализованных кнопок |
+| `0x69AD1D`, `0x79403C` | `push 0x15` | DEFFENSIVE_OFFENSIVE (dodge) |
+| `0x69AD73`, `0x794092` | `push 0x14` | EXECUTION (zandatsu) |
+| `0x120BEF`, `0x1A33F4`, `0x1AD09B`, `0x441E68` | `push 0x14` | EXECUTION (zandatsu, другие контексты) |
+
+Функция `0x779F30` (вызывается из цикла 0x61DE21) — switch по keybind 5..22, возвращает `m_nButton*` поле Pl0000 (`0xE18`=Jump, `0xE20`=LightAttack, `0xE24`=HeavyAttack, `0xE50`=Blademode, `0xE48`=Ninjarun, `0xE38`=Action, `0xE08`=SwitchLockOn, ...) — это сборка нормализованных кнопок, а не InputUnit-битов.
+
+**Биты движения (подтверждено логом `cur_in down`):** `0x400000`=W, `0x800000`=S, `0x200000`=A, `0x100000`=D; `0x4000`=ninja run (сопутствует FORWARD). В `updateInputUnit` (0x9DAAC0) биты стиков: left_stick → `0x10000`/`0x20000`/`0x40000`/`0x80000`, right_stick → `0x1000`/`0x2000`/`0x4000`/`0x8000`, триггеры → `0x800`/`0x4000`.
+
+**Меню-клавиши (стрелки/Enter) — НЕ keybind'ы:** в `eSaveKeybind` их нет. Меню читает их через `KeyInput::isKeyDown`/`isKeyPressed` (0x9D93A0/0x9D9400, **thiscall**: `mov esi, ecx; ... and eax, [esi+edx*4]` — чтение кэша `ms_KeyInput`). Подача: запись бита в кэш + заморозка `ms_bUpdateKeyboard` (0x14CDDE8) в детуре `updateInputUnit` (`hooks::set_raw_key`). Требует рантайм-проверки (docs/API.md §10.3).
+
+**Маппинг `isKeyDown`/`isKeyPressed` (дизассемблирование, 2026-08-18):** принимают **VK-код** (не игровой): `bit = 0x80000000 >> (vKey & 31)`, `index = vKey >> 5`, чтение `ms_KeyInput.m_aKeysDown[index]` / `m_aKeysPressed[index]` (+0x18). Эквивалентно маппингу REPLAY.md (`игровой код = VK ^ 0x1F`, `bit = 1 << (code & 31)`): `1 << (n ^ 0x1F) = 0x80000000 >> n` для 5-битных n.
+
+**Верификация Этапа 2 (2026-08-18, прервано):**
+- ✅ Keybind-эмуляция работает для действий с **отдельными call sites** `isKeybindDown`: dodge (21, r_anim 0→99), движение 1/2/3, ninja (9), execution (20).
+- ❌ Keybind-эмуляция **НЕ работает** для действий из **цикла 5..22** (0x61DE21): `weapon_select` (16) не открыл меню, `pause` (18) — тоже. Цикл собирает константы/поля в `[esp+0x4C]`, но результат не влияет на активный unit 0 (вероятно, это сборка для геймпада/других unit'ов).
+- ❌ Запись в кэш `ms_KeyInput` + заморозка `ms_bUpdateKeyboard=false` **НЕ работает**: `ms_bUpdateKeyboard=0` ставится (видно в памяти), но `ms_KeyInput` остаётся 0 при активной подаче — DirectInput перезаписывает кэш независимо от флага (или меню читает ввод напрямую из DirectInput).
+- ⚠️ `ms_aKeyMap` (base+0x14CD838, «маппинг keybind→VK») — прочитаны странные значения (32, 57, 65, 30, 66, 48, 67, 46, 68, 32, 69, 18, 70, 33, 71, 34, 72, 35, 73, 23, 74, 36, 75) — не похожи на VK/игровые коды биндов; структура/смещение не подтверждены.
+- **Следующий шаг:** хук `isKeyDown` (0x9D93A0) / `isKeyPressed` (0x9D9400) — детур `extern "C" fn(vKey: i32) -> i32` (this в ECX игнорируется): эмуляция (битмаски `RAW_KEYS_*`) + чтение `ms_KeyInput` напрямую (оригинальный trampoline thiscall не вызываем).
 
 ## Опровергнутые гипотезы (не тратить время повторно)
 
@@ -143,6 +177,8 @@ call 0x785190           ; enableRipperMode()
 | 6 | Хук `isKeybindDown` (0x61D2D0) — точка движения | ❌ 0x61D2D0 — это **`isKeybindPressed`** (фронт), а не `isKeybindDown`. Вызывается с `k=11` (RIPPERMODE); FORWARD (k=0) не запрашивается — это не путь движения |
 | 7 | 0xDCE1B0 — keybind-проверка движения | ❌ Принимает указатель; вызывается 3 раза за сессию — не путь движения |
 | 8 | vtable 241 Pl0000 (0xB804B0) — это `updateInput` | ❌ Это switch по rAnim (`mov eax,[ecx+0x618]; cmp eax,0x141; jmp [table]`, 321 кейс); SDK vtable-индексы неточны |
+| 9 | Запись в кэш `ms_KeyInput` + `ms_bUpdateKeyboard=false` — подача меню-клавиш (esc/стрелки/Enter) | ❌ (2026-08-18) `ms_bUpdateKeyboard=0` ставится, но `ms_KeyInput` остаётся 0 — DirectInput перезаписывает кэш независимо от флага |
+| 10 | Keybind-эмуляция `isKeybindDown(16)` открывает меню оружия (`weapon_select`) | ❌ (2026-08-18) Цикл 5..22 (0x61DE21) не влияет на unit 0 — меню не открылось. Работают только отдельные call sites (dodge 21 и т.д.) |
 
 ## Грабли (технические ловушки)
 

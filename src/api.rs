@@ -75,11 +75,28 @@ enum ScriptStatus {
 
 /// Вход одной команды скрипта (JSON-объект `input`). Все поля опциональны;
 /// неизвестные ключи — ошибка (защита от опечаток LLM).
+///
+/// Семантика (см. docs/API.md §4.2):
+/// - движение (`forward`/`backward`/`left`/`right`) — биты InputUnit + left_stick;
+/// - hold-действия (`ninja_run`/`walk`/`dodge`/`blade`) — удержание keybind'а
+///   на все кадры команды (isKeybindDown);
+/// - pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/`ar_mode`/
+///   `weapon_select`/`codec`/`pause`/`camera_reset`/`zandatsu`) — фронт keybind'а
+///   на первом кадре команды (isKeybindPressed), `duration` игнорируется;
+/// - меню-клавиши (`confirm`/`menu_up`/`menu_down`/`menu_left`/`menu_right`) —
+///   сырые клавиши в кэш `ms_KeyInput` (меню читает их через isKeyDown/
+///   isKeyPressed, а не через keybind'ы), фронт на первом кадре.
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptInput {
     #[serde(default)]
     forward: bool,
+    #[serde(default)]
+    backward: bool,
+    #[serde(default)]
+    left: bool,
+    #[serde(default)]
+    right: bool,
     #[serde(default)]
     jump: bool,
     #[serde(default)]
@@ -93,6 +110,40 @@ struct ScriptInput {
     #[serde(default)]
     blade: bool,
     #[serde(default)]
+    ninja_run: bool,
+    #[serde(default)]
+    walk: bool,
+    #[serde(default)]
+    dodge: bool,
+    #[serde(default)]
+    lock_on: bool,
+    #[serde(default)]
+    subweapon: bool,
+    #[serde(default)]
+    item: bool,
+    #[serde(default)]
+    ar_mode: bool,
+    #[serde(default)]
+    weapon_select: bool,
+    #[serde(default)]
+    codec: bool,
+    #[serde(default)]
+    zandatsu: bool,
+    #[serde(default)]
+    camera_reset: bool,
+    #[serde(default)]
+    pause: bool,
+    #[serde(default)]
+    confirm: bool,
+    #[serde(default)]
+    menu_up: bool,
+    #[serde(default)]
+    menu_down: bool,
+    #[serde(default)]
+    menu_left: bool,
+    #[serde(default)]
+    menu_right: bool,
+    #[serde(default)]
     left_stick: Option<[f32; 2]>,
 }
 
@@ -100,11 +151,31 @@ impl ScriptInput {
     /// Пустой ли вход (ни один ключ не задан).
     fn is_empty(&self) -> bool {
         !self.forward
+            && !self.backward
+            && !self.left
+            && !self.right
             && !self.jump
             && !self.light_attack
             && !self.heavy_attack
             && !self.ripper
             && !self.blade
+            && !self.ninja_run
+            && !self.walk
+            && !self.dodge
+            && !self.lock_on
+            && !self.subweapon
+            && !self.item
+            && !self.ar_mode
+            && !self.weapon_select
+            && !self.codec
+            && !self.zandatsu
+            && !self.camera_reset
+            && !self.pause
+            && !self.confirm
+            && !self.menu_up
+            && !self.menu_down
+            && !self.menu_left
+            && !self.menu_right
             && self.camera.is_none()
             && self.left_stick.is_none()
     }
@@ -966,8 +1037,10 @@ fn parse_script(body: &str) -> Result<ScriptRequest, String> {
 }
 
 /// Вычисляет InputUnit кадра `script.frame` из активных команд и продвигает
-/// скрипт. Ripper подаётся фронтом `isKeybindPressed` (1 кадр), blade —
-/// удержанием `isKeybindDown` на время команды.
+/// скрипт. Keybind-действия подаются через эмуляцию `isKeybindPressed`
+/// (фронт, 1 кадр) / `isKeybindDown` (удержание на время команды); меню-клавиши
+/// (стрелки/Enter) — записью в кэш `ms_KeyInput` (меню читает их через
+/// `isKeyDown`/`isKeyPressed`, а не через keybind'ы).
 fn script_tick(script: &mut ScriptState) -> InputOverride {
     let k = script.frame;
     let mut unit = InputUnit {
@@ -977,17 +1050,44 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
     let mut active = false;
     let mut ripper_edge = false;
     let mut blade_on = false;
+    let mut ninja_on = false;
+    let mut walk_on = false;
+    let mut dodge_on = false;
+    let mut lock_on = false;
+    let mut subweapon = false;
+    let mut item = false;
+    let mut camera_reset = false;
+    let mut zandatsu = false;
+    let mut raw_active = false;
     for cmd in &script.commands {
         if k < cmd.t || k >= cmd.t + cmd.duration {
             continue;
         }
         let inp = &cmd.input;
+        // Движение: биты направлений + left_stick (если не задан явно).
+        let mut stick = [0.0f32, 0.0];
         if inp.forward {
             unit.buttons_down |= addresses::input_bits::FORWARD;
-            if unit.left_stick == [0.0, 0.0] {
-                unit.left_stick = [0.0, -1000.0];
-            }
+            stick[1] -= 1000.0;
             active = true;
+        }
+        if inp.backward {
+            unit.buttons_down |= addresses::input_bits::BACK;
+            stick[1] += 1000.0;
+            active = true;
+        }
+        if inp.left {
+            unit.buttons_down |= addresses::input_bits::LEFT;
+            stick[0] -= 1000.0;
+            active = true;
+        }
+        if inp.right {
+            unit.buttons_down |= addresses::input_bits::RIGHT;
+            stick[0] += 1000.0;
+            active = true;
+        }
+        if stick != [0.0, 0.0] && inp.left_stick.is_none() {
+            unit.left_stick = stick;
         }
         if inp.jump {
             unit.buttons_down |= addresses::input_bits::JUMP;
@@ -1014,11 +1114,70 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
             unit.right_stick = [dx, dy];
             active = true;
         }
-        if inp.ripper && k == cmd.t {
-            ripper_edge = true;
+        // Hold-действия (isKeybindDown): удержание на все кадры команды.
+        if inp.ninja_run {
+            ninja_on = true;
+            active = true;
+        }
+        if inp.walk {
+            walk_on = true;
+            active = true;
+        }
+        if inp.dodge {
+            dodge_on = true;
+            active = true;
         }
         if inp.blade {
             blade_on = true;
+        }
+        // Toggle-действия: удержание keybind'а на все кадры команды
+        // (isKeybindDown; игра сама детектирует фронт). Клавиши 1/2/3 и Esc
+        // игра читает как сырые клавиши — они обрабатываются ниже.
+        if inp.ripper && k == cmd.t {
+            ripper_edge = true;
+        }
+        if inp.lock_on {
+            lock_on = true;
+            active = true;
+        }
+        if inp.subweapon {
+            subweapon = true;
+            active = true;
+        }
+        if inp.item {
+            item = true;
+            active = true;
+        }
+        if inp.camera_reset {
+            camera_reset = true;
+            active = true;
+        }
+        if inp.zandatsu {
+            zandatsu = true;
+            active = true;
+        }
+        // Меню-клавиши и цифры 1/2/3: сырые клавиши в кэш ms_KeyInput
+        // (меню читает их через isKeyDown/isKeyPressed, а не через keybind'ы).
+        // Удержание на все кадры команды + фронт pressed на первом кадре.
+        let raw = [
+            (inp.pause, addresses::KEY_ESC),
+            (inp.ar_mode, addresses::KEY_DIGIT1),
+            (inp.weapon_select, addresses::KEY_DIGIT2),
+            (inp.codec, addresses::KEY_DIGIT3),
+            (inp.confirm, addresses::KEY_ENTER),
+            (inp.menu_up, addresses::KEY_UP),
+            (inp.menu_down, addresses::KEY_DOWN),
+            (inp.menu_left, addresses::KEY_LEFT),
+            (inp.menu_right, addresses::KEY_RIGHT),
+        ];
+        for (on, code) in raw {
+            if on {
+                hooks::set_raw_key(code, false);
+                if k == cmd.t {
+                    hooks::set_raw_key(code, true);
+                }
+                raw_active = true;
+            }
         }
         if let Some(ls) = inp.left_stick {
             unit.left_stick = ls;
@@ -1028,6 +1187,19 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
         hooks::set_ripper_frames(1);
     }
     hooks::set_blade_hold(blade_on);
+    hooks::set_keybind_hold(addresses::KEYBIND_NINJARUN, ninja_on);
+    hooks::set_keybind_hold(addresses::KEYBIND_WALK, walk_on);
+    hooks::set_keybind_hold(addresses::KEYBIND_DEFFENSIVE_OFFENSIVE, dodge_on);
+    hooks::set_keybind_hold(addresses::KEYBIND_SWITCH_LOCK_ON, lock_on);
+    hooks::set_keybind_hold(addresses::KEYBIND_USE_SUBWEAPON, subweapon);
+    hooks::set_keybind_hold(addresses::KEYBIND_USE_ITEM, item);
+    hooks::set_keybind_hold(addresses::KEYBIND_CAMERA_RESET, camera_reset);
+    hooks::set_keybind_hold(addresses::KEYBIND_EXECUTION, zandatsu);
+    // Raw-биты живут, пока активна команда с raw-входом: без таких команд
+    // в этом кадре — сброс (иначе меню увидит «залипшую» клавишу).
+    if !raw_active {
+        hooks::clear_raw_keys();
+    }
     script.frame += 1;
     if script.frame >= script.total_frames {
         script.status = ScriptStatus::Done;
@@ -1070,6 +1242,15 @@ fn decode_buttons(down: u32) -> Vec<&'static str> {
     if down & addresses::input_bits::FORWARD != 0 {
         v.push("forward");
     }
+    if down & addresses::input_bits::BACK != 0 {
+        v.push("backward");
+    }
+    if down & addresses::input_bits::LEFT != 0 {
+        v.push("left");
+    }
+    if down & addresses::input_bits::RIGHT != 0 {
+        v.push("right");
+    }
     if down & addresses::input_bits::JUMP != 0 {
         v.push("jump");
     }
@@ -1078,6 +1259,9 @@ fn decode_buttons(down: u32) -> Vec<&'static str> {
     }
     if down & addresses::input_bits::HEAVY_ATTACK != 0 {
         v.push("heavy_attack");
+    }
+    if down & addresses::input_bits::NINJA_RUN != 0 {
+        v.push("ninja_run");
     }
     v
 }
