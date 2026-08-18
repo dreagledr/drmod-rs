@@ -78,8 +78,11 @@ enum ScriptStatus {
 ///
 /// Семантика (см. docs/API.md §4.2):
 /// - движение (`forward`/`backward`/`left`/`right`) — биты InputUnit + left_stick;
-/// - hold-действия (`ninja_run`/`walk`/`dodge`/`blade`) — удержание keybind'а
+/// - hold-действия (`ninja_run`/`walk`/`dodge`) — удержание keybind'а
 ///   на все кадры команды (isKeybindDown);
+/// - `blade` — бит 0x800 в InputUnit (как ninja 0x4000): игра кодирует блейд
+///   этим битом, keybind-эмуляция isKeybindDown(8) для скриптов не работает
+///   (игра читает её только в key-event обработке);
 /// - pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/`ar_mode`/
 ///   `weapon_select`/`codec`/`pause`/`camera_reset`/`zandatsu`) — фронт keybind'а
 ///   на первом кадре команды (isKeybindPressed), `duration` игнорируется;
@@ -1184,7 +1187,18 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
             active = true;
         }
         if inp.blade {
+            // Блейд-режим: игра читает бит 0x800 в InputUnit (как ninja 0x4000) —
+            // реальный ввод при удержании клавиши блейда даёт down=0x800 + фронт
+            // pressed на 1-м кадре (запись 33 в БД). Keybind-эмуляция
+            // (set_blade_hold) НЕ работает: игра вызывает isKeybindDown(8) только
+            // в key-event обработке (0x61DA85), скрипт key events не создаёт.
+            // Механизм — как в playback (replay.rs): подача InputUnit с битом 0x800.
+            unit.buttons_down |= addresses::input_bits::BLADE;
+            if k == cmd.t {
+                unit.buttons_pressed |= addresses::input_bits::BLADE;
+            }
             blade_on = true;
+            active = true;
         }
         // Toggle-действия: удержание keybind'а на все кадры команды
         // (isKeybindDown; игра сама детектирует фронт). Клавиши 1/2/3 и Esc
@@ -1341,6 +1355,9 @@ fn decode_buttons(down: u32) -> Vec<&'static str> {
     }
     if down & addresses::input_bits::NINJA_RUN != 0 {
         v.push("ninja_run");
+    }
+    if down & addresses::input_bits::BLADE != 0 {
+        v.push("blade");
     }
     v
 }

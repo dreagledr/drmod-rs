@@ -1,0 +1,7 @@
+{
+  "name": "test-blade-jump",
+  "commands": [
+    { "t": 0,  "duration": 20, "input": { "jump": true } },
+    { "t": 20, "duration": 30, "input": { "blade": true } }
+  ]
+}

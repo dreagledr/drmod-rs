@@ -1,0 +1,7 @@
+{
+  "name": "test-blade-after-run",
+  "commands": [
+    { "t": 0,  "duration": 30, "input": { "forward": true } },
+    { "t": 30, "duration": 30, "input": { "forward": true, "blade": true } }
+  ]
+}

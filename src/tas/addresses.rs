@@ -130,6 +130,12 @@ pub(crate) mod input_bits {
     /// LCtrl (лог: `cur_in down=00404000`). Сам keybind — KEYBIND_NINJARUN (9),
     /// подаётся через isKeybindDown; бит нужен только для декодирования логов.
     pub const NINJA_RUN: u32 = 0x0000_4000;
+    /// Blade mode — бит в InputUnit (эмпирически, 2026-08-18: запись 33 в БД —
+    /// реальное удержание клавиши блейда даёт `down=00400800` + фронт
+    /// `pressed=00000800` на 1-м кадре). Игра кодирует блейд этим битом
+    /// (как ninja_run — 0x4000); keybind-эмуляция (isKeybindDown(8)) НЕ
+    /// работает для скриптов — игра читает её только в key-event обработке.
+    pub const BLADE: u32 = 0x0000_0800;
 }
 
 /// Pl0000::m_fInputDirection — направление ввода (спроецировано на камеру).
