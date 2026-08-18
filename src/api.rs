@@ -22,8 +22,7 @@ use crate::tas::hooks;
 use crate::tas::replay;
 use crate::tas::types::{InputOverride, InputUnit, PlayerState};
 use crate::ui::UiState;
-use serde::Serialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -74,25 +73,61 @@ enum ScriptStatus {
     Stopped,
 }
 
-/// Декодированный вход одной команды скрипта.
-#[derive(Clone, Copy, Default)]
+/// Вход одной команды скрипта (JSON-объект `input`). Все поля опциональны;
+/// неизвестные ключи — ошибка (защита от опечаток LLM).
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ScriptInput {
+    #[serde(default)]
     forward: bool,
+    #[serde(default)]
     jump: bool,
+    #[serde(default)]
     light_attack: bool,
+    #[serde(default)]
     heavy_attack: bool,
+    #[serde(default)]
     camera: Option<[f32; 2]>,
+    #[serde(default)]
     ripper: bool,
+    #[serde(default)]
     blade: bool,
+    #[serde(default)]
     left_stick: Option<[f32; 2]>,
 }
 
+impl ScriptInput {
+    /// Пустой ли вход (ни один ключ не задан).
+    fn is_empty(&self) -> bool {
+        !self.forward
+            && !self.jump
+            && !self.light_attack
+            && !self.heavy_attack
+            && !self.ripper
+            && !self.blade
+            && self.camera.is_none()
+            && self.left_stick.is_none()
+    }
+}
+
 /// Одна команда скрипта: входы активны с кадра `t` на `duration` кадров.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Deserialize)]
 struct ScriptCommand {
     t: u32,
     duration: u32,
     input: ScriptInput,
+}
+
+/// Тело `POST /script/run` (JSON).
+#[derive(Deserialize)]
+struct ScriptRequest {
+    #[serde(default = "default_script_name")]
+    name: String,
+    commands: Vec<ScriptCommand>,
+}
+
+fn default_script_name() -> String {
+    "script".to_string()
 }
 
 /// Активный (или последний) скрипт.
@@ -160,6 +195,94 @@ struct StateSnapshot {
     r_anim: i32,
     ripper: i32,
     blade: i32,
+}
+
+/// `GET /health` — живость, версия, base_addr, uptime.
+#[derive(Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    version: &'static str,
+    base_addr: String,
+    uptime_ms: u64,
+}
+
+/// `GET /state` — снимок игрока.
+#[derive(Serialize)]
+struct PlayerSnapshot {
+    found: bool,
+    pos: [f32; 3],
+    rot: [f32; 3],
+    vel: [f32; 3],
+    hp: i32,
+    r_anim: i32,
+    ripper: i32,
+    blade: i32,
+}
+
+/// Статус скрипта (в `/state` и `/script/{id}`).
+#[derive(Serialize)]
+struct ScriptStatusJson {
+    id: u32,
+    name: String,
+    status: ScriptStatus,
+    frame: u32,
+    total_frames: u32,
+}
+
+/// `GET /state` — текущий снимок игры + статус скрипта + fps.
+#[derive(Serialize)]
+struct StateResponse {
+    t_ms: u64,
+    mission_id: i32,
+    mission_name: String,
+    menu_status: String,
+    player: PlayerSnapshot,
+    script: Option<ScriptStatusJson>,
+    fps: f32,
+}
+
+/// `POST /script/run` — ответ.
+#[derive(Serialize)]
+struct ScriptRunResponse {
+    script_id: u32,
+    name: String,
+    total_frames: u32,
+}
+
+/// `POST /script/stop` — ответ.
+#[derive(Serialize)]
+struct ScriptStopResponse {
+    stopped: bool,
+    script_id: u32,
+}
+
+/// `GET /logs` — ответ.
+#[derive(Serialize)]
+struct LogsResponse {
+    from_ms: u64,
+    to_ms: u64,
+    count: usize,
+    frames: Vec<LogFrameJson>,
+}
+
+/// Ошибка: `{ "error": "..." }`.
+#[derive(Serialize)]
+struct ErrorResponse {
+    error: String,
+}
+
+/// Тело ответа — один из типизированных JSON-ответов (untagged: сериализуется
+/// как содержимое варианта).
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Response {
+    Health(HealthResponse),
+    State(StateResponse),
+    ScriptRun(ScriptRunResponse),
+    ScriptStop(ScriptStopResponse),
+    ScriptStatus(ScriptStatusJson),
+    Logs(LogsResponse),
+    Error(ErrorResponse),
 }
 
 /// Кольцевой буфер кадров: при переполнении старые кадры вытесняются.
@@ -351,7 +474,7 @@ impl ApiServer {
     /// В release вызывается только извне (HTTP) — отсюда allow.
     #[allow(dead_code)]
     pub fn start_builtin_script(&self) {
-        let (name, commands) = match parse_script(BUILTIN_SCRIPT) {
+        let req = match parse_script(BUILTIN_SCRIPT) {
             Ok(v) => v,
             Err(e) => {
                 logger::log_line(&format!("api: builtin script parse FAIL: {}", e));
@@ -369,19 +492,19 @@ impl ApiServer {
         }
         let id = guard.next_script_id;
         guard.next_script_id += 1;
-        let total_frames = commands.iter().map(|c| c.t + c.duration).max().unwrap_or(0);
+        let total_frames = req.commands.iter().map(|c| c.t + c.duration).max().unwrap_or(0);
         hooks::clear_keybind_emulation();
         guard.script = Some(ScriptState {
             id,
-            name: name.clone(),
-            commands,
+            name: req.name.clone(),
+            commands: req.commands,
             frame: 0,
             status: ScriptStatus::Running,
             total_frames,
         });
         logger::log_line(&format!(
             "api: builtin script {} '{}' started ({} frames)",
-            id, name, total_frames
+            id, req.name, total_frames
         ));
     }
 
@@ -445,7 +568,13 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>) {
             break p + 4;
         }
         if head.len() > MAX_HEADER_BYTES {
-            respond(&mut stream, 400, &json!({ "error": "headers too large" }));
+            respond(
+                &mut stream,
+                400,
+                &Response::Error(ErrorResponse {
+                    error: "headers too large".into(),
+                }),
+            );
             return;
         }
         match stream.read(&mut buf) {
@@ -478,11 +607,23 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>) {
         }
     }
     if chunked {
-        respond(&mut stream, 400, &json!({ "error": "chunked transfer not supported" }));
+        respond(
+            &mut stream,
+            400,
+            &Response::Error(ErrorResponse {
+                error: "chunked transfer not supported".into(),
+            }),
+        );
         return;
     }
     if content_length > MAX_BODY_BYTES as usize {
-        respond(&mut stream, 413, &json!({ "error": "body too large" }));
+        respond(
+            &mut stream,
+            413,
+            &Response::Error(ErrorResponse {
+                error: "body too large".into(),
+            }),
+        );
         return;
     }
 
@@ -513,71 +654,74 @@ fn route(
     target: &str,
     body: &str,
     state: &Arc<Mutex<SharedState>>,
-) -> (u16, serde_json::Value) {
+) -> (u16, Response) {
     let (path, query) = match target.split_once('?') {
         Some((p, q)) => (p, q),
         None => (target, ""),
     };
     match (method, path) {
-        ("GET", "/health") => (200, health_json(state)),
-        ("GET", "/state") => (200, state_json(state)),
+        ("GET", "/health") => (200, Response::Health(health_json(state))),
+        ("GET", "/state") => (200, Response::State(state_json(state))),
         ("POST", "/script/run") => handle_script_run(body, state),
         ("POST", "/script/stop") => handle_script_stop(state),
         ("GET", path) if path.starts_with("/script/") => handle_script_get(path, state),
         ("GET", "/logs") => handle_logs(query, state),
-        _ => (404, json!({ "error": "not found" })),
+        _ => (
+            404,
+            Response::Error(ErrorResponse {
+                error: "not found".into(),
+            }),
+        ),
     }
 }
 
 /// `GET /health` — живость, версия, base_addr, uptime.
-fn health_json(state: &Arc<Mutex<SharedState>>) -> serde_json::Value {
+fn health_json(state: &Arc<Mutex<SharedState>>) -> HealthResponse {
     let guard = state.lock().unwrap();
-    json!({
-        "status": "ok",
-        "version": env!("CARGO_PKG_VERSION"),
-        "base_addr": format!("0x{:08X}", guard.base_addr),
-        "uptime_ms": guard.start.elapsed().as_millis() as u64,
-    })
+    HealthResponse {
+        status: "ok",
+        version: env!("CARGO_PKG_VERSION"),
+        base_addr: format!("0x{:08X}", guard.base_addr),
+        uptime_ms: guard.start.elapsed().as_millis() as u64,
+    }
 }
 
 /// `GET /state` — текущий снимок игры + статус скрипта + fps.
-fn state_json(state: &Arc<Mutex<SharedState>>) -> serde_json::Value {
+fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
     let guard = state.lock().unwrap();
     let s = &guard.snapshot;
-    let script = guard.script.as_ref().map(|sc| {
-        json!({
-            "id": sc.id,
-            "name": sc.name,
-            "status": sc.status,
-            "frame": sc.frame,
-            "total_frames": sc.total_frames,
-        })
+    let script = guard.script.as_ref().map(|sc| ScriptStatusJson {
+        id: sc.id,
+        name: sc.name.clone(),
+        status: sc.status,
+        frame: sc.frame,
+        total_frames: sc.total_frames,
     });
-    json!({
-        "t_ms": s.t_ms,
-        "mission_id": s.mission_id,
-        "mission_name": s.mission_name,
-        "menu_status": s.menu_status,
-        "player": {
-            "found": s.player_found,
-            "pos": s.pos,
-            "rot": s.rot,
-            "vel": s.vel,
-            "hp": s.hp,
-            "r_anim": s.r_anim,
-            "ripper": s.ripper,
-            "blade": s.blade,
+    StateResponse {
+        t_ms: s.t_ms,
+        mission_id: s.mission_id,
+        mission_name: s.mission_name.clone(),
+        menu_status: s.menu_status.clone(),
+        player: PlayerSnapshot {
+            found: s.player_found,
+            pos: s.pos,
+            rot: s.rot,
+            vel: s.vel,
+            hp: s.hp,
+            r_anim: s.r_anim,
+            ripper: s.ripper,
+            blade: s.blade,
         },
-        "script": script,
-        "fps": guard.fps,
-    })
+        script,
+        fps: guard.fps,
+    }
 }
 
 /// `POST /script/run` — запуск скрипта из JSON-тела.
-fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
-    let (name, commands) = match parse_script(body) {
+fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    let req = match parse_script(body) {
         Ok(v) => v,
-        Err(e) => return (400, json!({ "error": e })),
+        Err(e) => return (400, Response::Error(ErrorResponse { error: e })),
     };
     let mut guard = state.lock().unwrap();
     if guard
@@ -588,71 +732,100 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde
         let s = guard.script.as_ref().unwrap();
         return (
             409,
-            json!({ "error": format!("script already running: id={} name={}", s.id, s.name) }),
+            Response::Error(ErrorResponse {
+                error: format!("script already running: id={} name={}", s.id, s.name),
+            }),
         );
     }
     let id = guard.next_script_id;
     guard.next_script_id += 1;
-    let total_frames = commands.iter().map(|c| c.t + c.duration).max().unwrap_or(0);
+    let total_frames = req.commands.iter().map(|c| c.t + c.duration).max().unwrap_or(0);
     // Сброс остатков keybind-эмуляции (ripper/blade) до старта.
     hooks::clear_keybind_emulation();
     guard.script = Some(ScriptState {
         id,
-        name: name.clone(),
-        commands,
+        name: req.name.clone(),
+        commands: req.commands,
         frame: 0,
         status: ScriptStatus::Running,
         total_frames,
     });
     logger::log_line(&format!(
         "api: script {} '{}' started ({} frames)",
-        id, name, total_frames
+        id, req.name, total_frames
     ));
     (
         200,
-        json!({ "script_id": id, "name": name, "total_frames": total_frames }),
+        Response::ScriptRun(ScriptRunResponse {
+            script_id: id,
+            name: req.name,
+            total_frames,
+        }),
     )
 }
 
 /// `POST /script/stop` — остановка активного скрипта.
-fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
+fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     let mut guard = state.lock().unwrap();
     match guard.script.as_mut() {
         Some(s) if s.status == ScriptStatus::Running => {
             let id = s.id;
             stop_script(s);
             logger::log_line(&format!("api: script {} stopped by request", id));
-            (200, json!({ "stopped": true, "script_id": id }))
+            (
+                200,
+                Response::ScriptStop(ScriptStopResponse {
+                    stopped: true,
+                    script_id: id,
+                }),
+            )
         }
-        _ => (404, json!({ "error": "no active script" })),
+        _ => (
+            404,
+            Response::Error(ErrorResponse {
+                error: "no active script".into(),
+            }),
+        ),
     }
 }
 
 /// `GET /script/{id}` — статус скрипта.
-fn handle_script_get(path: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
+fn handle_script_get(path: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     let id_str = &path["/script/".len()..];
     let id: u32 = match id_str.parse() {
         Ok(v) => v,
-        Err(_) => return (400, json!({ "error": "invalid script id" })),
+        Err(_) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: "invalid script id".into(),
+                }),
+            )
+        }
     };
     let guard = state.lock().unwrap();
     match guard.script.as_ref().filter(|s| s.id == id) {
         Some(s) => (
             200,
-            json!({
-                "id": s.id,
-                "name": s.name,
-                "status": s.status,
-                "frame": s.frame,
-                "total_frames": s.total_frames,
+            Response::ScriptStatus(ScriptStatusJson {
+                id: s.id,
+                name: s.name.clone(),
+                status: s.status,
+                frame: s.frame,
+                total_frames: s.total_frames,
             }),
         ),
-        None => (404, json!({ "error": format!("script {} not found", id) })),
+        None => (
+            404,
+            Response::Error(ErrorResponse {
+                error: format!("script {} not found", id),
+            }),
+        ),
     }
 }
 
 /// `GET /logs` — кадры из кольцевого буфера по интервалу/скрипту.
-fn handle_logs(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde_json::Value) {
+fn handle_logs(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     let params = parse_query(query);
     let guard = state.lock().unwrap();
     let now = guard.start.elapsed().as_millis() as u64;
@@ -678,18 +851,18 @@ fn handle_logs(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, serde_json
         .collect();
     (
         200,
-        json!({
-            "from_ms": from_ms,
-            "to_ms": to_ms,
-            "count": frames.len(),
-            "frames": frames,
+        Response::Logs(LogsResponse {
+            from_ms,
+            to_ms,
+            count: frames.len(),
+            frames,
         }),
     )
 }
 
 /// Пишет HTTP-ответ с JSON-телом и Connection: close (без keep-alive —
 /// соединение живёт ровно один запрос, висящих соединений нет).
-fn respond(stream: &mut TcpStream, code: u16, value: &serde_json::Value) {
+fn respond(stream: &mut TcpStream, code: u16, value: &Response) {
     let body = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
     let reason = match code {
         200 => "OK",
@@ -719,137 +892,38 @@ fn parse_query(query: &str) -> HashMap<String, String> {
     map
 }
 
-/// Парсинг скрипта из JSON-тела. Возвращает (name, commands) или текст ошибки.
-fn parse_script(body: &str) -> Result<(String, Vec<ScriptCommand>), String> {
-    let v: serde_json::Value =
-        serde_json::from_str(body).map_err(|e| format!("invalid JSON: {}", e))?;
-    let name = v
-        .get("name")
-        .and_then(|n| n.as_str())
-        .unwrap_or("script")
-        .to_string();
-    if name.len() > 64 {
+/// Парсинг скрипта из JSON-тела + пост-валидация лимитов. Serde покрывает
+/// типы и неизвестные ключи (с path к полю), здесь — кросс-полевые проверки.
+fn parse_script(body: &str) -> Result<ScriptRequest, String> {
+    let req: ScriptRequest =
+        serde_json::from_str(body).map_err(|e| format!("invalid script: {}", e))?;
+    if req.name.len() > 64 {
         return Err("name too long (max 64)".into());
     }
-    let commands = v
-        .get("commands")
-        .and_then(|c| c.as_array())
-        .ok_or("missing 'commands' array")?;
-    if commands.is_empty() {
+    if req.commands.is_empty() {
         return Err("commands is empty".into());
     }
-    let mut out = Vec::with_capacity(commands.len());
-    for (i, cmd) in commands.iter().enumerate() {
-        let t = cmd
-            .get("t")
-            .and_then(|x| x.as_u64())
-            .ok_or(format!("commands[{}]: missing/invalid 't'", i))? as u32;
-        let duration = cmd
-            .get("duration")
-            .and_then(|x| x.as_u64())
-            .ok_or(format!("commands[{}]: missing/invalid 'duration'", i))? as u32;
-        if duration == 0 {
+    for (i, cmd) in req.commands.iter().enumerate() {
+        if cmd.duration == 0 {
             return Err(format!("commands[{}]: duration must be >= 1", i));
         }
-        if t > MAX_SCRIPT_FRAMES || duration > MAX_SCRIPT_FRAMES {
+        if cmd.t > MAX_SCRIPT_FRAMES || cmd.duration > MAX_SCRIPT_FRAMES {
             return Err(format!(
                 "commands[{}]: t/duration exceeds max {}",
                 i, MAX_SCRIPT_FRAMES
             ));
         }
-        if t + duration > MAX_SCRIPT_FRAMES {
+        if cmd.t + cmd.duration > MAX_SCRIPT_FRAMES {
             return Err(format!(
                 "commands[{}]: t+duration exceeds max {}",
                 i, MAX_SCRIPT_FRAMES
             ));
         }
-        let input = cmd
-            .get("input")
-            .ok_or(format!("commands[{}]: missing 'input'", i))?;
-        let input = parse_input(input, i)?;
-        out.push(ScriptCommand { t, duration, input });
-    }
-    Ok((name, out))
-}
-
-/// Парсинг `input` команды. Неизвестные ключи — ошибка (защита от опечаток LLM).
-fn parse_input(v: &serde_json::Value, i: usize) -> Result<ScriptInput, String> {
-    let obj = v
-        .as_object()
-        .ok_or(format!("commands[{}]: 'input' must be an object", i))?;
-    let mut si = ScriptInput::default();
-    let mut any = false;
-    for (k, val) in obj {
-        let bool_val = |val: &serde_json::Value| -> Result<bool, String> {
-            val.as_bool()
-                .ok_or_else(|| format!("commands[{}]: '{}' must be a bool", i, k))
-        };
-        match k.as_str() {
-            "forward" => {
-                si.forward = bool_val(val)?;
-                any |= si.forward;
-            }
-            "jump" => {
-                si.jump = bool_val(val)?;
-                any |= si.jump;
-            }
-            "light_attack" => {
-                si.light_attack = bool_val(val)?;
-                any |= si.light_attack;
-            }
-            "heavy_attack" => {
-                si.heavy_attack = bool_val(val)?;
-                any |= si.heavy_attack;
-            }
-            "ripper" => {
-                si.ripper = bool_val(val)?;
-                any |= si.ripper;
-            }
-            "blade" => {
-                si.blade = bool_val(val)?;
-                any |= si.blade;
-            }
-            "camera" => {
-                let arr = val
-                    .as_array()
-                    .ok_or(format!("commands[{}]: 'camera' must be an array", i))?;
-                if arr.len() != 2 {
-                    return Err(format!("commands[{}]: 'camera' must be [dx, dy]", i));
-                }
-                let dx = arr[0]
-                    .as_f64()
-                    .ok_or(format!("commands[{}]: 'camera' dx must be a number", i))? as f32;
-                let dy = arr[1]
-                    .as_f64()
-                    .ok_or(format!("commands[{}]: 'camera' dy must be a number", i))? as f32;
-                si.camera = Some([dx, dy]);
-                any = true;
-            }
-            "left_stick" => {
-                let arr = val
-                    .as_array()
-                    .ok_or(format!("commands[{}]: 'left_stick' must be an array", i))?;
-                if arr.len() != 2 {
-                    return Err(format!("commands[{}]: 'left_stick' must be [x, y]", i));
-                }
-                let x = arr[0]
-                    .as_f64()
-                    .ok_or(format!("commands[{}]: 'left_stick' x must be a number", i))? as f32;
-                let y = arr[1]
-                    .as_f64()
-                    .ok_or(format!("commands[{}]: 'left_stick' y must be a number", i))? as f32;
-                si.left_stick = Some([x, y]);
-                any = true;
-            }
-            other => {
-                return Err(format!("commands[{}]: unknown input key '{}'", i, other));
-            }
+        if cmd.input.is_empty() {
+            return Err(format!("commands[{}]: input is empty", i));
         }
     }
-    if !any {
-        return Err(format!("commands[{}]: input is empty", i));
-    }
-    Ok(si)
+    Ok(req)
 }
 
 /// Вычисляет InputUnit кадра `script.frame` из активных команд и продвигает

@@ -1,5 +1,5 @@
 use crate::segment::Vec3;
-use drmod_protocol::{parse_udp, PositionPacket, SkeletonBone, SkeletonPacket, TcpMessage, UdpPacket};
+use drmod_protocol::{make_msg, parse_udp, PositionPacket, SkeletonBone, SkeletonPacket, TcpMessage, UdpPacket};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc;
@@ -57,14 +57,11 @@ impl NetClient {
         let mut tcp = TcpStream::connect(addr).map_err(|e| format!("tcp connect: {}", e))?;
 
         // Отправляем connect
-        let connect_msg = serde_json::json!({
-            "type": "connect",
-            "room": room,
-            "name": name,
-            "mission_id": 0
+        let payload = make_msg(&TcpMessage::Connect {
+            room: room.to_string(),
+            name: name.to_string(),
+            mission_id: 0,
         });
-        let mut payload = serde_json::to_vec(&connect_msg).map_err(|e| format!("json: {}", e))?;
-        payload.push(0);
         tcp.write_all(&payload)
             .map_err(|e| format!("tcp write: {}", e))?;
 
