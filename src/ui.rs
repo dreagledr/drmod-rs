@@ -128,10 +128,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             // --- ВЫХОД ---
             ui.separator();
             if ui.button("Выход / Выгрузить DLL") {
-                hud.net_client = None;
-                // Остановить HTTP-поток и снять override ввода до выгрузки DLL.
-                hud.api.shutdown();
-                hudhook::eject();
+                hud.api.request_eject();
             }
         });
 }
@@ -231,10 +228,7 @@ pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
 
             ui.separator();
             if ui.button("Выход / Выгрузить DLL") {
-                hud.net_client = None;
-                // Остановить HTTP-поток и снять override ввода до выгрузки DLL.
-                hud.api.shutdown();
-                hudhook::eject();
+                hud.api.request_eject();
             }
         });
 }

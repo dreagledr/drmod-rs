@@ -256,6 +256,12 @@ struct ScriptStopResponse {
     script_id: u32,
 }
 
+/// `POST /eject` — ответ. Сам eject выполняет render-цикл (см. `handle_eject`).
+#[derive(Serialize)]
+struct EjectResponse {
+    ejecting: bool,
+}
+
 /// `GET /logs` — ответ.
 #[derive(Serialize)]
 struct LogsResponse {
@@ -282,6 +288,7 @@ enum Response {
     ScriptStop(ScriptStopResponse),
     ScriptStatus(ScriptStatusJson),
     Logs(LogsResponse),
+    Eject(EjectResponse),
     Error(ErrorResponse),
 }
 
@@ -333,6 +340,11 @@ struct SharedState {
     fps: f32,
     base_addr: usize,
     next_script_id: u32,
+    /// Запрос eject через `POST /eject`: HTTP-поток ставит флаг и успевает
+    /// ответить, render-цикл проверяет его каждый кадр и выполняет
+    /// `shutdown()` + `hudhook::eject()` (из HTTP-потока это невозможно —
+    /// `shutdown()` джойнит сам себя).
+    eject_requested: bool,
 }
 
 /// HTTP API-сервер. Владеет потоком; `Drop`/`shutdown` останавливает поток
@@ -356,6 +368,7 @@ impl ApiServer {
             fps: 0.0,
             base_addr,
             next_script_id: 1,
+            eject_requested: false,
         }));
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -467,6 +480,19 @@ impl ApiServer {
             .script
             .as_ref()
             .is_some_and(|s| s.status == ScriptStatus::Running)
+    }
+
+    /// Запрошен ли eject через `POST /eject`. Проверяется в render-цикле
+    /// каждый кадр; при `true` render выполняет `shutdown()` + `eject()`.
+    pub fn eject_requested(&self) -> bool {
+        self.state.lock().unwrap().eject_requested
+    }
+
+    /// Запрос eject из UI (кнопка «Выход / Выгрузить DLL»): ставит тот же
+    /// флаг, что и `POST /eject` — render-цикл выполняет выгрузку в конце
+    /// кадра. Единый путь для кнопки и HTTP.
+    pub fn request_eject(&self) {
+        self.state.lock().unwrap().eject_requested = true;
     }
 
     /// Запускает встроенный скрипт NumPad4 (run-jump-attack) — тот же механизм,
@@ -664,6 +690,7 @@ fn route(
         ("GET", "/state") => (200, Response::State(state_json(state))),
         ("POST", "/script/run") => handle_script_run(body, state),
         ("POST", "/script/stop") => handle_script_stop(state),
+        ("POST", "/eject") => handle_eject(state),
         ("GET", path) if path.starts_with("/script/") => handle_script_get(path, state),
         ("GET", "/logs") => handle_logs(query, state),
         _ => (
@@ -787,6 +814,18 @@ fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             }),
         ),
     }
+}
+
+/// `POST /eject` — запрос выгрузки DLL. Только ставит флаг: сам eject
+/// (`shutdown()` + `hudhook::eject()`) выполняет render-цикл, когда увидит
+/// флаг в следующем кадре. Из HTTP-потока это невозможно — `shutdown()`
+/// джойнит сам себя, а `hudhook::eject()` обрабатывается в render-цикле.
+/// Идемпотентно: повторный запрос до обработки флага тоже возвращает 200.
+fn handle_eject(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    let mut guard = state.lock().unwrap();
+    guard.eject_requested = true;
+    logger::log_line("api: eject requested via POST /eject");
+    (200, Response::Eject(EjectResponse { ejecting: true }))
 }
 
 /// `GET /script/{id}` — статус скрипта.

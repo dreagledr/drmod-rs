@@ -1,9 +1,11 @@
 ﻿# test_api.ps1 — drmod HTTP API smoke test
-# Usage: .\test_api.ps1 [-BaseUrl http://127.0.0.1:5223]
+# Usage: .\test_api.ps1 [-BaseUrl http://127.0.0.1:5223] [-Eject]
 # Требует: игра запущена, мод инжектирован (API на 127.0.0.1:5223).
+# -Eject: финальный шаг POST /eject — выгружает DLL (порт освобождается).
 
 param(
-    [string]$BaseUrl = "http://127.0.0.1:5223"
+    [string]$BaseUrl = "http://127.0.0.1:5223",
+    [switch]$Eject
 )
 
 $ErrorActionPreference = "Stop"
@@ -167,6 +169,28 @@ try {
 } catch {
     Write-Host "  FAIL: load test: $_" -ForegroundColor Red
     $script:Failures++
+}
+
+# ── Step 9: POST /eject (только с -Eject) ──
+if ($Eject) {
+    Write-Host "`n=== Step 9: POST /eject ===" -ForegroundColor Cyan
+    try {
+        $ej = Invoke-RestMethod -Uri "$BaseUrl/eject" -Method Post -TimeoutSec 3
+        Assert-True "ejecting response" ($ej.ejecting -eq $true)
+        # Render-цикл обрабатывает флаг в следующем кадре; порт освобождается
+        # после shutdown() HTTP-потока (join ограничен таймаутами сокетов).
+        Start-Sleep -Seconds 2
+        try {
+            Invoke-RestMethod -Uri "$BaseUrl/health" -Method Get -TimeoutSec 1 | Out-Null
+            Write-Host "  FAIL: API still alive after eject" -ForegroundColor Red
+            $script:Failures++
+        } catch {
+            Write-Host "  PASS: API unreachable after eject (port released)" -ForegroundColor Green
+        }
+    } catch {
+        Write-Host "  FAIL: /eject: $_" -ForegroundColor Red
+        $script:Failures++
+    }
 }
 
 # ── Summary ──

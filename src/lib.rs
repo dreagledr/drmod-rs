@@ -591,6 +591,15 @@ impl HelloHud {
         })
     }
 
+    /// Выгрузка DLL: отключение сети, остановка HTTP-потока (снятие override
+    /// ввода), затем флаг eject для hudhook (обрабатывается в render-цикле
+    /// после Present). Единая точка для кнопки «Выход» и `POST /eject`.
+    fn eject(&mut self) {
+        self.net_client = None;
+        self.api.shutdown();
+        hudhook::eject();
+    }
+
 }
 
 unsafe impl Send for HelloHud {}
@@ -1082,6 +1091,12 @@ impl ImguiRenderLoop for HelloHud {
         ui::render_multiplayer_window(ui, self);
 
         ui::render_settings_window(ui, self);
+
+        // --- EJECT через API: POST /eject ставит флаг в SharedState, здесь
+        // (в render-цикле, как и кнопка «Выход») выполняем саму выгрузку. ---
+        if self.api.eject_requested() {
+            self.eject();
+        }
     }
 }
 
