@@ -26,7 +26,7 @@
 | `subweapon` | ✅ | hold `isKeybindDown(13)` | проверено (2026-08-19): долгое удержание (120 кадров) → режим прицеливания; короткий тап (2 кадра) → мгновенное применение без прицеливания. Игра кодирует subweapon битом `0x400` в InputUnit (фронт `pressed=0x400` на 1-м кадре, дальше `down=0x400`) |
 | `item` | ✅ | hold `isKeybindDown(14)` | проверено (2026-08-19): применение предмета (и долгое удержание, и короткий тап). Режима прицеливания у item нет — в отличие от subweapon (13) |
 | `ar_mode` | ✅ | бит **`0x08`** + фронт `pressed=0x08` | 🔧 фикс: игра кодирует AR-режим битом 0x08 в InputUnit (как прыжок 0x10) — raw-подача через кэш `ms_KeyInput` не работает (§10.3). Механизм — как у прыжка: бит + фронт pressed на 1-м кадре. ✅ проверено live (2026-08-19) |
-| `weapon_select` | ✅ | прямая запись `GameMenuStatus=9` (SelectWeaponMenu) | 🔧 фикс 2026-08-19: бит 0x01 = DPAD_LEFT (геймпад), не клавиша "2" — битовый путь листает слоты. Открывает меню; закрытие — через `confirm` (2 кадра). ✅ проверено live |
+| `weapon_select` | ✅ | бит **`0x01`** (DPAD_LEFT) + фронт; **гейт по GameMenuStatus** | 🔧 фикс 2026-08-19: бит подаётся только пока `GameMenuStatus != SelectWeaponMenu` — игра сама открывает меню, бит не листает слоты (в меню бит 0x01 = навигация влево). Настоящий ввод, совместим с записью/воспроизведением (TAS). ✅ проверено live |
 | `codec` | ❌ | raw-клавиша (3) | механизм raw-кэша не работает (§10.3) — нужен хук isKeyDown/isKeyPressed |
 | `zandatsu` | ❓ | hold `isKeybindDown(20)` | keybind 20 имеет отдельный call site (может работать) — ❓ не тестировался (нужен враг) |
 | `camera_reset` | ❌ | hold `isKeybindDown(19)` | ожидается фейл — ❓ не перепроверялся |
@@ -42,8 +42,8 @@
   `ripper` (фронт 1 тик), `dodge`, `subweapon` (hold `isKeybindDown(13)`; долгое удержание →
   прицеливание, короткий тап → мгновенное применение; игра кодирует его битом `0x400` в InputUnit),
   `item` (hold `isKeybindDown(14)`; применение предмета — режима прицеливания нет, в отличие
-  от subweapon), `ar_mode` (бит 0x08 + фронт), `weapon_select` (прямая запись
-  GameMenuStatus=9; закрытие — `confirm` 2 кадра), `menu_up/down/left/right`
+  от subweapon), `ar_mode` (бит 0x08 + фронт), `weapon_select` (бит 0x01 +
+  гейт по GameMenuStatus — настоящий ввод), `menu_up/down/left/right`
   (D-Pad биты 0x08/0x04/0x01/0x02), `confirm` (BUTTON_A 0x10, 2 кадра),
   `camera` (yaw + pitch; значения как у реальной
   мыши, см. таблицу), `light_attack`/`heavy_attack` (ранее).

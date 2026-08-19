@@ -257,6 +257,14 @@ test bl, 0x08   → push 0x8F             → call isKeyDown  ← codec?
 
 **Альтернативный путь (RedTrainer):** прямая запись `GameMenuStatus = 9` по адресу `base + 0x17E9F9C` через `setMenuType(7)` + патчинг памяти. Но это открывает меню без выбора слота — навигация всё равно нужна.
 
+**Финальное решение (2026-08-19, проверено live):** подача бита **`0x01`** (DPAD_LEFT) в InputUnit как настоящий ввод + **гейт по GameMenuStatus**: бит подаётся только пока `GameMenuStatus != SelectWeaponMenu` (9). Игра сама открывает меню по биту, а в открытом меню бит 0x01 не подаётся (иначе это навигация влево — листала бы слоты). Совместимо с TAS записью/воспроизведением — без прямой записи памяти.
+
+**Найденные факты дизассемблирования (2026-08-19):**
+- Игра **не пишет** `GameMenuStatus = 9` imm-ом (`mov [GameMenuStatus], 9` — 0 хитов в exe; ImageBase 0x400000, GameMenuStatus = base+0x17E9F9C). Переход в SelectWeaponMenu идёт через другой механизм (проверка ввода → создание объекта меню 0x5926A0).
+- Switch по GameMenuStatus 0..8 на RVA 0x829400 (jump table на base+0x16697DC = RVA 0x8297DC, значения — адреса `base + RVA`).
+- `GAME_WEAPON_SELECT` флаг (Trigger.h, бит 0x40000, index 18) — base+0x17EA090, ~1033 обращения в exe.
+- Функция 0x8AC570 маппит биты InputUnit на `isKeyDown` (0x9D93A0): 0x01→0x8D, 0x02→0x8E, 0x04→0x8C, 0x08→0x8F, 0x400→0x92, 0x2000→0x93. Это клавиатурные эквиваленты D-Pad/кнопок — меню навигируется и через биты InputUnit напрямую (проверено live), и через isKeyDown.
+
 ## Логи отладки
 
 - `%LOCALAPPDATA%\drmod\debug.log` — детуры, override, frame-дампы (cur_in/g_unit0/pos, плюс `mouse=`/`space=`/`w=` для сопоставления битов).
