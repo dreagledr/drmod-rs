@@ -1,0 +1,6 @@
+{
+  "name": "test-ar-mode",
+  "commands": [
+    { "t": 0,  "duration": 60, "input": { "ar_mode": true } }
+  ]
+}

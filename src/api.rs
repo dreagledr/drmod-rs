@@ -83,7 +83,9 @@ enum ScriptStatus {
 /// - `blade` — бит 0x800 в InputUnit (как ninja 0x4000): игра кодирует блейд
 ///   этим битом, keybind-эмуляция isKeybindDown(8) для скриптов не работает
 ///   (игра читает её только в key-event обработке);
-/// - pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/`ar_mode`/
+/// - битовые (`jump`/`light_attack`/`heavy_attack`/`ar_mode`) — бит в InputUnit
+///   + фронт pressed на первом кадре команды;
+/// - pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/
 ///   `weapon_select`/`codec`/`pause`/`camera_reset`/`zandatsu`) — фронт keybind'а
 ///   на первом кадре команды (isKeybindPressed), `duration` игнорируется;
 /// - меню-клавиши (`confirm`/`menu_up`/`menu_down`/`menu_left`/`menu_right`) —
@@ -1145,6 +1147,15 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
             }
             active = true;
         }
+        if inp.ar_mode {
+            // AR-режим: бит 0x08 в InputUnit (как прыжок) — raw-подача через
+            // кэш ms_KeyInput не работает (§10.3). Бит + фронт pressed.
+            unit.buttons_down |= addresses::input_bits::AR_MODE;
+            if k == cmd.t {
+                unit.buttons_pressed |= addresses::input_bits::AR_MODE;
+            }
+            active = true;
+        }
         if inp.light_attack {
             unit.buttons_down |= addresses::input_bits::LIGHT_ATTACK;
             if k == cmd.t {
@@ -1231,7 +1242,6 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
         // Удержание на все кадры команды + фронт pressed на первом кадре.
         let raw = [
             (inp.pause, addresses::KEY_ESC),
-            (inp.ar_mode, addresses::KEY_DIGIT1),
             (inp.weapon_select, addresses::KEY_DIGIT2),
             (inp.codec, addresses::KEY_DIGIT3),
             (inp.confirm, addresses::KEY_ENTER),

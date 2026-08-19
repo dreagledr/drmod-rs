@@ -276,8 +276,8 @@
 | `lock_on` | bool | Lock-on (E, toggle): удержание `isKeybindDown(12)` на все кадры команды ⚠️ не проверено (нужен враг) |
 | `subweapon` | bool | Под-оружие (C): удержание `isKeybindDown(13)` на все кадры. ✅ проверено (2026-08-19): долгое удержание → режим прицеливания, короткий тап (2 кадра) → мгновенное применение без прицеливания. Игра кодирует subweapon битом `0x400` в InputUnit (фронт `pressed=0x400` на 1-м кадре, дальше `down=0x400`) |
 | `item` | bool | Предмет (Q): удержание `isKeybindDown(14)` на все кадры ⚠️ не проверено |
-| `ar_mode` | bool | AR-режим (1): сырая клавиша в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) |
-| `weapon_select` | bool | Меню выбора оружия (2): сырая клавиша в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) |
+| `ar_mode` | bool | AR-режим (1): бит **`0x08`** в `buttons_down` + фронт `pressed=0x08` на первом кадре (как `jump` 0x10). 🔧 Фикс 2026-08-19: игра кодирует AR-режим битом 0x08 в InputUnit — raw-подача через кэш `ms_KeyInput` не работает (§10.3). ✅ проверено live |
+| `weapon_select` | bool | Меню выбора оружия (2): сырая клавиша в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) — аналогично `ar_mode`, нужен бит InputUnit |
 | `codec` | bool | Меню кодек (3): сырая клавиша в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) |
 | `zandatsu` | bool | Zandatsu (X): удержание `isKeybindDown(20)` на все кадры ⚠️ не проверено (нужен враг) |
 | `camera_reset` | bool | Сброс камеры (СММ): удержание `isKeybindDown(19)` на все кадры ⚠️ не проверено |
@@ -293,11 +293,11 @@
 На кадре `K` скрипт собирает `InputUnit` из всех активных команд (`t <= K < t + duration`):
 
 1. Движение (`forward`/`backward`/`left`/`right`) → `buttons_down |= бит направления`; `left_stick` собирается из направлений (`[0,-1000]`/`[0,1000]`/`[-1000,0]`/`[1000,0]`, диагонали суммируются), если `left_stick` не задан явно.
-2. `jump`/`light_attack`/`heavy_attack` → `buttons_down |= бит`; на `K == t` — также `buttons_pressed |= бит` (однократный фронт).
+2. `jump`/`light_attack`/`heavy_attack`/`ar_mode` → `buttons_down |= бит`; на `K == t` — также `buttons_pressed |= бит` (однократный фронт).
 3. `camera` → `right_stick = [dx, dy]`.
 4. Hold-действия (`dodge`) → `hooks::set_keybind_hold(keybind, true)` на время команды; при окончании — `false`. Работает (отдельные call sites `isKeybindDown`). Проверено: `dodge`. Исключения: `walk` — keybind 4 игра не читает, ходьба = стик ×0.5 (см. §4.2); `ninja_run`/`blade` — биты InputUnit `0x4000`/`0x8000` + фронт pressed на первом кадре (keybind-путь для unit 0 не работает).
 5. Toggle-действия (`lock_on`/`subweapon`/`item`/`camera_reset`/`zandatsu`) → `hooks::set_keybind_hold(keybind, true)` на время команды. ✅ Проверено: `subweapon` (13) — долгое удержание → режим прицеливания, короткий тап → мгновенное применение; игра сама кодирует его битом `0x400` в InputUnit (цикл 5..22 в 0x61DE21 влияет на unit 0 для subweapon, в отличие от меню-действий 16/18). ⚠️ `lock_on`/`item`/`camera_reset`/`zandatsu` — не проверены (нужны враг/условия). Исключение — `ripper`: `hooks::set_keybind_pressed(11, 1)` (единственное действие через `isKeybindPressed`).
-6. Меню-клавиши и цифры 1/2/3 (`pause`/`ar_mode`/`weapon_select`/`codec`/`confirm`/`menu_*`) → запись сырой клавиши в кэш `ms_KeyInput` + заморозка `ms_bUpdateKeyboard` — ⚠️ **не работает** (DirectInput перезаписывает кэш, см. §10.3). План: хук `isKeyDown`/`isKeyPressed`.
+6. Меню-клавиши и цифры 2/3 (`pause`/`weapon_select`/`codec`/`confirm`/`menu_*`) → запись сырой клавиши в кэш `ms_KeyInput` + заморозка `ms_bUpdateKeyboard` — ⚠️ **не работает** (DirectInput перезаписывает кэш, см. §10.3). План: хук `isKeyDown`/`isKeyPressed` или бит InputUnit (как `ar_mode` 0x08).
 7. Если хоть что-то активно — `valid_input = 1`, override активен; иначе — override снят (реальный ввод проходит).
 
 ### 4.4. Валидация
@@ -362,7 +362,7 @@ NumPad4 запускает тот же механизм, что и `POST /script
 
 ### Этап 2 🔧 — расширение набора входов (частично реализован, ТРЕБУЕТ ДОРАБОТОК — НЕ СЧИТАТЬ РЕАЛИЗОВАННЫМ, 2026-08-18)
 
-Полный набор входов: движение в 4 стороны, hold-действия (`ninja_run`/`walk`/`dodge`/`blade`), pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/`ar_mode`/`weapon_select`/`codec`/`pause`/`camera_reset`/`zandatsu`), меню-клавиши (`confirm`/`menu_up`/`menu_down`/`menu_left`/`menu_right`).
+Полный набор входов: движение в 4 стороны, hold-действия (`ninja_run`/`walk`/`dodge`/`blade`), pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/`weapon_select`/`codec`/`pause`/`camera_reset`/`zandatsu`), битовые (`jump`/`light_attack`/`heavy_attack`/`ar_mode`), меню-клавиши (`confirm`/`menu_up`/`menu_down`/`menu_left`/`menu_right`).
 
 1. **Дизассемблирование** (`tools/disasm`): call sites `isKeybindDown` (0x61D280) / `isKeybindPressed` (0x61D2D0) — **все** действия, кроме ripper, активируются через `isKeybindDown` (движение 1/2/3, ninja_run 9, dodge 21, execution 20, цикл 5..22); `isKeybindPressed` вызывается только для ripper (11). Биты движения подтверждены логом (`cur_in down`): `0x400000`=W, `0x800000`=S, `0x200000`=A, `0x100000`=D.
 2. `src/tas/hooks.rs`: обобщённая keybind-эмуляция — `set_keybind_hold(keybind, on)` / `set_keybind_pressed(keybind, frames)` для произвольных индексов (вместо жёстко зашитых ripper/blade) + raw-клавиши меню `set_raw_key(code, pressed)` (запись в кэш `ms_KeyInput` с заморозкой `ms_bUpdateKeyboard`).
@@ -384,10 +384,11 @@ NumPad4 запускает тот же механизм, что и `POST /script
 - **`subweapon`** — ✅ проверено (2026-08-19): долгое удержание (120 кадров) → режим прицеливания; короткий тап (2 кадра) → мгновенное применение без прицеливания. Механизм — hold `isKeybindDown(13)` (реализация уже работала, код не менялся). Игра кодирует subweapon битом `0x400` в InputUnit (debug.log: 1-й кадр `down=00000400 pressed=00000400`, далее `down=00000400`) — бит ставит сама игра из keybind-удержания (наш override пустой), т.е. цикл 5..22 (0x61DE21) влияет на unit 0 для subweapon, в отличие от меню-действий (16/18). Тест-скрипты: `test_inputs/subweapon_hold.json`, `test_inputs/subweapon_tap.json`.
 - **`ripper`** — ✅ перепроверен: 🔧 фикс (см. §4.2) — фронт `isKeybindPressed(11)` теперь живёт ровно 1 игровой тик (счёт в `script_tick`, не в детуре). Вкл/выкл чисто, на бегу держится (без самовыключения).
 - **`blade`** — 🔧 фикс 2026-08-18: keybind-эмуляция `isKeybindDown(8)` НЕ работает (игра читает её только в key-event обработке 0x61DA85, скрипт key events не создаёт). Реализовано как `ninja_run`: бит `0x800` в `buttons_down` + фронт `pressed=0x800` на первом кадре (реальный ввод кодирует блейд этим битом — запись 33 в БД: `down=00400800`; тот же механизм, что в playback replay.rs).
+- **`ar_mode`** — 🔧 фикс 2026-08-19: игра кодирует AR-режим битом **`0x08`** в InputUnit (как `jump` 0x10). Реализовано как `jump`: бит `0x08` в `buttons_down` + фронт `pressed=0x08` на первом кадре. Raw-подача через кэш `ms_KeyInput` не работает (§10.3). ✅ проверено live. Тест-скрипт: `test_inputs/ar_mode.json`.
 - **Валидация скриптов**: новые ключи проходят, неизвестные — 400.
 
 **❌ НЕ работает (подтверждено):**
-- **Меню-клавиши** (`pause`/`confirm`/`menu_*`) и **цифры 1/2/3** (`ar_mode`/`weapon_select`/`codec`): raw-подача через кэш `ms_KeyInput` **не работает** (§10.3) — план хук `isKeyDown`/`isKeyPressed`.
+- **Меню-клавиши** (`pause`/`confirm`/`menu_*`) и **цифры 2/3** (`weapon_select`/`codec`): raw-подача через кэш `ms_KeyInput` **не работает** (§10.3) — план хук `isKeyDown`/`isKeyPressed` или бит InputUnit (как `ar_mode` 0x08).
 - **`lock_on`/`item`/`camera_reset`** (keybind-эмуляция): цикл 5..22 не влияет на unit 0 (§10.3) — по отдельности не перепроверялись в этой сессии (ожидается фейл). ⚠️ Уточнение (2026-08-19): для `subweapon` (13) keybind-удержание РАБОТАЕТ (см. выше) — вывод «цикл 5..22 не влияет на unit 0» верен только для меню-действий.
 
 **⚠️ Не проверено (нужен враг/другие условия):** `zandatsu` (execution 20), `lock_on` (12).
