@@ -1,0 +1,8 @@
+{
+  "commands": [
+    { "t": 0, "duration": 20, "input": { "jump": true } },
+    { "t": 10, "duration": 1, "input": { "weapon_select": true } },
+    { "t": 30, "duration": 2, "input": { "menu_down": true } },
+    { "t": 60, "duration": 2, "input": { "confirm": true } }
+  ]
+}

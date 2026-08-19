@@ -277,13 +277,13 @@
 | `subweapon` | bool | Под-оружие (C): удержание `isKeybindDown(13)` на все кадры. ✅ проверено (2026-08-19): долгое удержание → режим прицеливания, короткий тап (2 кадра) → мгновенное применение без прицеливания. Игра кодирует subweapon битом `0x400` в InputUnit (фронт `pressed=0x400` на 1-м кадре, дальше `down=0x400`) |
 | `item` | bool | Предмет (Q): удержание `isKeybindDown(14)` на все кадры ⚠️ не проверено |
 | `ar_mode` | bool | AR-режим (1): бит **`0x08`** в `buttons_down` + фронт `pressed=0x08` на первом кадре (как `jump` 0x10). 🔧 Фикс 2026-08-19: игра кодирует AR-режим битом 0x08 в InputUnit — raw-подача через кэш `ms_KeyInput` не работает (§10.3). ✅ проверено live |
-| `weapon_select` | bool | Меню выбора оружия (2): хук `isKeyDown(0x8D)` через `set_raw_key`. 🔧 Фикс 2026-08-19: бит 0x01 = DPAD_LEFT (геймпад), не клавиша "2" — битовый путь листает слоты. Реализован хук `isKeyDown`/`isKeyPressed` (0x9D93A0/0x9D9400), подача через `set_raw_key(KEY_WEAPON_SELECT=0x8D)`. ⚠️ Требуется тестирование |
+| `weapon_select` | bool | Меню выбора оружия (2): прямая запись `GameMenuStatus=9` (SelectWeaponMenu) по адресу `base+0x17E9F9C`. 🔧 Фикс 2026-08-19: бит 0x01 = DPAD_LEFT (геймпад) — битовый путь открывает меню И листает слоты. Работает как toggle: повторный вызов закрывает меню. Навигация — `menu_up`/`menu_down` |
 | `codec` | bool | Меню кодек (3): сырая клавиша в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) |
 | `zandatsu` | bool | Zandatsu (X): удержание `isKeybindDown(20)` на все кадры ⚠️ не проверено (нужен враг) |
 | `camera_reset` | bool | Сброс камеры (СММ): удержание `isKeybindDown(19)` на все кадры ⚠️ не проверено |
 | `pause` | bool | Пауза/меню (Esc): сырая клавиша в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) |
-| `confirm` | bool | Подтвердить в меню (Enter): сырая клавиша в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) |
-| `menu_up` / `menu_down` / `menu_left` / `menu_right` | bool | Стрелки в меню: сырые клавиши в кэш `ms_KeyInput` ⚠️ механизм НЕ работает (см. §10.3) |
+| `confirm` | bool | Подтвердить в меню (Enter/A): бит **`0x10`** (BUTTON_A геймпада, тот же что jump) в `buttons_down` + фронт `pressed`. 🔧 Фикс 2026-08-19: **минимум 2 кадра** — 1 кадр слишком короткий, игра не успевает обработать. ✅ проверено live: подтверждает выбор и закрывает меню |
+| `menu_up` / `menu_down` / `menu_left` / `menu_right` | bool | Стрелки в меню: D-Pad биты геймпада `0x08`/`0x04`/`0x01`/`0x02` в `buttons_down` + фронт `pressed`. 🔧 Фикс 2026-08-19: меню навигируется геймпадными D-Pad битами InputUnit (не клавишами/хуком isKeyDown). ✅ `menu_down` проверен live — курсор двигается |
 | `left_stick` | `[x, y]` | Явный стик (переопределяет дефолт движения) |
 
 Неизвестные ключи в `input` — ошибка `400` (защита от опечаток LLM: `"light_attackk"` не пройдёт молча).
@@ -297,7 +297,7 @@
 3. `camera` → `right_stick = [dx, dy]`.
 4. Hold-действия (`dodge`) → `hooks::set_keybind_hold(keybind, true)` на время команды; при окончании — `false`. Работает (отдельные call sites `isKeybindDown`). Проверено: `dodge`. Исключения: `walk` — keybind 4 игра не читает, ходьба = стик ×0.5 (см. §4.2); `ninja_run`/`blade` — биты InputUnit `0x4000`/`0x8000` + фронт pressed на первом кадре (keybind-путь для unit 0 не работает).
 5. Toggle-действия (`lock_on`/`subweapon`/`item`/`camera_reset`/`zandatsu`) → `hooks::set_keybind_hold(keybind, true)` на время команды. ✅ Проверено: `subweapon` (13) — долгое удержание → режим прицеливания, короткий тап → мгновенное применение; игра сама кодирует его битом `0x400` в InputUnit (цикл 5..22 в 0x61DE21 влияет на unit 0 для subweapon, в отличие от меню-действий 16/18). ⚠️ `lock_on`/`item`/`camera_reset`/`zandatsu` — не проверены (нужны враг/условия). Исключение — `ripper`: `hooks::set_keybind_pressed(11, 1)` (единственное действие через `isKeybindPressed`).
-6. Меню-клавиши и цифры 2/3 (`pause`/`weapon_select`/`codec`/`confirm`/`menu_*`) → запись сырой клавиши в кэш `ms_KeyInput` + заморозка `ms_bUpdateKeyboard` — ⚠️ **не работает** (DirectInput перезаписывает кэш, см. §10.3). План: хук `isKeyDown`/`isKeyPressed` или бит InputUnit (как `ar_mode` 0x08).
+6. Меню-клавиши: `weapon_select` → прямая запись `GameMenuStatus=9` (SelectWeaponMenu) по `base+0x17E9F9C`; `confirm` → бит BUTTON_A `0x10` + фронт, **минимум 2 кадра**; `menu_*` → D-Pad биты `0x08`/`0x04`/`0x01`/`0x02` + фронт (меню навигируется геймпадными битами InputUnit, не клавишами). `pause`/`codec` (цифра 3/Esc) — raw-кэш `ms_KeyInput` — ⚠️ **не работает** (DirectInput перезаписывает кэш, см. §10.3).
 7. Если хоть что-то активно — `valid_input = 1`, override активен; иначе — override снят (реальный ввод проходит).
 
 ### 4.4. Валидация

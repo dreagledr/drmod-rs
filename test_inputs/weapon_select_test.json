@@ -1,7 +1,7 @@
 {
   "commands": [
-    {"t": 0, "duration": 1, "input": {"weapon_select": true}},
-    {"t": 2, "duration": 2, "input": {"menu_down": true}},
-    {"t": 5, "duration": 1, "input": {"confirm": true}}
+    { "t": 0, "duration": 1, "input": { "weapon_select": true } },
+    { "t": 120, "duration": 2, "input": { "menu_down": true } },
+    { "t": 240, "duration": 2, "input": { "confirm": true } }
   ]
 }

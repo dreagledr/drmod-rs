@@ -3,7 +3,7 @@ const res = await fetch("http://localhost:5223/script/run", {
   headers: {
     "Content-Type": "application/json",
   },
-  body: Bun.file("weapon_select.json"),
+  body: Bun.file("weapon_select_test.json"),
 });
 
 console.log(res);

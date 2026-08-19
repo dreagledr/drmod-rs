@@ -78,31 +78,46 @@ pub(crate) const KEYBIND_FIRE_SUBWEAPON: i32 = 22;
 /// Количество keybind'ов (KEYBIND_TOTAL).
 pub(crate) const KEYBIND_TOTAL: usize = 23;
 
-/// Игровые коды клавиш меню (сырой ввод `ms_KeyInput`, см. docs/REPLAY.md §2.1).
+/// Игровые коды клавиш (сырой ввод `ms_KeyInput`, см. docs/REPLAY.md §2.1).
 /// Меню читает их через `KeyInput::isKeyDown`/`isKeyPressed` (0x9D93A0/0x9D9400),
-/// а не через keybind'ы — для подачи нужна запись в кэш `ms_KeyInput`.
-pub(crate) const KEY_ENTER: u8 = 0x15;
+/// а не через keybind'ы. Коды сверены с дизассемблированием функции 0x8AC570
+/// (маппинг битов InputUnit на isKeyDown, 2026-08-19):
+/// бит 0x01→0x8D, 0x02→0x8E, 0x04→0x8C, 0x08→0x8F, 0x400→0x92, 0x2000→0x93.
+/// Примечание (2026-08-19): навигация в меню работает напрямую через D-Pad
+/// биты InputUnit (0x1/0x2/0x4/0x8) — хук isKeyDown не требуется для
+/// menu_*/confirm. Константы оставлены для reference и raw-клавиш
+/// (codec/pause через цифру 3 / Esc).
+#[allow(dead_code)]
+pub(crate) const KEY_ENTER: u8 = 0x8C;
+#[allow(dead_code)]
 pub(crate) const KEY_ESC: u8 = 0x8E;
+#[allow(dead_code)]
 pub(crate) const KEY_UP: u8 = 0x90;
+#[allow(dead_code)]
 pub(crate) const KEY_RIGHT: u8 = 0x91;
+#[allow(dead_code)]
 pub(crate) const KEY_LEFT: u8 = 0x92;
+#[allow(dead_code)]
 pub(crate) const KEY_DOWN: u8 = 0x93;
 /// Клавиша weapon_select (открытие меню оружия) — игровой код 0x8D.
 /// Из дизассемблирования функции 0x8AC570: бит 0x01 в InputUnit маппится
 /// на `isKeyDown(0x8D)`. Это НЕ клавиша "2" (0x2D), а кнопка геймпада
 /// (DPAD_LEFT), которая на геймпаде открывает weapon select.
+#[allow(dead_code)]
 pub(crate) const KEY_WEAPON_SELECT: u8 = 0x8D;
 /// Клавиша codec (предположительно) — игровой код 0x8F.
+#[allow(dead_code)]
 pub(crate) const KEY_CODEC: u8 = 0x8F;
 /// Игровые коды цифр 1/2/3 (`VK ^ 0x1F`, см. docs/REPLAY.md §2.1):
 /// 1 → 0x2E, 2 → 0x2D, 3 → 0x2C. Кодек игра читает как сырую клавишу
 /// (keybind-эмуляция не срабатывает, проверено 2026-08-18).
 /// AR-режим (1) идёт через бит InputUnit `0x08` (`input_bits::AR_MODE`),
-/// меню оружия (2) — через бит `0x1` (`input_bits::WEAPON_SELECT`).
+/// меню оружия (2) — через прямую запись GameMenuStatus (см. api.rs).
 #[allow(dead_code)]
 pub(crate) const KEY_DIGIT1: u8 = 0x2E;
 #[allow(dead_code)]
 pub(crate) const KEY_DIGIT2: u8 = 0x2D;
+#[allow(dead_code)]
 pub(crate) const KEY_DIGIT3: u8 = 0x2C;
 /// cInput::updateInputUnit(InputUnit*, int userIndex) — функция, которую игра
 /// вызывает каждый тик для заполнения глобального InputUnit из DirectInput.
@@ -130,7 +145,23 @@ pub(crate) mod input_bits {
     /// 2026-08-19). Игра кодирует меню оружия этим битом (тот, что раньше
     /// ошибочно считался прыжком, §10.1); raw-подача через кэш `ms_KeyInput`
     /// не работает (§10.3) — механизм как у прыжка: бит + фронт pressed.
+    /// Примечание (2026-08-19): меню теперь открывается прямой записью
+    /// GameMenuStatus (см. api.rs) — бит 0x1 остаётся как reference.
+    #[allow(dead_code)]
     pub const WEAPON_SELECT: u32 = 0x0000_0001;
+    /// Навигация в меню — D-Pad биты геймпада (`eInputButton` из SDK):
+    /// DPAD_LEFT=0x1, DPAD_RIGHT=0x2, DPAD_DOWN=0x4, DPAD_UP=0x8.
+    /// Проверено live (2026-08-19): подача бита 0x1 в открытом меню оружия
+    /// двигает выбор. В геймплее эти же биты — кнопки D-Pad (0x1 = weapon
+    /// select, 0x8 = AR mode), поэтому меню нужно открывать отдельно (прямая
+    /// запись GameMenuStatus), а навигацию подавать после открытия.
+    pub const MENU_LEFT: u32 = 0x0000_0001;
+    pub const MENU_RIGHT: u32 = 0x0000_0002;
+    pub const MENU_DOWN: u32 = 0x0000_0004;
+    pub const MENU_UP: u32 = 0x0000_0008;
+    /// Подтверждение в меню — BUTTON_A (0x10) геймпада. В геймплее A = jump,
+    /// в меню A = confirm (SDK `eInputButton`). Тот же бит, что JUMP.
+    pub const CONFIRM: u32 = 0x0000_0010;
     /// Лёгкая атака (ЛКМ)
     pub const LIGHT_ATTACK: u32 = 0x0000_0040;
     /// Тяжёлая атака (ПКМ)

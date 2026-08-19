@@ -1,0 +1,10 @@
+{
+  "commands": [
+    { "t": 0, "duration": 1, "input": { "weapon_select": true } },
+    { "t": 30, "duration": 2, "input": { "menu_right": true } },
+    { "t": 60, "duration": 2, "input": { "menu_left": true } },
+    { "t": 90, "duration": 2, "input": { "menu_up": true } },
+    { "t": 120, "duration": 2, "input": { "menu_down": true } },
+    { "t": 150, "duration": 2, "input": { "confirm": true } }
+  ]
+}

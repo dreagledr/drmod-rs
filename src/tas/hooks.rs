@@ -100,6 +100,7 @@ pub(crate) fn blade_hold() -> bool {
 /// Взводит эмуляцию raw-клавиши меню (стрелки/Enter): бит в `ms_KeyInput`
 /// (down или pressed) + заморозка кэша. `pressed = true` — однократный фронт
 /// (навигация в меню), `false` — удержание.
+#[allow(dead_code)]
 pub(crate) fn set_raw_key(code: u8, pressed: bool) {
     let index = (code >> 5) as usize;
     let bit = 1u32 << (code & 31);
@@ -279,6 +280,7 @@ unsafe extern "thiscall" fn is_key_down_detour(this: *const u8, vkey: i32) -> i3
     let index = (vkey >> 5) as usize;
     let bit = 1u32 << (vkey & 31);
     if index < 6 && RAW_KEYS_DOWN[index].load(Ordering::Relaxed) & bit != 0 {
+        crate::logger::log_line(&format!("isKeyDown(0x{:X}) -> 1 (emulated)", vkey));
         return 1;
     }
     if let Some(&orig) = ORIG_IS_KEY_DOWN.get() {

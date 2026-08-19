@@ -534,9 +534,10 @@ impl ApiServer {
 
         // Продвижение активного скрипта: вычисляем InputUnit кадра и подаём
         // через override; по завершении снимаем override и keybind-эмуляцию.
+        let base_addr = guard.base_addr;
         let script_id = if let Some(s) = guard.script.as_mut() {
             if s.status == ScriptStatus::Running {
-                let ov = script_tick(s);
+                let ov = script_tick(s, base_addr);
                 replay::set_input_override(ov);
                 if s.status == ScriptStatus::Done {
                     replay::set_input_override(InputOverride::default());
@@ -1108,7 +1109,7 @@ fn parse_script(body: &str) -> Result<ScriptRequest, String> {
 /// (фронт, 1 кадр) / `isKeybindDown` (удержание на время команды); меню-клавиши
 /// (стрелки/Enter) — записью в кэш `ms_KeyInput` (меню читает их через
 /// `isKeyDown`/`isKeyPressed`, а не через keybind'ы).
-fn script_tick(script: &mut ScriptState) -> InputOverride {
+fn script_tick(script: &mut ScriptState, base_addr: usize) -> InputOverride {
     let k = script.frame;
     let mut unit = InputUnit {
         valid_input: 1,
@@ -1125,7 +1126,6 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
     let mut item = false;
     let mut camera_reset = false;
     let mut zandatsu = false;
-    let mut raw_active = false;
     for cmd in &script.commands {
         if k < cmd.t || k >= cmd.t + cmd.duration {
             continue;
@@ -1172,14 +1172,20 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
             // }
             active = true;
         }
-        if inp.weapon_select {
-            // Меню выбора оружия: хук isKeyDown (0x9D93A0) возвращает 1 для
-            // KEY_WEAPON_SELECT (0x8D) — функция 0x8AC570 вызывает isKeyDown
-            // с этим кодом для бита 0x01 в InputUnit (DPAD_LEFT на геймпаде).
-            // Битовый путь (как ar_mode 0x08) не работает — бит 0x01 одновременно
-            // открывает меню И листает слоты (навигация D-Pad'ом).
-            hooks::set_raw_key(addresses::KEY_WEAPON_SELECT, k == cmd.t);
-            raw_active = true;
+        if inp.weapon_select && k == cmd.t {
+            // Меню выбора оружия: прямая запись GameMenuStatus = 9 (SelectWeaponMenu).
+            // Битовый путь (0x01) + raw_key (0x8D) не работает — функция 0x8AC570
+            // не вызывается из updateInputUnit. Прямая запись надёжнее.
+            if base_addr != 0 {
+                let menu_status_addr = base_addr + 0x17E9F9C;
+                unsafe {
+                    *(menu_status_addr as *mut i32) = 9; // SelectWeaponMenu
+                }
+                crate::logger::log_line(&format!(
+                    "weapon_select: wrote GameMenuStatus=9 at 0x{:X}",
+                    menu_status_addr
+                ));
+            }
             active = true;
         }
         if inp.light_attack {
@@ -1263,25 +1269,24 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
             zandatsu = true;
             active = true;
         }
-        // Меню-клавиши и цифры 1/2/3: сырые клавиши в кэш ms_KeyInput
-        // (меню читает их через isKeyDown/isKeyPressed, а не через keybind'ы).
-        // Удержание на все кадры команды + фронт pressed на первом кадре.
-        let raw = [
-            (inp.pause, addresses::KEY_ESC),
-            (inp.codec, addresses::KEY_DIGIT3),
-            (inp.confirm, addresses::KEY_ENTER),
-            (inp.menu_up, addresses::KEY_UP),
-            (inp.menu_down, addresses::KEY_DOWN),
-            (inp.menu_left, addresses::KEY_LEFT),
-            (inp.menu_right, addresses::KEY_RIGHT),
+        // Навигация в меню — D-Pad биты геймпада (0x1/0x2/0x4/0x8) + подтверждение
+        // BUTTON_A (0x10). Проверено live (2026-08-19): подача битов в открытом
+        // меню двигает выбор. Меню открывается отдельно — weapon_select через
+        // прямую запись GameMenuStatus (см. выше).
+        let menu_bits = [
+            (inp.menu_up, addresses::input_bits::MENU_UP),
+            (inp.menu_down, addresses::input_bits::MENU_DOWN),
+            (inp.menu_left, addresses::input_bits::MENU_LEFT),
+            (inp.menu_right, addresses::input_bits::MENU_RIGHT),
+            (inp.confirm, addresses::input_bits::CONFIRM),
         ];
-        for (on, code) in raw {
+        for (on, bit) in menu_bits {
             if on {
-                hooks::set_raw_key(code, false);
+                unit.buttons_down |= bit;
                 if k == cmd.t {
-                    hooks::set_raw_key(code, true);
+                    unit.buttons_pressed |= bit;
                 }
-                raw_active = true;
+                active = true;
             }
         }
         if let Some(ls) = inp.left_stick {
@@ -1308,11 +1313,6 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
     hooks::set_keybind_hold(addresses::KEYBIND_USE_ITEM, item);
     hooks::set_keybind_hold(addresses::KEYBIND_CAMERA_RESET, camera_reset);
     hooks::set_keybind_hold(addresses::KEYBIND_EXECUTION, zandatsu);
-    // Raw-биты живут, пока активна команда с raw-входом: без таких команд
-    // в этом кадре — сброс (иначе меню увидит «залипшую» клавишу).
-    if !raw_active {
-        hooks::clear_raw_keys();
-    }
     script.frame += 1;
     if script.frame >= script.total_frames {
         script.status = ScriptStatus::Done;
