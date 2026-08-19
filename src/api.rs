@@ -1173,12 +1173,13 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
             active = true;
         }
         if inp.weapon_select {
-            // Меню выбора оружия: бит 0x1 в InputUnit (как прыжок) — raw-подача
-            // через кэш ms_KeyInput не работает (§10.3). Бит + фронт pressed.
-            unit.buttons_down |= addresses::input_bits::WEAPON_SELECT;
-            if k == cmd.t {
-                unit.buttons_pressed |= addresses::input_bits::WEAPON_SELECT;
-            }
+            // Меню выбора оружия: хук isKeyDown (0x9D93A0) возвращает 1 для
+            // KEY_WEAPON_SELECT (0x8D) — функция 0x8AC570 вызывает isKeyDown
+            // с этим кодом для бита 0x01 в InputUnit (DPAD_LEFT на геймпаде).
+            // Битовый путь (как ar_mode 0x08) не работает — бит 0x01 одновременно
+            // открывает меню И листает слоты (навигация D-Pad'ом).
+            hooks::set_raw_key(addresses::KEY_WEAPON_SELECT, k == cmd.t);
+            raw_active = true;
             active = true;
         }
         if inp.light_attack {

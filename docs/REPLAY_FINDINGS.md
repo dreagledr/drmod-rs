@@ -215,6 +215,48 @@ call 0x785190           ; enableRipperMode()
 
 **Замечание по сохранению:** `flush_replay()` пишет покадровый `duration_ms = frame_index * 1000/60` (предполагает 60 FPS — неверно при реальном FPS ~52–58). Воспроизведение идёт по `frame_index`, поэтому покадровый `duration_ms` — только информационный. BLOB `state`/`camera` сохраняются, но при воспроизведении подаётся только `input` (+ реконструкция ripper/blade из `state`); `camera` не используется.
 
+## weapon_select: бит 0x01 = DPAD_LEFT (геймпад), не клавиша "2" (2026-08-19)
+
+**Проблема:** бит `0x01` в `InputUnit.buttons_down` подаётся через override (как `ar_mode` 0x08 / `jump` 0x10), но:
+- Открывает меню оружия **и** листает слоты (навигация)
+- На 1 кадре — меню открывается, но выбор сдвигается
+- На нескольких кадрах — меню крутится по слотам
+
+**Дизассемблирование функции 0x8AC570** (маппинг битов InputUnit → клавиши меню):
+
+```
+test ebx, 0x400 → push 0x92 (KEY_LEFT)  → call isKeyDown (0x9D93A0)
+test ebx, 0x2000 → push 0x93 (KEY_DOWN) → call isKeyDown
+test bl, 0x01   → push 0x8D             → call isKeyDown  ← weapon_select
+test bl, 0x02   → push 0x8E (KEY_ESC)   → call isKeyDown  ← pause
+test bl, 0x04   → push 0x8C (KEY_ENTER) → call isKeyDown  ← confirm
+test bl, 0x08   → push 0x8F             → call isKeyDown  ← codec?
+```
+
+**Вывод:** биты `0x01`/`0x02`/`0x04`/`0x08` — это **кнопки геймпада** (DPAD_LEFT/RIGHT/DOWN/UP из `eInputButton`), которые игра маппит на действия меню через `isKeyDown`. Бит 0x01 = DPAD_LEFT, который на геймпаде открывает weapon select.
+
+**Почему битовый путь не работает для weapon_select:**
+- Бит 0x01 в InputUnit = геймпадный D-Pad Left
+- D-Pad Left используется **и для открытия меню, и для навигации** по слотам
+- В отличие от `jump` (0x10) / `ar_mode` (0x08) — у них нет "навигационного" побочного эффекта
+- Поэтому подача бита 0x01 одновременно открывает меню и листает слоты
+
+**Call sites функции 0x8AC570** (16 мест):
+- 0x594921, 0x59493D — близко к `cWeaponSelectMenu` (0x5926A0)
+- 0x5BC25E, 0x5BC2A2, 0x5BCA47, 0x5BCA60, 0x5BCA7B, 0x5BCA96 — обработка меню
+- 0x5C328E, 0x5C3954 — codec/pause меню
+- 0x9150A3, 0x915114, 0x915175, 0x915187, 0x91519C, 0x9151B1 — другие меню
+
+**Решение:** хук `isKeyDown` (0x9D93A0) / `isKeyPressed` (0x9D9400). Когда функция 0x8AC570 вызывает `isKeyDown(0x8D)` для бита 0x01, детур возвращает 1 для эмулируемых клавиш. Это единственный путь, который видит вся функция 0x8AC570.
+
+**Игровые коды клавиш меню** (из `addresses.rs`):
+- `KEY_ENTER = 0x8C` (confirm)
+- `KEY_ESC = 0x8E` (pause)
+- `KEY_UP = 0x90`, `KEY_RIGHT = 0x91`, `KEY_LEFT = 0x92`, `KEY_DOWN = 0x93`
+- `KEY_DIGIT2 = 0x2D` (weapon_select на клавиатуре) — **не маппится** из битов InputUnit
+
+**Альтернативный путь (RedTrainer):** прямая запись `GameMenuStatus = 9` по адресу `base + 0x17E9F9C` через `setMenuType(7)` + патчинг памяти. Но это открывает меню без выбора слота — навигация всё равно нужна.
+
 ## Логи отладки
 
 - `%LOCALAPPDATA%\drmod\debug.log` — детуры, override, frame-дампы (cur_in/g_unit0/pos, плюс `mouse=`/`space=`/`w=` для сопоставления битов).

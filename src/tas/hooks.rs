@@ -26,6 +26,13 @@ static ORIG_UPDATE_INPUT_UNIT: OnceLock<unsafe extern "C" fn(*mut types::InputUn
 static ORIG_IS_KEYBIND_PRESSED: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
 /// Trampoline оригинальной `cInput::isKeybindDown`.
 static ORIG_IS_KEYBIND_DOWN: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
+/// Trampoline оригинальной `KeyInput::isKeyDown` (thiscall, 0x9D93A0).
+/// Первый аргумент — `this` (KeyInput*), второй — vKey.
+static ORIG_IS_KEY_DOWN: OnceLock<unsafe extern "thiscall" fn(*const u8, i32) -> i32> =
+    OnceLock::new();
+/// Trampoline оригинальной `KeyInput::isKeyPressed` (thiscall, 0x9D9400).
+static ORIG_IS_KEY_PRESSED: OnceLock<unsafe extern "thiscall" fn(*const u8, i32) -> i32> =
+    OnceLock::new();
 /// Эмуляция удержания keybind'ов (`isKeybindDown`): `[keybind] != 0` — детур
 /// возвращает 1 для этого keybind. Индексы — `addresses::KEYBIND_*`.
 static KEYBIND_HOLD: [AtomicU32; addresses::KEYBIND_TOTAL] =
@@ -263,6 +270,39 @@ unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
     result
 }
 
+/// Детур `KeyInput::isKeyDown` (thiscall, 0x9D93A0). Для эмулируемых клавиш
+/// (`RAW_KEYS_DOWN[index] & bit != 0`) возвращает 1 — меню-клавиши
+/// (weapon_select/pause/confirm/codec/menu_*) работают через функцию 0x8AC570,
+/// которая вызывает `isKeyDown` с игровыми кодами клавиш (0x8D/0x8E/0x8C/0x8F/
+/// 0x90..0x93). Остальные клавиши идут в оригинал.
+unsafe extern "thiscall" fn is_key_down_detour(this: *const u8, vkey: i32) -> i32 {
+    let index = (vkey >> 5) as usize;
+    let bit = 1u32 << (vkey & 31);
+    if index < 6 && RAW_KEYS_DOWN[index].load(Ordering::Relaxed) & bit != 0 {
+        return 1;
+    }
+    if let Some(&orig) = ORIG_IS_KEY_DOWN.get() {
+        unsafe { orig(this, vkey) }
+    } else {
+        0
+    }
+}
+
+/// Детур `KeyInput::isKeyPressed` (thiscall, 0x9D9400). Аналогично
+/// `is_key_down_detour`, но для фронта нажатия (`RAW_KEYS_PRESSED`).
+unsafe extern "thiscall" fn is_key_pressed_detour(this: *const u8, vkey: i32) -> i32 {
+    let index = (vkey >> 5) as usize;
+    let bit = 1u32 << (vkey & 31);
+    if index < 6 && RAW_KEYS_PRESSED[index].load(Ordering::Relaxed) & bit != 0 {
+        return 1;
+    }
+    if let Some(&orig) = ORIG_IS_KEY_PRESSED.get() {
+        unsafe { orig(this, vkey) }
+    } else {
+        0
+    }
+}
+
 /// Сохраняет trampoline (адрес оригинальной функции) после создания хука.
 fn set_original_update_input_unit(
     orig: unsafe extern "C" fn(*mut types::InputUnit, i32),
@@ -280,6 +320,20 @@ fn set_original_is_keybind_down(orig: unsafe extern "C" fn(i32) -> i32) -> Resul
     ORIG_IS_KEYBIND_DOWN.set(orig).map_err(|_| ())
 }
 
+/// Сохраняет trampoline оригинальной `isKeyDown` после создания хука.
+fn set_original_is_key_down(
+    orig: unsafe extern "thiscall" fn(*const u8, i32) -> i32,
+) -> Result<(), ()> {
+    ORIG_IS_KEY_DOWN.set(orig).map_err(|_| ())
+}
+
+/// Сохраняет trampoline оригинальной `isKeyPressed` после создания хука.
+fn set_original_is_key_pressed(
+    orig: unsafe extern "thiscall" fn(*const u8, i32) -> i32,
+) -> Result<(), ()> {
+    ORIG_IS_KEY_PRESSED.set(orig).map_err(|_| ())
+}
+
 /// MinHook-хуки ввода. Поля приватные: хуки живут, пока живёт структура
 /// (деструктор `MhHook` снимает хук), наружу выставляются только функции
 /// чтения сырого ввода.
@@ -288,6 +342,8 @@ pub struct InputHooks {
     input: Option<MhHook>,
     keybind: Option<MhHook>,
     keybind_down: Option<MhHook>,
+    key_down: Option<MhHook>,
+    key_pressed: Option<MhHook>,
 }
 
 impl InputHooks {
@@ -322,19 +378,25 @@ impl InputHooks {
         let input = Self::create_input_hook(base_addr);
         let keybind = Self::create_keybind_hook(base_addr);
         let keybind_down = Self::create_keybind_down_hook(base_addr);
+        let key_down = Self::create_key_down_hook(base_addr);
+        let key_pressed = Self::create_key_pressed_hook(base_addr);
 
         logger::log_line(&format!(
-            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={}",
+            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={}",
             base_addr,
             if input.is_some() { "OK" } else { "FAIL" },
             if keybind.is_some() { "OK" } else { "FAIL" },
-            if keybind_down.is_some() { "OK" } else { "FAIL" }
+            if keybind_down.is_some() { "OK" } else { "FAIL" },
+            if key_down.is_some() { "OK" } else { "FAIL" },
+            if key_pressed.is_some() { "OK" } else { "FAIL" }
         ));
 
         Self {
             input,
             keybind,
             keybind_down,
+            key_down,
+            key_pressed,
         }
     }
 
@@ -444,6 +506,83 @@ impl InputHooks {
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_keybind_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// Устанавливает MinHook на `KeyInput::isKeyDown` (thiscall, 0x9D93A0):
+    /// для эмулируемых клавиш (weapon_select/pause/confirm/menu_*) возвращает 1.
+    fn create_key_down_hook(base_addr: usize) -> Option<MhHook> {
+        use core::ffi::c_void;
+
+        if base_addr == 0 {
+            logger::log_line("create_key_down_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + addresses::IS_KEY_DOWN) as *mut c_void;
+        let detour = is_key_down_detour as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, detour) } {
+            Ok(h) => h,
+            Err(e) => {
+                logger::log_line(&format!(
+                    "create_key_down_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "thiscall" fn(*const u8, i32) -> i32 =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = set_original_is_key_down(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            logger::log_line(&format!("create_key_down_hook: queue_enable FAIL err={:?}", e));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        logger::log_line(&format!(
+            "create_key_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// Устанавливает MinHook на `KeyInput::isKeyPressed` (thiscall, 0x9D9400):
+    /// для эмулируемых клавиш (фронт нажатия) возвращает 1.
+    fn create_key_pressed_hook(base_addr: usize) -> Option<MhHook> {
+        use core::ffi::c_void;
+
+        if base_addr == 0 {
+            logger::log_line("create_key_pressed_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + addresses::IS_KEY_PRESSED) as *mut c_void;
+        let detour = is_key_pressed_detour as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, detour) } {
+            Ok(h) => h,
+            Err(e) => {
+                logger::log_line(&format!(
+                    "create_key_pressed_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "thiscall" fn(*const u8, i32) -> i32 =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = set_original_is_key_pressed(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            logger::log_line(&format!(
+                "create_key_pressed_hook: queue_enable FAIL err={:?}",
+                e
+            ));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        logger::log_line(&format!(
+            "create_key_pressed_hook: OK target=0x{:08X} trampoline=0x{:08X}",
             target as usize,
             hook.trampoline() as usize
         ));

@@ -87,6 +87,13 @@ pub(crate) const KEY_UP: u8 = 0x90;
 pub(crate) const KEY_RIGHT: u8 = 0x91;
 pub(crate) const KEY_LEFT: u8 = 0x92;
 pub(crate) const KEY_DOWN: u8 = 0x93;
+/// Клавиша weapon_select (открытие меню оружия) — игровой код 0x8D.
+/// Из дизассемблирования функции 0x8AC570: бит 0x01 в InputUnit маппится
+/// на `isKeyDown(0x8D)`. Это НЕ клавиша "2" (0x2D), а кнопка геймпада
+/// (DPAD_LEFT), которая на геймпаде открывает weapon select.
+pub(crate) const KEY_WEAPON_SELECT: u8 = 0x8D;
+/// Клавиша codec (предположительно) — игровой код 0x8F.
+pub(crate) const KEY_CODEC: u8 = 0x8F;
 /// Игровые коды цифр 1/2/3 (`VK ^ 0x1F`, см. docs/REPLAY.md §2.1):
 /// 1 → 0x2E, 2 → 0x2D, 3 → 0x2C. Кодек игра читает как сырую клавишу
 /// (keybind-эмуляция не срабатывает, проверено 2026-08-18).
