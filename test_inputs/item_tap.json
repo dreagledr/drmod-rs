@@ -1,0 +1,6 @@
+{
+  "name": "test-item-tap",
+  "commands": [
+    { "t": 0, "duration": 2, "input": { "item": true } }
+  ]
+}

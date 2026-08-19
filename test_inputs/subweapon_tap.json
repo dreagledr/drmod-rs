@@ -1,0 +1,6 @@
+{
+  "name": "test-subweapon-tap",
+  "commands": [
+    { "t": 0, "duration": 2, "input": { "subweapon": true } }
+  ]
+}

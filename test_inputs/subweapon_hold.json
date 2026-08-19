@@ -1,0 +1,6 @@
+{
+  "name": "test-subweapon-hold",
+  "commands": [
+    { "t": 0, "duration": 120, "input": { "subweapon": true } }
+  ]
+}

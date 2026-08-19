@@ -1,0 +1,6 @@
+{
+  "name": "test-item-hold",
+  "commands": [
+    { "t": 0, "duration": 120, "input": { "item": true } }
+  ]
+}

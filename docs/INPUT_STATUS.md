@@ -1,4 +1,4 @@
-# Статус верификации входов API (2026-08-18)
+# Статус верификации входов API (2026-08-19)
 
 Полный список команд `input` (docs/API.md §4.2) с результатами валидации сессии
 «выбор → скрипт → логи → визуальный фидбек» (P118_BEACH, debug-сборка).
@@ -23,8 +23,8 @@
 | `walk` | ✅ | `left_stick` ×0.5 | 🔧 фикс: ходьба = магнитуда стика (ручная: L=(0,-500), r_anim=2); keybind 4 игра не читает |
 | `dodge` | ✅ | hold `isKeybindDown(21)` | r_anim 0→99, перекат. Перепроверен (3 прогона) |
 | `lock_on` | ❌ | hold `isKeybindDown(12)` | ожидается фейл (цикл 5..22 не влияет на unit 0) — ❓ по отдельности не перепроверялся (нужен враг) |
-| `subweapon` | ❌ | hold `isKeybindDown(13)` | ожидается фейл — ❓ не перепроверялся |
-| `item` | ❌ | hold `isKeybindDown(14)` | ожидается фейл — ❓ не перепроверялся |
+| `subweapon` | ✅ | hold `isKeybindDown(13)` | проверено (2026-08-19): долгое удержание (120 кадров) → режим прицеливания; короткий тап (2 кадра) → мгновенное применение без прицеливания. Игра кодирует subweapon битом `0x400` в InputUnit (фронт `pressed=0x400` на 1-м кадре, дальше `down=0x400`) |
+| `item` | ✅ | hold `isKeybindDown(14)` | проверено (2026-08-19): применение предмета (и долгое удержание, и короткий тап). Режима прицеливания у item нет — в отличие от subweapon (13) |
 | `ar_mode` | ❌ | raw-клавиша (1) | механизм raw-кэша не работает (§10.3) — нужен хук isKeyDown/isKeyPressed |
 | `weapon_select` | ❌ | raw-клавиша (2) | механизм raw-кэша не работает (§10.3) — нужен хук isKeyDown/isKeyPressed |
 | `codec` | ❌ | raw-клавиша (3) | механизм raw-кэша не работает (§10.3) — нужен хук isKeyDown/isKeyPressed |
@@ -39,17 +39,23 @@
 
 - **Работает (после фиксов):** движение 4 стороны, `left_stick`, `jump` (бит 0x10 + удержание),
   `walk` (стик ×0.5), `ninja_run` (бит 0x4000 + фронт), `blade` (бит 0x800 + фронт),
-  `ripper` (фронт 1 тик), `dodge`,
-  `camera` (yaw + pitch; значения как у реальной мыши, см. таблицу), `light_attack`/`heavy_attack` (ранее).
+  `ripper` (фронт 1 тик), `dodge`, `subweapon` (hold `isKeybindDown(13)`; долгое удержание →
+  прицеливание, короткий тап → мгновенное применение; игра кодирует его битом `0x400` в InputUnit),
+  `item` (hold `isKeybindDown(14)`; применение предмета — режима прицеливания нет, в отличие
+  от subweapon), `camera` (yaw + pitch; значения как у реальной мыши, см. таблицу),
+  `light_attack`/`heavy_attack` (ранее).
 - **Не работает:** меню-клавиши и цифры 1/2/3 (raw-кэш), `lock_on`/
-  `subweapon`/`item`/`camera_reset` (цикл 5..22), `ar_mode`/`weapon_select`/`codec`/`pause`/
-  `confirm`/`menu_*` (raw-кэш).
+  `camera_reset` (цикл 5..22), `ar_mode`/`weapon_select`/`codec`/`pause`/
+  `confirm`/`menu_*` (raw-кэш). ⚠️ Вывод «цикл 5..22 не влияет на unit 0» уточнён (2026-08-19):
+  для `subweapon` (13) и `item` (14) keybind-удержание РАБОТАЕТ — игра ставит бит в InputUnit;
+  не работают только меню-действия (16/18 и т.п.), которым нужен другой путь.
 - **Не тестировано (нужен враг/условия):** `zandatsu`, `lock_on`.
 
 ## Тест-скрипты
 
 `test_inputs/*.json` — по одному на вход (left_stick_diag, camera, walk, ninja_run, jump,
-jump_hold, double_jump, dodge, ripper*, blade*, run_control, bunnyhop, movement_4dir) +
+jump_hold, double_jump, dodge, ripper*, blade*, run_control, bunnyhop, movement_4dir,
+subweapon_hold, subweapon_tap, item_hold, item_tap) +
 сохранённые логи `test_inputs/logs_*.json`.
 
 ## Детали фиксов (2026-08-18)
@@ -69,3 +75,23 @@ jump_hold, double_jump, dodge, ripper*, blade*, run_control, bunnyhop, movement_
   ~500–600 (значение 200 камеру не двигает). Реальная мышь даёт 500–6500; тест `[0,2000]`
   (60 кадров) наклонил камеру с +0.17 до −1.13 рад (кламп ~±65°). Механизм тот же, что
   в record/playback (override `g_InputUnit0`).
+
+## Верификация subweapon (2026-08-19)
+
+- **Долгое удержание** (`subweapon: true`, 120 кадров) → режим прицеливания ✅ (визуально).
+- **Короткий тап** (`subweapon: true`, 2 кадра) → мгновенное применение без прицеливания ✅ (визуально).
+- Механизм — hold `isKeybindDown(13)` (без изменений кода, реализация уже работала).
+- Игра кодирует subweapon битом **`0x400`** в InputUnit (debug.log): 1-й кадр
+  `down=00000400 pressed=00000400` (фронт), далее `down=00000400` (удержание).
+  Бит ставит сама игра из keybind-удержания (наш override пустой) — цикл 5..22
+  (0x61DE21) влияет на unit 0 для subweapon, в отличие от меню-действий (16/18).
+- Тест-скрипты: `test_inputs/subweapon_hold.json`, `test_inputs/subweapon_tap.json`.
+
+## Верификация item (2026-08-19)
+
+- **Долгое удержание** (`item: true`, 120 кадров) → применение предмета ✅ (визуально).
+- **Короткий тап** (`item: true`, 2 кадра) → применение предмета ✅ (визуально).
+- Механизм — hold `isKeybindDown(14)` (без изменений кода, реализация уже работала).
+- У `item` **нет режима прицеливания** (в отличие от subweapon 13) — и долгое удержание,
+  и короткий тап просто применяют предмет.
+- Тест-скрипты: `test_inputs/item_hold.json`, `test_inputs/item_tap.json`.
