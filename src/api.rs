@@ -1172,19 +1172,17 @@ fn script_tick(script: &mut ScriptState, base_addr: usize) -> InputOverride {
             // }
             active = true;
         }
-        if inp.weapon_select && k == cmd.t {
-            // Меню выбора оружия: прямая запись GameMenuStatus = 9 (SelectWeaponMenu).
-            // Битовый путь (0x01) + raw_key (0x8D) не работает — функция 0x8AC570
-            // не вызывается из updateInputUnit. Прямая запись надёжнее.
-            if base_addr != 0 {
-                let menu_status_addr = base_addr + 0x17E9F9C;
-                unsafe {
-                    *(menu_status_addr as *mut i32) = 9; // SelectWeaponMenu
-                }
-                crate::logger::log_line(&format!(
-                    "weapon_select: wrote GameMenuStatus=9 at 0x{:X}",
-                    menu_status_addr
-                ));
+        if inp.weapon_select {
+            // Меню выбора оружия: настоящий ввод — бит 0x01 (DPAD_LEFT).
+            // Игра сама откроет меню, когда увидит бит. Зануляем бит, как
+            // только меню открылось (GameMenuStatus == SelectWeaponMenu=9):
+            // в меню бит 0x01 — навигация влево, листала бы слоты.
+            // Так ввод воспроизводится как в записи (без прямой записи памяти).
+            let in_weapon_menu = base_addr != 0
+                && unsafe { (base_addr as *const i32).add(0x17E9F9C / 4).read_unaligned() == 9 };
+            if !in_weapon_menu {
+                unit.buttons_down |= addresses::input_bits::WEAPON_SELECT;
+                unit.buttons_pressed |= addresses::input_bits::WEAPON_SELECT;
             }
             active = true;
         }
