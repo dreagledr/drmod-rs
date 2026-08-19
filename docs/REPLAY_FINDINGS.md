@@ -259,6 +259,15 @@ test bl, 0x08   → push 0x8F             → call isKeyDown  ← codec?
 
 **Финальное решение (2026-08-19, проверено live):** подача бита **`0x01`** (DPAD_LEFT) в InputUnit как настоящий ввод + **гейт по GameMenuStatus**: бит подаётся только пока `GameMenuStatus != SelectWeaponMenu` (9). Игра сама открывает меню по биту, а в открытом меню бит 0x01 не подаётся (иначе это навигация влево — листала бы слоты). Совместимо с TAS записью/воспроизведением — без прямой записи памяти.
 
+**Playback меню (2026-08-19, проверено live):** навигация в записи хранится в **сырых клавишах** (ms_KeyInput): стрелки 0x90..0x93, Enter 0x15, Esc 0x8E — в InputUnit её нет (InputUnit пуст в кадрах навигации). Playback конвертирует:
+- стрелки 0x90/0x93/0x92/0x91 → D-Pad биты MENU_UP/MENU_DOWN/MENU_LEFT/MENU_RIGHT (0x08/0x04/0x01/0x02)
+- Enter 0x15 → CONFIRM (BUTTON_A 0x10)
+- Esc 0x8E → **CANCEL (BUTTON_B 0x20)** — отмена/назад в меню (гипотеза подтверждена live: Esc закрывает меню оружия)
+- клавиша 2 (0x2D) — дубликат weapon_select (бит 0x01 уже в InputUnit) — зануляется, иначе двойной toggle (меню открылось и сразу закрылось)
+- удержание weapon_select (down без pressed) зануляется всегда
+
+Сырые клавиши захватываются в `updateInputUnit` детуре ПОСЛЕ оригинала (игра заполнила ms_KeyInput из DirectInput), ДО перезаписи нашими RAW_KEYS — как сэмплы blade/ripper. Чтение в render теряло однокадровые pressed-фронты.
+
 **Найденные факты дизассемблирования (2026-08-19):**
 - Игра **не пишет** `GameMenuStatus = 9` imm-ом (`mov [GameMenuStatus], 9` — 0 хитов в exe; ImageBase 0x400000, GameMenuStatus = base+0x17E9F9C). Переход в SelectWeaponMenu идёт через другой механизм (проверка ввода → создание объекта меню 0x5926A0).
 - Switch по GameMenuStatus 0..8 на RVA 0x829400 (jump table на base+0x16697DC = RVA 0x8297DC, значения — адреса `base + RVA`).

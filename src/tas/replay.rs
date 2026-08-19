@@ -560,6 +560,7 @@ impl ReplayState {
                 (addresses::KEY_LEFT, addresses::input_bits::MENU_LEFT),
                 (addresses::KEY_RIGHT, addresses::input_bits::MENU_RIGHT),
                 (0x15, addresses::input_bits::CONFIRM), // Enter = KEY_ENTER в записи
+                (addresses::KEY_ESC, addresses::input_bits::CANCEL), // Esc = BUTTON_B (отмена)
             ];
             for (code, bit) in menu_map {
                 let idx = (code >> 5) as usize;
