@@ -1,4 +1,5 @@
 /target
+/tools/disasm/target
 /out
 .env
 .qwen/

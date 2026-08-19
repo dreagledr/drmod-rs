@@ -62,6 +62,15 @@ static BLADE_DOWN_SAMPLED: AtomicU32 = AtomicU32::new(0);
 /// `isKeybindPressed`, накопленный детуром. Читается записью в render.
 #[cfg(debug_assertions)]
 static RIPPER_PRESSED_SAMPLED: AtomicU32 = AtomicU32::new(0);
+/// Сэмпл реальных сырых клавиш меню за кадр (`ms_KeyInput.m_aKeysDown`) —
+/// накоплен детуром `updateInputUnit` ПОСЛЕ оригинала (игра заполнила кэш из
+/// DirectInput), ДО перезаписи нашими RAW_KEYS. Читается записью в render:
+/// меню навигируется стрелками/Enter через `isKeyDown`/`isKeyPressed`
+/// (0x9D93A0/0x9D9400) из этого кэша, а не из InputUnit.
+#[cfg(debug_assertions)]
+static RAW_DOWN_SAMPLED: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
+#[cfg(debug_assertions)]
+static RAW_PRESSED_SAMPLED: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
 
 /// Взводит эмуляцию фронта keybind'а — детур `isKeybindPressed` возвращает 1,
 /// пока флаг не сброшен (toggle-действия: ripper). Сброс — `script_tick`
@@ -114,6 +123,17 @@ pub(crate) fn set_raw_key(code: u8, pressed: bool) {
     }
 }
 
+/// Подаёт сырые клавиши меню целиком (m_aKeysDown/m_aKeysPressed из записи
+/// кадра) + заморозка кэша. Вызывается playback'ом каждый кадр; биты живут
+/// до следующего кадра (`clear_raw_keys`) — как в API-скриптах.
+pub(crate) fn set_raw_keys(down: [u32; 6], pressed: [u32; 6]) {
+    for i in 0..6 {
+        RAW_KEYS_DOWN[i].store(down[i], Ordering::Relaxed);
+        RAW_KEYS_PRESSED[i].store(pressed[i], Ordering::Relaxed);
+    }
+    RAW_KEYS_ACTIVE.store(1, Ordering::Relaxed);
+}
+
 /// Сбрасывает keybind-эмуляцию (ripper/blade/новые входы) и raw-клавиши меню —
 /// вызывается при остановке воспроизведения, старте записи, остановке
 /// API-скрипта и входе в loading, чтобы hold-действия и однокадровые фронты
@@ -161,12 +181,31 @@ pub(crate) fn read_ripper_pressed_sampled() -> bool {
     RIPPER_PRESSED_SAMPLED.load(Ordering::Relaxed) != 0
 }
 
-/// Сбрасывает сэмплы blade/ripper — вызывается в конце каждого render-кадра,
-/// чтобы следующий тик накапливал сэмплы с нуля.
+/// Сбрасывает сэмплы blade/ripper/raw — вызывается в конце каждого
+/// render-кадра, чтобы следующий тик накапливал сэмплы с нуля.
 #[cfg(debug_assertions)]
 pub(crate) fn reset_keybind_samples() {
     BLADE_DOWN_SAMPLED.store(0, Ordering::Relaxed);
     RIPPER_PRESSED_SAMPLED.store(0, Ordering::Relaxed);
+    for i in 0..6 {
+        RAW_DOWN_SAMPLED[i].store(0, Ordering::Relaxed);
+        RAW_PRESSED_SAMPLED[i].store(0, Ordering::Relaxed);
+    }
+}
+
+/// Читает сэмпл реальных сырых клавиш меню за прошедший тик:
+/// (m_aKeysDown, m_aKeysPressed) из ms_KeyInput, накопленные детуром
+/// `updateInputUnit` ПОСЛЕ оригинала. Сбрасывается в конце render-кадра через
+/// `reset_keybind_samples`.
+#[cfg(debug_assertions)]
+pub(crate) fn read_raw_keys_sampled() -> ([u32; 6], [u32; 6]) {
+    let mut down = [0u32; 6];
+    let mut pressed = [0u32; 6];
+    for i in 0..6 {
+        down[i] = RAW_DOWN_SAMPLED[i].load(Ordering::Relaxed);
+        pressed[i] = RAW_PRESSED_SAMPLED[i].load(Ordering::Relaxed);
+    }
+    (down, pressed)
 }
 
 /// Детур `cInput::updateInputUnit` (__cdecl). Вызывает оригинал, затем для
@@ -183,6 +222,23 @@ unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_
 
     if user_index != 0 {
         return;
+    }
+
+    // Сэмпл реальных сырых клавиш меню: игра заполнила ms_KeyInput из
+    // DirectInput (оригинал). Накопливаем ДО перезаписи нашими RAW_KEYS —
+    // запись читает, что реально нажимал игрок (стрелки/Enter/Esc).
+    #[cfg(debug_assertions)]
+    {
+        let addr = KEY_INPUT_ADDR.load(Ordering::Relaxed);
+        if addr != 0 {
+            let k = addr as *const types::KeyInput;
+            unsafe {
+                for i in 0..6 {
+                    RAW_DOWN_SAMPLED[i].fetch_or((*k).keys_down[i], Ordering::Relaxed);
+                    RAW_PRESSED_SAMPLED[i].fetch_or((*k).keys_pressed[i], Ordering::Relaxed);
+                }
+            }
+        }
     }
 
     // Подача raw-клавиш меню: кэш ms_KeyInput заморожен и перезаписан нашими

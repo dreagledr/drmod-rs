@@ -152,6 +152,12 @@ pub struct ReplayFrame {
     /// Реальный фронт ripper (keybind 11) в этом кадре — сэмпл детура
     /// `isKeybindPressed`, а не перепад `ripper_enabled`.
     pub ripper_pressed: u8,
+    /// Сырые клавиши (m_aKeysDown, m_aKeysPressed из ms_KeyInput) в этом кадре.
+    /// Меню (weapon_select/pause/...) читает стрелки/Enter/Esc через
+    /// `isKeyDown`/`isKeyPressed` (0x9D93A0/0x9D9400) из этого кэша, а НЕ из
+    /// InputUnit — без захвата навигация по меню не воспроизводится.
+    pub raw_down: [u32; 6],
+    pub raw_pressed: [u32; 6],
 }
 
 /// Метаданные одного прогона записи/воспроизведения (строка в `replay_runs`).

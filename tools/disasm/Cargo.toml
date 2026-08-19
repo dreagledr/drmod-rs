@@ -1,0 +1,13 @@
+[package]
+name = "dump-replay-input"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "dump-replay-input"
+path = "dump_replay_input.rs"
+
+[dependencies]
+rusqlite = { version = "0.40.1", features = ["bundled"] }

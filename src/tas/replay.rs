@@ -19,7 +19,7 @@ use crate::segment;
 use chrono::Local;
 #[cfg(debug_assertions)]
 use rusqlite::Connection;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 #[cfg(debug_assertions)]
 use std::time::Instant;
@@ -41,6 +41,30 @@ const INPUT_OVERRIDE_INIT: InputOverride = InputOverride {
 };
 
 static INPUT_OVERRIDE: Mutex<InputOverride> = Mutex::new(INPUT_OVERRIDE_INIT);
+
+/// Базовый адрес модуля игры (для чтения GameMenuStatus при гейте
+/// weapon_select в playback). Устанавливается один раз при init.
+static BASE_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+/// Устанавливает базовый адрес модуля (вызывается при init из `lib.rs`).
+pub fn set_base_addr(base: usize) {
+    BASE_ADDR.store(base, Ordering::Relaxed);
+}
+
+/// Возвращает базовый адрес модуля.
+#[allow(dead_code)]
+pub fn base_addr() -> usize {
+    BASE_ADDR.load(Ordering::Relaxed)
+}
+
+/// Читает текущий GameMenuStatus (base + 0x17E9F9C) из памяти игры.
+fn game_menu_status() -> i32 {
+    let base = BASE_ADDR.load(Ordering::Relaxed);
+    if base == 0 {
+        return -1;
+    }
+    unsafe { (base as *const i32).add(0x17E9F9C / 4).read_unaligned() }
+}
 
 /// Последнее значение m_CurrentInput.buttons_down<<32 | buttons_pressed —
 /// для ловли фронтов (pressed/down) при реальном вводе.
@@ -425,6 +449,10 @@ impl ReplayState {
         self.update_deferred_start(pos, mission_id, mission_name);
         self.capture_frame(input, state, camera);
         self.playback_tick(conn, input, state, camera);
+        // Сырые клавиши НЕ сбрасываем здесь: override/raw-биты, выставленные
+        // в render(K), применяются игрой на тике K+1 — сброс в конце кадра
+        // убил бы их до применения. Каждый кадр playback перезаписывает биты
+        // целиком (set_raw_keys), финальный сброс — в stop_playback.
         // Сброс сэмплов blade/ripper в конце кадра: следующий тик накапливает
         // сэмплы с нуля, а кадр 0 записи (старт в этом же render) уже прочитал
         // сэмплы прошедшего тика.
@@ -434,9 +462,13 @@ impl ReplayState {
     /// Захват кадра записи (вызывается из `update` каждый кадр).
     /// Флаги blade/ripper берутся из сэмплов детуров `isKeybindDown`/
     /// `isKeybindPressed` — реальный ввод, который игра видела в прошедшем
-    /// тике, а не реконструкция из состояния.
+    /// тике, а не реконструкция из состояния. Сырые клавиши (m_aKeysDown/
+    /// m_aKeysPressed из ms_KeyInput) — сэмпл детура `updateInputUnit` ПОСЛЕ
+    /// оригинала: меню читает стрелки/Enter/Esc через `isKeyDown`/
+    /// `isKeyPressed` из этого кэша, а не из InputUnit.
     fn capture_frame(&mut self, input: InputUnit, state: PlayerState, camera: CameraState) {
         if self.record.active {
+            let (raw_down, raw_pressed) = super::hooks::read_raw_keys_sampled();
             self.record.frames.push(ReplayFrame {
                 frame_index: self.record.frames.len() as u32,
                 input,
@@ -444,6 +476,8 @@ impl ReplayState {
                 camera,
                 blade_down: super::hooks::read_blade_down_sampled() as u8,
                 ripper_pressed: super::hooks::read_ripper_pressed_sampled() as u8,
+                raw_down,
+                raw_pressed,
             });
         }
     }
@@ -491,10 +525,68 @@ impl ReplayState {
                 ));
             }
 
+            // weapon_select (бит 0x01) в записи: 1-й кадр (фронт pressed) —
+            // toggle меню (открытие вне меню, закрытие в меню). Удержание
+            // (down без pressed) никогда не нужно — зануляем всегда: после
+            // открытия меню оно стало бы навигацией влево (листает слоты),
+            // а после закрытия — повторным открытием. Фронт (pressed) — это
+            // menu_left или повторный toggle, его не трогаем.
+            let mut input = frame.input;
+            if input.buttons_down & addresses::input_bits::WEAPON_SELECT != 0
+                && input.buttons_pressed & addresses::input_bits::WEAPON_SELECT == 0
+            {
+                input.buttons_down &= !addresses::input_bits::WEAPON_SELECT;
+                logger::log_line(&format!(
+                    "playback: gated weapon_select hold at frame {}",
+                    self.playback.frame_idx
+                ));
+            }
+
+            // Навигация в меню: запись хранит её в сырых клавишах (стрелки
+            // 0x90/0x93/0x92/0x91, Enter 0x15) — меню читает их через
+            // isKeyDown/isKeyPressed из ms_KeyInput, а не из InputUnit.
+            // Конвертируем в D-Pad биты InputUnit (как menu_*/confirm в
+            // api.rs — проверено, меню навигируется ими) + фронт pressed.
+            // Клавиша 2 (0x2D) — дубликат weapon_select (бит 0x01 уже в
+            // InputUnit): подача обоих = двойной toggle (меню открылось и
+            // сразу закрылось) — зануляем.
+            let mut raw_down = frame.raw_down;
+            let mut raw_pressed = frame.raw_pressed;
+            // KEY_ENTER=0x15 (запись), KEY_ESC=0x8E, KEY_UP=0x90,
+            // KEY_RIGHT=0x91, KEY_LEFT=0x92, KEY_DOWN=0x93
+            let menu_map = [
+                (addresses::KEY_UP, addresses::input_bits::MENU_UP),
+                (addresses::KEY_DOWN, addresses::input_bits::MENU_DOWN),
+                (addresses::KEY_LEFT, addresses::input_bits::MENU_LEFT),
+                (addresses::KEY_RIGHT, addresses::input_bits::MENU_RIGHT),
+                (0x15, addresses::input_bits::CONFIRM), // Enter = KEY_ENTER в записи
+            ];
+            for (code, bit) in menu_map {
+                let idx = (code >> 5) as usize;
+                let b = 1u32 << (code & 31);
+                if idx < 6 && raw_down[idx] & b != 0 {
+                    input.buttons_down |= bit;
+                    if raw_pressed[idx] & b != 0 {
+                        input.buttons_pressed |= bit;
+                    }
+                    raw_down[idx] &= !b;
+                    raw_pressed[idx] &= !b;
+                }
+            }
+            let key2_idx = (addresses::KEY_DIGIT2 >> 5) as usize;
+            let key2_bit = 1u32 << (addresses::KEY_DIGIT2 & 31);
+            if key2_idx < 6 && raw_down[key2_idx] & key2_bit != 0 {
+                raw_down[key2_idx] &= !key2_bit;
+                raw_pressed[key2_idx] &= !key2_bit;
+            }
+
             set_input_override(InputOverride {
                 active: true,
-                input: frame.input,
+                input,
             });
+            // Остаток сырых клавиш (Esc 0x8E и др.) — подаём через raw-кэш:
+            // меню читает их через isKeyDown/isKeyPressed из ms_KeyInput.
+            super::hooks::set_raw_keys(raw_down, raw_pressed);
             self.playback.frame_idx += 1;
             self.playback.log.push(ReplayFrame {
                 frame_index: self.playback.log.len() as u32,
@@ -503,6 +595,8 @@ impl ReplayState {
                 camera,
                 blade_down: frame.blade_down,
                 ripper_pressed: frame.ripper_pressed,
+                raw_down: frame.raw_down,
+                raw_pressed: frame.raw_pressed,
             });
         } else {
             // Конец записи — снять override и флашнуть лог воспроизведения.

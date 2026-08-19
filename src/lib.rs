@@ -246,6 +246,7 @@ impl HelloHud {
         // Хуки ввода (updateInputUnit / isKeybindPressed / isKeybindDown)
         // и адреса сырого ввода — устанавливаются и логируются в tas::hooks.
         let input_hooks = tas::hooks::InputHooks::new(base_addr);
+        tas::replay::set_base_addr(base_addr);
 
         // Отдельный лог состояния (velocity/rotation/heading/ripper/...),
         // перезатирается при старте мода — см. `logger::init_state_log`.
