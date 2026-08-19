@@ -1,0 +1,6 @@
+{
+  "name": "test-weapon-select",
+  "commands": [
+    { "t": 0,  "duration": 60, "input": { "weapon_select": true } }
+  ]
+}

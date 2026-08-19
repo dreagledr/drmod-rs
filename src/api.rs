@@ -83,10 +83,10 @@ enum ScriptStatus {
 /// - `blade` — бит 0x800 в InputUnit (как ninja 0x4000): игра кодирует блейд
 ///   этим битом, keybind-эмуляция isKeybindDown(8) для скриптов не работает
 ///   (игра читает её только в key-event обработке);
-/// - битовые (`jump`/`light_attack`/`heavy_attack`/`ar_mode`) — бит в InputUnit
-///   + фронт pressed на первом кадре команды;
+/// - битовые (`jump`/`light_attack`/`heavy_attack`/`ar_mode`/`weapon_select`) — бит
+///   в InputUnit + фронт pressed на первом кадре команды;
 /// - pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/
-///   `weapon_select`/`codec`/`pause`/`camera_reset`/`zandatsu`) — фронт keybind'а
+///   `codec`/`pause`/`camera_reset`/`zandatsu`) — фронт keybind'а
 ///   на первом кадре команды (isKeybindPressed), `duration` игнорируется;
 /// - меню-клавиши (`confirm`/`menu_up`/`menu_down`/`menu_left`/`menu_right`) —
 ///   сырые клавиши в кэш `ms_KeyInput` (меню читает их через isKeyDown/
@@ -490,7 +490,11 @@ impl ApiServer {
             }
         };
 
-        Self { handle, state, stop }
+        Self {
+            handle,
+            state,
+            stop,
+        }
     }
 
     /// Покадровый апдейт из render: продвижение скрипта, запись кадра в буфер,
@@ -635,7 +639,12 @@ impl ApiServer {
         }
         let id = guard.next_script_id;
         guard.next_script_id += 1;
-        let total_frames = req.commands.iter().map(|c| c.t + c.duration).max().unwrap_or(0);
+        let total_frames = req
+            .commands
+            .iter()
+            .map(|c| c.t + c.duration)
+            .max()
+            .unwrap_or(0);
         hooks::clear_keybind_emulation();
         guard.script = Some(ScriptState {
             id,
@@ -888,7 +897,12 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     }
     let id = guard.next_script_id;
     guard.next_script_id += 1;
-    let total_frames = req.commands.iter().map(|c| c.t + c.duration).max().unwrap_or(0);
+    let total_frames = req
+        .commands
+        .iter()
+        .map(|c| c.t + c.duration)
+        .max()
+        .unwrap_or(0);
     // Сброс остатков keybind-эмуляции (ripper/blade) до старта.
     hooks::clear_keybind_emulation();
     guard.script = Some(ScriptState {
@@ -961,7 +975,7 @@ fn handle_script_get(path: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
                 Response::Error(ErrorResponse {
                     error: "invalid script id".into(),
                 }),
-            )
+            );
         }
     };
     let guard = state.lock().unwrap();
@@ -1035,7 +1049,9 @@ fn respond(stream: &mut TcpStream, code: u16, value: &Response) {
     };
     let head = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-        code, reason, body.len()
+        code,
+        reason,
+        body.len()
     );
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(body.as_bytes());
@@ -1151,8 +1167,17 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
             // AR-режим: бит 0x08 в InputUnit (как прыжок) — raw-подача через
             // кэш ms_KeyInput не работает (§10.3). Бит + фронт pressed.
             unit.buttons_down |= addresses::input_bits::AR_MODE;
+            // if k == cmd.t {
+            //     unit.buttons_pressed |= addresses::input_bits::AR_MODE;
+            // }
+            active = true;
+        }
+        if inp.weapon_select {
+            // Меню выбора оружия: бит 0x1 в InputUnit (как прыжок) — raw-подача
+            // через кэш ms_KeyInput не работает (§10.3). Бит + фронт pressed.
+            unit.buttons_down |= addresses::input_bits::WEAPON_SELECT;
             if k == cmd.t {
-                unit.buttons_pressed |= addresses::input_bits::AR_MODE;
+                unit.buttons_pressed |= addresses::input_bits::WEAPON_SELECT;
             }
             active = true;
         }
@@ -1242,7 +1267,6 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
         // Удержание на все кадры команды + фронт pressed на первом кадре.
         let raw = [
             (inp.pause, addresses::KEY_ESC),
-            (inp.weapon_select, addresses::KEY_DIGIT2),
             (inp.codec, addresses::KEY_DIGIT3),
             (inp.confirm, addresses::KEY_ENTER),
             (inp.menu_up, addresses::KEY_UP),
@@ -1292,7 +1316,10 @@ fn script_tick(script: &mut ScriptState) -> InputOverride {
     if script.frame >= script.total_frames {
         script.status = ScriptStatus::Done;
     }
-    InputOverride { active, input: unit }
+    InputOverride {
+        active,
+        input: unit,
+    }
 }
 
 /// Останавливает скрипт: снимает override и keybind-эмуляцию.

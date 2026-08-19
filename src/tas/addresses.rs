@@ -88,11 +88,13 @@ pub(crate) const KEY_RIGHT: u8 = 0x91;
 pub(crate) const KEY_LEFT: u8 = 0x92;
 pub(crate) const KEY_DOWN: u8 = 0x93;
 /// Игровые коды цифр 1/2/3 (`VK ^ 0x1F`, см. docs/REPLAY.md §2.1):
-/// 1 → 0x2E, 2 → 0x2D, 3 → 0x2C. Меню оружия/кодек игра читает как сырые
-/// клавиши (keybind-эмуляция не срабатывает, проверено 2026-08-18).
-/// AR-режим (1) теперь идёт через бит InputUnit `0x08` (см. `input_bits::AR_MODE`).
+/// 1 → 0x2E, 2 → 0x2D, 3 → 0x2C. Кодек игра читает как сырую клавишу
+/// (keybind-эмуляция не срабатывает, проверено 2026-08-18).
+/// AR-режим (1) идёт через бит InputUnit `0x08` (`input_bits::AR_MODE`),
+/// меню оружия (2) — через бит `0x1` (`input_bits::WEAPON_SELECT`).
 #[allow(dead_code)]
 pub(crate) const KEY_DIGIT1: u8 = 0x2E;
+#[allow(dead_code)]
 pub(crate) const KEY_DIGIT2: u8 = 0x2D;
 pub(crate) const KEY_DIGIT3: u8 = 0x2C;
 /// cInput::updateInputUnit(InputUnit*, int userIndex) — функция, которую игра
@@ -117,6 +119,11 @@ pub(crate) mod input_bits {
     /// Игра кодирует AR-режим этим битом; raw-подача через кэш `ms_KeyInput`
     /// не работает (§10.3) — механизм как у прыжка: бит + фронт pressed.
     pub const AR_MODE: u32 = 0x0000_0008;
+    /// Меню выбора оружия (клавиша 2) — бит 0x1 в InputUnit (эмпирически,
+    /// 2026-08-19). Игра кодирует меню оружия этим битом (тот, что раньше
+    /// ошибочно считался прыжком, §10.1); raw-подача через кэш `ms_KeyInput`
+    /// не работает (§10.3) — механизм как у прыжка: бит + фронт pressed.
+    pub const WEAPON_SELECT: u32 = 0x0000_0001;
     /// Лёгкая атака (ЛКМ)
     pub const LIGHT_ATTACK: u32 = 0x0000_0040;
     /// Тяжёлая атака (ПКМ)
