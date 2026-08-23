@@ -98,6 +98,22 @@ Static pointer: `base + 0x17EA1D0` (cCameraGame::Instance).
 |--------|------|-------|
 | `0x200` | `[f32; 16]` | View-projection matrix |
 
+### Enemies (debug-панель, `read_enemies`)
+
+Сущности сцены — из `EntitySystem` (SDK `ref/mgr-plugin-sdk` + disasm):
+
+- `EntitySystem::ms_Instance` = `base + 0x17E9A98`; список сущностей `m_EntityList`
+  (`Hw::cFixedList<Entity*>`) на `+0x38` (size `+0x0C`, первый узел `+0x14`,
+  обход по `node->m_next` `+0x08`).
+- `Entity`: имя `+0x04`, Behavior* (m_pSceneModel) `+0x3C` (disasm `Entity::getTransPos`
+  0x67C8B0: `mov eax,[ecx+0x3C]`), m_pInstance `+0x48` (disasm `getEntityInstance` 0x67C8A0).
+- У Behavior: позиция `+0x50` (cParts::m_vecTransPos), HP `+0x870`, r_anim `+0x618`.
+- Фильтр врагов: имена `Em*`/`Ba*`/`Pl001*` (без игрока по `cached_player_obj_ptr`),
+  позиция не (0,0,0), HP 1..1 000 000. Части моделей (`Pl0010_Hair` и т.п.) и фон
+  (`byBgManager`, пустые имена) отсекаются позицией/HP. Слот анимации `Behavior+0x770`
+  у всех сущностей NULL — r_anim врагов читается только из `+0x618` (ID большие,
+  напр. 0x10002, не как у игрока 5–297).
+
 ### Animation (Raiden)
 
 3-level pointer chain: `base + 0x019C14C4 → +0x788 → +0x618`

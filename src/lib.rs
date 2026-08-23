@@ -577,6 +577,96 @@ impl HelloHud {
         })
     }
 
+    /// Читает врагов (сущности Em*/Ba*/Pl001*) из EntitySystem::m_EntityList.
+    /// Адреса и смещения — из `ref/mgr-plugin-sdk` + дизассемблирование:
+    /// `EntitySystem::ms_Instance` = base + 0x17E9A98, список `m_EntityList`
+    /// (Hw::cFixedList<Entity*>) на +0x38 (size +0x0C, m_pFirst +0x14, узел:
+    /// value/prev/next); Entity: имя +0x04, Behavior* (m_pSceneModel) +0x3C
+    /// (подтверждено disasm `Entity::getTransPos` 0x67C8B0: `mov eax,[ecx+0x3C]`,
+    /// `add eax,0x50`). У Behavior: позиция +0x50 (cParts::m_vecTransPos),
+    /// HP +0x870, r_anim +0x618 — та же иерархия, что у игрока.
+    /// Возвращает (всего сущностей, враги). Только для debug-панели.
+    #[cfg(debug_assertions)]
+    pub(crate) fn read_enemies(&self) -> (usize, Vec<ui::EnemyInfo>) {
+        let mut out = Vec::new();
+        if self.base_addr == 0 {
+            return (0, out);
+        }
+        let player_pos = if self.cached_player_obj_ptr.is_null() {
+            None
+        } else {
+            let p = self.cached_player_obj_ptr;
+            Some(unsafe {
+                [
+                    *(p.add(0x50) as *const f32),
+                    *(p.add(0x54) as *const f32),
+                    *(p.add(0x58) as *const f32),
+                ]
+            })
+        };
+        let list = (self.base_addr + 0x17E9A98 + 0x38) as *const u8;
+        if !is_readable_ptr(list as usize) {
+            return (0, out);
+        }
+        let total = unsafe { *(list.add(0x0C) as *const usize) };
+        let first = unsafe { *(list.add(0x14) as *const *mut u8) };
+        let mut node = first;
+        for _ in 0..total.min(256) {
+            if node.is_null() || !is_readable_ptr(node as usize) {
+                break;
+            }
+            let ent = unsafe { *(node as *const *mut u8) };
+            if !ent.is_null() && is_readable_ptr(ent as usize) {
+                let name = unsafe { std::ffi::CStr::from_ptr(ent.add(0x04) as *const i8) }
+                    .to_string_lossy()
+                    .into_owned();
+                let behavior = unsafe { *(ent.add(0x3C) as *const *mut u8) };
+                // Игрок (Pl0010/Pl0000 в зависимости от сцены) — не враг.
+                let is_player = !behavior.is_null() && behavior == self.cached_player_obj_ptr;
+                // Кандидат во враги: Em*/Ba*/Pl001* (включая Em0010_Assault —
+                // подчёркивание в имени не всегда часть модели).
+                let is_enemy_candidate = !is_player
+                    && !name.is_empty()
+                    && (name.starts_with("Em")
+                        || name.starts_with("Ba")
+                        || name.starts_with("Pl001"));
+                if is_enemy_candidate && !behavior.is_null() && is_readable_ptr(behavior as usize) {
+                    unsafe {
+                        let pos = [
+                            *(behavior.add(0x50) as *const f32),
+                            *(behavior.add(0x54) as *const f32),
+                            *(behavior.add(0x58) as *const f32),
+                        ];
+                        let hp = *(behavior.add(0x870) as *const i32);
+                        // r_anim — текущая анимация (как у игрока); у врагов
+                        // слот анимации (+0x770) не работает — значения из +0x618.
+                        let r_anim = *(behavior.add(0x618) as *const i32);
+                        // Настоящий враг: реальная позиция в сцене (не спавн
+                        // (0,0,0)) и живое HP в разумных пределах (не мусор).
+                        let pos_nonzero = pos[0] != 0.0 || pos[1] != 0.0 || pos[2] != 0.0;
+                        if pos_nonzero && hp > 0 && hp < 1_000_000 {
+                            let dist = player_pos.map(|pp| {
+                                ((pos[0] - pp[0]).powi(2)
+                                    + (pos[1] - pp[1]).powi(2)
+                                    + (pos[2] - pp[2]).powi(2))
+                                .sqrt()
+                            });
+                            out.push(ui::EnemyInfo {
+                                name,
+                                pos,
+                                hp,
+                                r_anim,
+                                dist,
+                            });
+                        }
+                    }
+                }
+            }
+            node = unsafe { *(node.add(0x08) as *const *mut u8) };
+        }
+        (total, out)
+    }
+
     /// Читает состояние камеры: позиция (+0x1B0), look-at (+0x1C0), крен
     /// (+0x1F0) и view-proj матрица (+0x200). Смещения — из
     /// `Hw::cCameraBase`/`cCameraViewProj` (ref/mgr-plugin-sdk).

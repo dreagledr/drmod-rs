@@ -18,6 +18,17 @@ pub struct UiState {
     pub player_found: bool,
 }
 
+/// Враг (сущность Em*/Ba*/Pl001*) из EntitySystem для debug-панели: позиция,
+/// HP, анимация, дистанция до игрока.
+#[cfg(debug_assertions)]
+pub(super) struct EnemyInfo {
+    pub name: String,
+    pub pos: [f32; 3],
+    pub hp: i32,
+    pub r_anim: i32,
+    pub dist: Option<f32>,
+}
+
 #[cfg(debug_assertions)]
 pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
     ui.window("DrmodDebug")
@@ -123,6 +134,25 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                 ui.text("Убедитесь, что вы в игре (не в меню).");
             } else {
                 ui.text_colored([0.0, 1.0, 0.0, 1.0], "Player found!");
+            }
+
+            // --- ВРАГИ (позиции в бою) ---
+            ui.separator();
+            if state.menu_status_valid && !state.menu_status.is_loading() {
+                let (total, enemies) = hud.read_enemies();
+                ui.text(format!("Entities: {}  Enemies: {}", total, enemies.len()));
+                for e in &enemies {
+                    let d = e
+                        .dist
+                        .map(|d| format!("{:.1}m", d))
+                        .unwrap_or_else(|| "?".into());
+                    ui.text(format!(
+                        "{} ({:.1}, {:.1}, {:.1}) HP:{} rAnim:{} {}",
+                        e.name, e.pos[0], e.pos[1], e.pos[2], e.hp, e.r_anim, d
+                    ));
+                }
+            } else {
+                ui.text_colored([0.5, 0.5, 0.5, 1.0], "enemies: N/A (loading/menu)");
             }
 
             // --- ВЫХОД ---
