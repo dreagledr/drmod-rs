@@ -53,6 +53,7 @@ pub(super) static PLAYBACK_FEED: Mutex<PlaybackFeed> = Mutex::new(PlaybackFeed {
     frames: Vec::new(),
     next_idx: 0,
     done: false,
+    rsx_correction: 0.0,
 });
 
 #[cfg(debug_assertions)]
@@ -63,6 +64,9 @@ pub(super) struct PlaybackFeed {
     next_idx: usize,
     /// Все кадры поданы — render должен остановить воспроизведение.
     done: bool,
+    /// Поправка к right_stick_x для следующего поданного кадра (вариант E:
+    /// компенсация курса). Применяется один раз и обнуляется.
+    rsx_correction: f32,
 }
 
 /// Готовит один кадр к подаче детуром: weapon_select hold-gate и конвертация
@@ -183,12 +187,17 @@ pub(super) fn feed_playback(unit: *mut InputUnit) -> bool {
         return false;
     }
     if g.next_idx < g.frames.len() {
-        let frame = g.frames[g.next_idx];
+        let mut frame = g.frames[g.next_idx];
         // Вариант D: дубль кадра — render запросил повторную подачу текущего
         // кадра (компенсация отставания); next_idx не растёт.
         let dup = DUP_REQUESTED.swap(false, Ordering::Relaxed);
         if !dup {
             g.next_idx += 1;
+        }
+        // Вариант E: поправка курса — добавляем к right_stick_x один раз.
+        if g.rsx_correction != 0.0 {
+            frame.input.right_stick[0] += g.rsx_correction;
+            g.rsx_correction = 0.0;
         }
         unsafe { *unit = frame.input };
         // Raw-клавиши меню и blade/ripper — в атомики; детур применит raw
@@ -234,7 +243,12 @@ static DUP_COUNT: AtomicUsize = AtomicUsize::new(0);
 const DUP_LAG_THRESHOLD: f32 = 0.15;
 /// Минимальный интервал между дублями (кадров подачи).
 const DUP_MIN_INTERVAL: usize = 3;
-/// Максимум дублей за прогон.
+/// Вариант D ВЫКЛЮЧЕН (2026-08-23): дубль в hold-окне перед прыжком продлевал
+/// движение и давал ПЕРЕЛЁТ (визуально: персонаж прыгнул слишком далеко,
+/// фейлы 98/99 в прогоне 96). Для включения — `true` и подобрать пороги/
+/// безопасное окно.
+const DUP_ENABLED: bool = false;
+/// Максимум дублей за прогон (если вариант D включён).
 const DUP_MAX: usize = 30;
 /// Окно безопасности перед фронтом/сменой анимации (кадров).
 const DUP_SAFE_AHEAD: usize = 5;
@@ -255,6 +269,9 @@ pub(super) fn request_frame_dup() {
 /// (`playback_tick`) с текущей позицией игрока.
 #[cfg(debug_assertions)]
 pub(super) fn should_dup_frame(play_pos: [f32; 3]) -> bool {
+    if !DUP_ENABLED {
+        return false; // вариант D отключён (перелёт при прыжках)
+    }
     let g = match PLAYBACK_FEED.lock() {
         Ok(x) => x,
         Err(e) => e.into_inner(),
@@ -318,6 +335,67 @@ pub(super) fn should_dup_frame(play_pos: [f32; 3]) -> bool {
         idx, along
     ));
     true
+}
+
+// --- Вариант E: компенсация курса — поправка к right_stick_x ---
+// render считает отклонение cam_yaw от записи и ставит поправку для
+// следующего поданного кадра; детур добавляет её к right_stick_x.
+// Чувствительность ~0.00065 °/ед/кадр (analyze7_stick.py) = 1.13e-5 рад/ед.
+
+/// Чувствительность стика: рад на единицу right_stick за кадр.
+const CAM_SENS_RAD: f32 = 0.00065 * std::f32::consts::PI / 180.0;
+/// Порог отклонения yaw (рад), ниже которого не корректируем (шум камеры).
+const CAM_THRESHOLD_RAD: f32 = 0.5 * std::f32::consts::PI / 180.0;
+/// Частичность коррекции (0..1) — поворот тела следует за камерой плавно,
+/// полная компенсация за 1 кадр даст перекоррекцию.
+const CAM_GAIN: f32 = 0.6;
+/// Клэмп поправки (ед. стика) — как значения в записи (до ~2000).
+const CAM_CLAMP: f32 = 2000.0;
+
+/// cam_yaw из CameraState (как в dbdump dump.rs): atan2(dx, dz).
+#[cfg(debug_assertions)]
+fn cam_yaw(cam: &CameraState) -> f32 {
+    let dx = cam.look_at[0] - cam.pos[0];
+    let dz = cam.look_at[2] - cam.pos[2];
+    dx.atan2(dz)
+}
+
+/// Считает поправку к right_stick_x по отклонению текущей камеры от записи.
+/// Возвращает 0, если отклонение в пределах порога или кадров нет.
+#[cfg(debug_assertions)]
+pub(super) fn camera_correction(cam: &CameraState) -> f32 {
+    let g = match PLAYBACK_FEED.lock() {
+        Ok(x) => x,
+        Err(e) => e.into_inner(),
+    };
+    if g.frames.is_empty() {
+        return 0.0;
+    }
+    let idx = g.next_idx.min(g.frames.len() - 1);
+    let rec_yaw = cam_yaw(&g.frames[idx].camera);
+    let play_yaw = cam_yaw(cam);
+    let mut dyaw = play_yaw - rec_yaw;
+    // перенос в [-PI, PI)
+    dyaw = (dyaw + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
+        - std::f32::consts::PI;
+    if dyaw.abs() < CAM_THRESHOLD_RAD {
+        return 0.0;
+    }
+    let corr = (-dyaw / CAM_SENS_RAD * CAM_GAIN).clamp(-CAM_CLAMP, CAM_CLAMP);
+    logger::log_line(&format!(
+        "playback: cam correction rsx={:.0} (dYaw {:.2} deg)",
+        corr,
+        dyaw * 180.0 / std::f32::consts::PI
+    ));
+    corr
+}
+
+/// Ставит поправку к right_stick_x для следующего поданного кадра.
+#[cfg(debug_assertions)]
+pub(super) fn set_rsx_correction(v: f32) {
+    if let Ok(mut g) = PLAYBACK_FEED.lock() {
+        g.rsx_correction = v;
+    }
 }
 
 /// Устанавливает базовый адрес модуля (вызывается при init из `lib.rs`).
@@ -800,5 +878,8 @@ impl ReplayState {
         if should_dup_frame(state.pos) {
             request_frame_dup();
         }
+        // Вариант E: компенсация курса — поправка к right_stick_x по
+        // отклонению cam_yaw от записи (применяется следующим поданным кадром).
+        set_rsx_correction(camera_correction(&camera));
     }
 }
