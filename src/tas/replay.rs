@@ -351,6 +351,10 @@ const CAM_THRESHOLD_RAD: f32 = 0.5 * std::f32::consts::PI / 180.0;
 const CAM_GAIN: f32 = 0.6;
 /// Клэмп поправки (ед. стика) — как значения в записи (до ~2000).
 const CAM_CLAMP: f32 = 2000.0;
+/// Максимальный корректируемый угол: при |dYaw| >= 90° камера смотрит «не туда»
+/// (старт/спавн/рестарт) — коррекция там раскручивала камеру (прогон 101:
+/// развернуло на 180°). Дрейф курса — это единицы градусов.
+const CAM_MAX_CORRECT_RAD: f32 = 90.0 * std::f32::consts::PI / 180.0;
 
 /// cam_yaw из CameraState (как в dbdump dump.rs): atan2(dx, dz).
 #[cfg(debug_assertions)]
@@ -361,24 +365,27 @@ fn cam_yaw(cam: &CameraState) -> f32 {
 }
 
 /// Считает поправку к right_stick_x по отклонению текущей камеры от записи.
-/// Возвращает 0, если отклонение в пределах порога или кадров нет.
+/// Эталон — последний ПОДАННЫЙ кадр (`next_idx - 1`), а не будущий: сравнение
+/// с будущим кадром при активной коррекции не сходилось (эталон «уезжал»
+/// вместе с поворотом) и раскручивало камеру. Возвращает 0, если отклонение
+/// вне (порог, 90°) или кадров нет.
 #[cfg(debug_assertions)]
 pub(super) fn camera_correction(cam: &CameraState) -> f32 {
     let g = match PLAYBACK_FEED.lock() {
         Ok(x) => x,
         Err(e) => e.into_inner(),
     };
-    if g.frames.is_empty() {
+    if g.frames.is_empty() || g.next_idx == 0 {
         return 0.0;
     }
-    let idx = g.next_idx.min(g.frames.len() - 1);
+    let idx = g.next_idx - 1; // последний поданный кадр — эталон текущего момента
     let rec_yaw = cam_yaw(&g.frames[idx].camera);
     let play_yaw = cam_yaw(cam);
     let mut dyaw = play_yaw - rec_yaw;
     // перенос в [-PI, PI)
     dyaw = (dyaw + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
         - std::f32::consts::PI;
-    if dyaw.abs() < CAM_THRESHOLD_RAD {
+    if dyaw.abs() >= CAM_MAX_CORRECT_RAD || dyaw.abs() < CAM_THRESHOLD_RAD {
         return 0.0;
     }
     let corr = (-dyaw / CAM_SENS_RAD * CAM_GAIN).clamp(-CAM_CLAMP, CAM_CLAMP);
