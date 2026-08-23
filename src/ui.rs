@@ -19,7 +19,7 @@ pub struct UiState {
 }
 
 /// Враг (сущность Em*/Ba*/Pl001*) из EntitySystem для debug-панели: позиция,
-/// HP, анимация, дистанция до игрока.
+/// HP, анимация, дистанция до игрока, высота клинка (мировая, из матрицы части).
 #[cfg(debug_assertions)]
 pub(super) struct EnemyInfo {
     pub name: String,
@@ -27,6 +27,7 @@ pub(super) struct EnemyInfo {
     pub hp: i32,
     pub r_anim: i32,
     pub dist: Option<f32>,
+    pub blade_y: Option<f32>,
 }
 
 #[cfg(debug_assertions)]
@@ -146,9 +147,13 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
                         .dist
                         .map(|d| format!("{:.1}m", d))
                         .unwrap_or_else(|| "?".into());
+                    let blade = e
+                        .blade_y
+                        .map(|y| format!(" bladeY:{:.2}", y))
+                        .unwrap_or_default();
                     ui.text(format!(
-                        "{} ({:.1}, {:.1}, {:.1}) HP:{} rAnim:{} {}",
-                        e.name, e.pos[0], e.pos[1], e.pos[2], e.hp, e.r_anim, d
+                        "{} ({:.1}, {:.1}, {:.1}) HP:{} rAnim:{} {}{}",
+                        e.name, e.pos[0], e.pos[1], e.pos[2], e.hp, e.r_anim, d, blade
                     ));
                 }
             } else {

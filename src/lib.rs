@@ -585,10 +585,14 @@ impl HelloHud {
     /// (подтверждено disasm `Entity::getTransPos` 0x67C8B0: `mov eax,[ecx+0x3C]`,
     /// `add eax,0x50`). У Behavior: позиция +0x50 (cParts::m_vecTransPos),
     /// HP +0x870, r_anim +0x618 — та же иерархия, что у игрока.
+    /// Высота клинка врага: сущность Em0010_Blade → владелец (+0x518) Em0160Body →
+    /// +0x360 → EmSetCorps; мировая Y клинка — из матрицы cParts (+0x10 → m[3].y = +0x44).
     /// Возвращает (всего сущностей, враги). Только для debug-панели.
     #[cfg(debug_assertions)]
     pub(crate) fn read_enemies(&self) -> (usize, Vec<ui::EnemyInfo>) {
         let mut out = Vec::new();
+        let mut enemy_beh: Vec<(*mut u8, usize)> = Vec::new();
+        let mut blades: Vec<(*mut u8, f32)> = Vec::new();
         if self.base_addr == 0 {
             return (0, out);
         }
@@ -621,6 +625,20 @@ impl HelloHud {
                     .to_string_lossy()
                     .into_owned();
                 let behavior = unsafe { *(ent.add(0x3C) as *const *mut u8) };
+                // Клинок врага (часть): мировая высота из матрицы, владелец
+                // (Body) — для сопоставления с врагом после цикла.
+                if name == "Em0010_Blade"
+                    && !behavior.is_null()
+                    && is_readable_ptr(behavior as usize)
+                {
+                    unsafe {
+                        let owner = *(behavior.add(0x518) as *const *mut u8);
+                        let world_y = *(behavior.add(0x44) as *const f32);
+                        if !owner.is_null() && is_readable_ptr(owner as usize) {
+                            blades.push((owner, world_y));
+                        }
+                    }
+                }
                 // Игрок (Pl0010/Pl0000 в зависимости от сцены) — не враг.
                 let is_player = !behavior.is_null() && behavior == self.cached_player_obj_ptr;
                 // Кандидат во враги: Em*/Ba*/Pl001* (включая Em0010_Assault —
@@ -651,18 +669,32 @@ impl HelloHud {
                                     + (pos[2] - pp[2]).powi(2))
                                 .sqrt()
                             });
+                            let idx = out.len();
                             out.push(ui::EnemyInfo {
                                 name,
                                 pos,
                                 hp,
                                 r_anim,
                                 dist,
+                                blade_y: None,
                             });
+                            enemy_beh.push((behavior, idx));
                         }
                     }
                 }
             }
             node = unsafe { *(node.add(0x08) as *const *mut u8) };
+        }
+        // Сопоставление клинков с врагами: Blade.owner (Em0160Body) +0x360 → враг.
+        for (body_beh, y) in &blades {
+            if is_readable_ptr(*body_beh as usize) {
+                unsafe {
+                    let enemy = *(body_beh.add(0x360) as *const *mut u8);
+                    if let Some((_, idx)) = enemy_beh.iter().find(|(b, _)| *b == enemy) {
+                        out[*idx].blade_y = Some(*y);
+                    }
+                }
+            }
         }
         (total, out)
     }
