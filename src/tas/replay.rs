@@ -388,7 +388,12 @@ pub(super) fn camera_correction(cam: &CameraState) -> f32 {
     if dyaw.abs() >= CAM_MAX_CORRECT_RAD || dyaw.abs() < CAM_THRESHOLD_RAD {
         return 0.0;
     }
-    let corr = (-dyaw / CAM_SENS_RAD * CAM_GAIN).clamp(-CAM_CLAMP, CAM_CLAMP);
+    // Знак: положительный rsx поворачивает камеру ВЛЕВО (yaw уменьшается) —
+    // подтверждено record 104 (rsx 1400..6600 -> dYaw -2..-4°/кадр) и
+    // analyze7_stick.py. При dYaw > 0 (камера правее записи) нужен rsx > 0,
+    // поэтому corr = +dyaw / SENS * GAIN (с минусом коррекция ПРОТИВОДЕЙСТВОВАЛА
+    // записанному повороту и разворачивала камеру: прогоны 101/104).
+    let corr = (dyaw / CAM_SENS_RAD * CAM_GAIN).clamp(-CAM_CLAMP, CAM_CLAMP);
     logger::log_line(&format!(
         "playback: cam correction rsx={:.0} (dYaw {:.2} deg)",
         corr,
