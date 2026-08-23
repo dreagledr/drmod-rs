@@ -1,0 +1,68 @@
+# dbdump — экспорт Record/Replay в CSV и Parquet
+
+Раскладывает BLOB-кадры прогонов (`replay_runs` / `replay_record_frames` /
+`replay_playback_frames` в `%LOCALAPPDATA%\drmod\runs.db`) на плоские колонки
+для офлайн-аналитики. Layout BLOB'ов — общий с модом через крейт
+`replay-types/` (`drmod-replay-types`): структуры `InputUnit`/`PlayerState`/
+`CameraState` + `to_bytes`/`from_bytes` живут в одном месте, поэтому формат
+у писателя и читателя всегда совпадает.
+
+## Сборка
+
+Тул — workspace-член корневого проекта, но собирается под **x64** (arrow-rs/
+parquet — только 64-bit; свой `.cargo/config.toml` как у `server/`):
+
+```bash
+cd tools/dbdump
+cargo build --release
+# бинарь: ../../target/x86_64-pc-windows-msvc/release/dbdump.exe
+```
+
+Корневой `cargo build --release` (i686) тул **не** собирает — только из этой
+директории. Тесты: `cargo test` (тоже из этой директории).
+
+## Использование
+
+```
+dbdump <run_id> [--out DIR] [--db PATH]
+```
+
+- `run_id` — id прогона из `replay_runs` (последние прогоны выводятся, если id не найден).
+- `--out DIR` — куда писать файлы (по умолчанию текущая директория).
+- `--db PATH` — путь к БД (по умолчанию `%LOCALAPPDATA%\drmod\runs.db`).
+
+По id **record**-прогона дампится сам прогон **и** все связанные playback-прогоны
+(`source_replay_id = id`); по id **playback** — его исходная запись и сам прогон.
+Файлы: `run_<id>_<kind>.csv` / `run_<id>_<kind>.parquet` (kind = `record` | `playback`).
+
+### Пример
+
+```bash
+dbdump 73 --out ./dump
+# Прогон id=73 kind=record mission=P118_BEACH (1021 кадров) ...
+#   run_73_record: 1021 кадров -> dump/run_73_record.csv / dump/run_73_record.parquet
+#   run_74_playback: 1003 кадров -> dump/run_74_playback.csv / ...
+```
+
+## Схема колонок (83)
+
+Единая для CSV и Parquet (порядок и типы заданы один раз в `src/dump.rs`,
+`SCHEMA`): мета прогона (`replay_id`, `kind`, `mission_id`, `mission_name`,
+`started_at`, `frame_count`, `duration_ms`, `source_replay_id`), `frame_index`,
+`frame_duration_ms`, все поля `InputUnit` (4 битмаски + стики/триггеры),
+`PlayerState` (позиция/поворот/скорость, HP, r_anim, оружие, кнопки, ripper/blade),
+`CameraState` (позиция, look-at, roll, `vp_00`..`vp_33`), производные `cam_yaw`/
+`cam_pitch` (из pos→lookAt), `blade_down`, `ripper_pressed`, `raw_down_0..5`,
+`raw_pressed_0..5`.
+
+- Старые строки без raw-данных (до 2026-08-23) — пустая ячейка CSV / `null` в parquet.
+- Parquet-колонки все nullable.
+- `cam_yaw`/`cam_pitch` — радианы, из `atan2(look_at - pos)`.
+
+## Ограничения
+
+- **Legacy camera-формат** (записи до 2026-08-18, camera BLOB 76 байт вместо 92)
+  не поддерживается — понятная ошибка с подсказкой. Актуальные прогоны — от id 29.
+- Мод БД не читает (воспроизведение идёт из памяти сессии); если колонки
+  `blade_down`/`ripper_pressed`/`raw_*` ещё не добавлены миграцией (мод не
+  запускался после 2026-08-23), дамп читает их как 0/NULL — без ошибки.

@@ -331,9 +331,13 @@ CREATE TABLE replay_record_frames (
     replay_id INTEGER NOT NULL,
     frame_index INTEGER NOT NULL,
     duration_ms INTEGER NOT NULL,
-    input_unit BLOB NOT NULL,           -- InputUnit (0x30)
-    state BLOB NOT NULL,                -- PlayerState (0x58)
-    camera BLOB NOT NULL,               -- CameraState (0x4C)
+    input_unit BLOB NOT NULL,           -- InputUnit (48 байт, repr(C) из drmod-replay-types)
+    state BLOB NOT NULL,                -- PlayerState (88 байт)
+    camera BLOB NOT NULL,               -- CameraState (92 байт)
+    blade_down INTEGER NOT NULL DEFAULT 0,      -- удержание blade mode (keybind 8)
+    ripper_pressed INTEGER NOT NULL DEFAULT 0,  -- фронт ripper (keybind 11)
+    raw_down BLOB,                      -- m_aKeysDown [u32; 6] из ms_KeyInput (сэмпл детура)
+    raw_pressed BLOB,                   -- m_aKeysPressed [u32; 6]
     FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
 );
 
@@ -344,6 +348,14 @@ CREATE TABLE replay_playback_frames (
 CREATE INDEX idx_replay_record_frames ON replay_record_frames(replay_id, frame_index);
 CREATE INDEX idx_replay_playback_frames ON replay_playback_frames(replay_id, frame_index);
 ```
+
+**Формат BLOB:** сырые байты `#[repr(C)]`-структур из общего крейта
+`replay-types/` (пакет `drmod-replay-types`) — `to_bytes`/`from_bytes` живут там же,
+поэтому layout у писателя (мод) и читателя (`tools/dbdump`) всегда совпадает.
+`blade_down`/`ripper_pressed`/`raw_*` добавлены в схему 2026-08-23: для старых БД
+миграция в `tas::db::ensure_replay_frame_columns()` делает `ALTER TABLE ... ADD COLUMN`
+(blade/ripper — `DEFAULT 0`, raw — nullable). BLOB-камера 76 байт — **legacy-формат**
+до 2026-08-18 (без `look_at`/`roll`), dbdump такие прогоны не читает.
 
 **Смещения `PlayerState` (из SDK, требуют рантайм-верификации):**
 
@@ -359,12 +371,12 @@ CREATE INDEX idx_replay_playback_frames ON replay_playback_frames(replay_id, fra
 
 `CameraState`: позиция камеры `+0x1B0`, view-proj матрица `+0x200` (углы извлекаются офлайн из матрицы).
 
-Создание таблиц — `replay::create_replay_tables()`, вызывается из `init_db()`. Флаш — `replay::flush_replay()` (bulk insert по паттерну `segment::finish_segment()`): буфер копится в памяти, в БД пишется одним `BEGIN`/`COMMIT` по завершении записи/воспроизведения.
+Создание таблиц и миграция — `tas::db::create_replay_tables()`, вызывается из `init_db()`. Флаш — `tas::db::flush_replay()` (bulk insert по паттерну `segment::finish_segment()`): буфер копится в памяти, в БД пишется одним `BEGIN`/`COMMIT` по завершении записи/воспроизведения.
 
 > **Замечания по сохранению (2026-08-16):**
 > - Покадровый `duration_ms` в `replay_*_frames` пишется как `frame_index * 1000 / 60` — это **фиктивная** длительность в предположении ровно 60 FPS. Реальный FPS в тестах ~52–58 (зависит от железа), поэтому покадровый `duration_ms` неточен и **не используется** при воспроизведении (подача идёт строго по `frame_index`). Он оставлен только для совместимости/диагностики.
 > - `duration_ms` в `replay_runs` — честный wall-clock (`Instant::elapsed()` от старта до стопа), но отражает **частоту рендера**, а не число тиков симуляции.
-> - BLOB `state` и `camera` **сохраняются**, но при воспроизведении подаётся только `input` (`InputUnit`); из `state` читаются лишь `ripper_enabled`/`blade_mode_type` для реконструкции ripper/blade. `camera` пока не используется вовсе — сохранён для офлайн-анализа и будущих фиксов (snap-коррекция, ресинк по `rAnim`).
+> - BLOB `state` и `camera` **сохраняются**, но при воспроизведении подаётся только `input` (`InputUnit`); `blade_down`/`ripper_pressed`/`raw_*` (колонки) — для подачи blade/ripper и навигации по меню. `state`/`camera` при воспроизведении не используются вовсе — сохранены для офлайн-анализа (инструмент: `tools/dbdump`).
 
 ### 4.3. Интеграция в `HelloHud` (`src/lib.rs`)
 

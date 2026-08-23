@@ -2,13 +2,8 @@
 
 use rusqlite::Connection;
 
+use drmod_replay_types::to_bytes;
 use super::types::{ReplayFrame, ReplayRunMeta};
-
-/// Сериализация `#[repr(C)]`-структуры в байты (для BLOB в SQLite).
-/// Структуры состоят из f32/i32/u32 — без padding, round-trip корректен.
-fn as_bytes<T>(v: &T) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
-}
 
 /// Создаёт таблицы Record/Replay (если их нет).
 pub(crate) fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -34,6 +29,10 @@ pub(crate) fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Er
             input_unit BLOB NOT NULL,
             state BLOB NOT NULL,
             camera BLOB NOT NULL,
+            blade_down INTEGER NOT NULL DEFAULT 0,
+            ripper_pressed INTEGER NOT NULL DEFAULT 0,
+            raw_down BLOB,
+            raw_pressed BLOB,
             FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
         )",
         (),
@@ -47,6 +46,10 @@ pub(crate) fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Er
             input_unit BLOB NOT NULL,
             state BLOB NOT NULL,
             camera BLOB NOT NULL,
+            blade_down INTEGER NOT NULL DEFAULT 0,
+            ripper_pressed INTEGER NOT NULL DEFAULT 0,
+            raw_down BLOB,
+            raw_pressed BLOB,
             FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
         )",
         (),
@@ -59,6 +62,29 @@ pub(crate) fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Er
         "CREATE INDEX IF NOT EXISTS idx_replay_playback_frames ON replay_playback_frames(replay_id, frame_index)",
         (),
     )?;
+    ensure_replay_frame_columns(conn, "replay_record_frames")?;
+    ensure_replay_frame_columns(conn, "replay_playback_frames")?;
+    Ok(())
+}
+
+/// Миграция старых БД: добавляет колонки blade/ripper/raw, если их нет
+/// (таблицы могли быть созданы до расширения схемы). Для свежих таблиц
+/// CREATE TABLE уже содержит колонки — ALTER не сработает (дубликат).
+fn ensure_replay_frame_columns(conn: &Connection, table: &str) -> Result<(), rusqlite::Error> {
+    let existing: Vec<String> = conn
+        .prepare(&format!("PRAGMA table_info({table})"))?
+        .query_map([], |row| row.get(1))?
+        .collect::<Result<_, _>>()?;
+    let add = |name: &str, ddl: &str| -> Result<(), rusqlite::Error> {
+        if !existing.iter().any(|c| c == name) {
+            conn.execute(&format!("ALTER TABLE {table} ADD COLUMN {ddl}"), ())?;
+        }
+        Ok(())
+    };
+    add("blade_down", "blade_down INTEGER NOT NULL DEFAULT 0")?;
+    add("ripper_pressed", "ripper_pressed INTEGER NOT NULL DEFAULT 0")?;
+    add("raw_down", "raw_down BLOB")?;
+    add("raw_pressed", "raw_pressed BLOB")?;
     Ok(())
 }
 
@@ -90,8 +116,8 @@ pub(crate) fn flush_replay(
     }
 
     let sql = match meta.kind {
-        "record" => "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        _ => "INSERT INTO replay_playback_frames (replay_id, frame_index, duration_ms, input_unit, state, camera) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "record" => "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        _ => "INSERT INTO replay_playback_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     };
 
     let _ = conn.execute("BEGIN", []);
@@ -105,9 +131,13 @@ pub(crate) fn flush_replay(
             replay_id,
             f.frame_index as i64,
             dur,
-            as_bytes(&f.input),
-            as_bytes(&f.state),
-            as_bytes(&f.camera)
+            to_bytes(&f.input),
+            to_bytes(&f.state),
+            to_bytes(&f.camera),
+            f.blade_down as i64,
+            f.ripper_pressed as i64,
+            to_bytes(&f.raw_down),
+            to_bytes(&f.raw_pressed)
         ]);
     }
     let _ = conn.execute("COMMIT", []);

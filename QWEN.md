@@ -8,6 +8,8 @@ A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**
 - **Library (`drmod_rs_lib`)**: Hooks into DirectX 9 to render an ImGui overlay that reads game memory in real-time
 - **Server (`server/`)**: Multiplayer relay server (tokio, Docker, 64-bit)
 - **Protocol (`protocol/`)**: Shared types for TCP (JSON) and UDP (binary) communication
+- **Replay-types (`replay-types/`)**: Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout replay BLOB'ов
+- **dbdump (`tools/dbdump/`)**: CLI-экспорт кадров Record/Replay из `runs.db` в CSV/Parquet (83 плоские колонки) для аналитики
 
 Features:
 - Segment-based autosplitter with SQLite persistence and ghost replay
@@ -36,12 +38,16 @@ src/
 ├── logger.rs        # Logging to %LOCALAPPDATA%\drmod\ (debug.log + buffered state.log)
 ├── tas/             # TAS (tool-assisted speedrun) — input record/replay
 │   ├── addresses.rs #   Input memory addresses/constants
-│   ├── db.rs        #   Replay SQLite tables + bulk insert
+│   ├── db.rs        #   Replay SQLite tables, миграция колонок + bulk insert
 │   ├── replay.rs    #   Record/playback logic, input override
 │   ├── hooks.rs     #   MinHook input hooks (updateInputUnit/isKeybindPressed/isKeybindDown), ripper/blade emulation, raw input readers
-│   └── types.rs     #   Input/state DTOs (InputUnit, ReplayFrame, ...)
+│   └── types.rs     #   Re-export DTO из replay-types + ReplayFrame/внутренние типы
 server/              # Multiplayer server (tokio, 64-bit, Docker)
 protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPacket)
+replay-types/        # Общие replay-DTO (InputUnit/PlayerState/CameraState) + to_bytes/from_bytes
+tools/
+├── dbdump/          # Экспорт replay-кадров в CSV/Parquet (x64, отдельный .cargo/config.toml)
+└── disasm/          # Скрипты дизассемблирования (отдельный workspace, вне корневого)
 ref/                 # Git submodules — read-only reference projects
 ```
 
@@ -154,6 +160,41 @@ CREATE TABLE segment_positions (
 - WAL mode + NORMAL synchronous for fast bulk inserts
 - Ghost replay reads best segment positions via `load_best_ghost()`
 
+**Replay tables (Record/Replay):**
+
+```sql
+CREATE TABLE replay_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                  -- 'record' | 'playback'
+    mission_id INTEGER NOT NULL,
+    mission_name TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    frame_count INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    source_replay_id INTEGER             -- для playback — id исходной записи
+);
+
+CREATE TABLE replay_record_frames (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    replay_id INTEGER NOT NULL,
+    frame_index INTEGER NOT NULL,
+    duration_ms INTEGER NOT NULL,        -- frame_index * 1000 / 60 (фиктивный, не используется)
+    input_unit BLOB NOT NULL,            -- InputUnit (48 байт, repr(C))
+    state BLOB NOT NULL,                 -- PlayerState (88 байт)
+    camera BLOB NOT NULL,                -- CameraState (92 байт)
+    blade_down INTEGER NOT NULL DEFAULT 0,
+    ripper_pressed INTEGER NOT NULL DEFAULT 0,
+    raw_down BLOB,                       -- m_aKeysDown [u32; 6]
+    raw_pressed BLOB,                    -- m_aKeysPressed [u32; 6]
+    FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
+);
+-- replay_playback_frames — та же форма
+```
+
+- BLOB'ы — сырые байты структур из `replay-types/` (layout версионируется размером: camera 76 байт = legacy до 2026-08-18, не читается dbdump)
+- Миграция старых БД (`ensure_replay_frame_columns`): `ALTER TABLE` добавляет blade/ripper/raw-колонки
+- Мод БД не читает (воспроизведение идёт из памяти сессии) — таблицы только для истории/аналитики, экспорт: `tools/dbdump`
+
 ## Building and Running
 
 ### Prerequisites
@@ -212,6 +253,9 @@ cargo run --release -- -n "Custom Window Name.exe"
 | `chrono` (0.4.45) | Time formatting for run timestamps |
 | `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol and HTTP API |
 | `drmod-protocol` | Shared types for client-server communication |
+| `drmod-replay-types` | Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`) + `to_bytes`/`from_bytes` |
+
+Тул `tools/dbdump` дополнительно тянет (только для него, x64): `rusqlite`, `csv`, `arrow` + `parquet` (59.x) — экспорт в CSV/Parquet.
 
 ### Notes
 
@@ -221,6 +265,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 - **HTTP API** (`src/api.rs`, debug + release): own minimal HTTP server (raw `TcpListener`, no tiny_http) on `127.0.0.1:5223` — `POST /script/run` (JSON scripts in frames), `GET /state`, `GET /logs?from_ms&to_ms&script_id`, `GET /health`, `POST /eject` (unloads the DLL: HTTP thread sets a flag, the render loop performs `shutdown()` + `hudhook::eject()`). Ring buffer of 3600 frames (60 s). Scripts stop automatically on loading and before eject. NumPad4 runs the builtin script through the same `ScriptRunner`. Design: `docs/API.md`. The server is a single thread with non-blocking accept (10 ms stop-flag poll) and 1 s read/write timeouts per connection — `shutdown()` joins it in bounded time, so DLL eject never hangs (tiny_http was replaced because it had no socket timeouts and spawned unjoinable internal threads).
 - Error handling uses Windows `MessageBoxW` for user-facing errors.
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
+- **dbdump** (`tools/dbdump/`): экспорт кадров Record/Replay в CSV/Parquet — 83 плоские колонки (мета прогона + frame + InputUnit/PlayerState/CameraState + производные `cam_yaw`/`cam_pitch` + blade/ripper/raw). По id record-прогона дампит и его playback'и (`source_replay_id`). Сборка — x64 (`cd tools/dbdump && cargo build --release`, свой `.cargo/config.toml` как у server; arrow-rs только 64-bit; корневой `cargo build` тул не собирает). Запуск: `dbdump <run_id> [--out DIR] [--db PATH]`. Тесты: `cargo test` из `tools/dbdump`. Детали: `tools/dbdump/README.md`.
 
 ### Reference Projects
 

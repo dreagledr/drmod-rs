@@ -1,0 +1,15 @@
+[package]
+name = "drmod-dbdump"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "dbdump"
+path = "src/main.rs"
+
+[dependencies]
+drmod-replay-types = { path = "../../replay-types" }
+rusqlite = { version = "0.40.1", features = ["bundled"] }
+csv = "1"
+arrow = "59"
+parquet = "59"
