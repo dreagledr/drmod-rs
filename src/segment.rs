@@ -199,6 +199,18 @@ pub fn segment_action(
     SegmentAction::None
 }
 
+/// Попадает ли позиция игрока в триггерную зону любой из стартовых точек
+/// (`START_CONDITIONS`, допуск как в `segment_action`). Без привязки к миссии —
+/// используется отложенным стартом записи/воспроизведения в `tas::replay`.
+pub fn in_any_start_zone(pos: Option<Vec3>) -> bool {
+    let Some(p) = pos else {
+        return false;
+    };
+    START_CONDITIONS.iter().any(|&(_, s)| {
+        (p.x - s.x).abs() <= 0.1 && (p.y - s.y).abs() <= 1.0 && (p.z - s.z).abs() <= 0.1
+    })
+}
+
 pub fn create_segment_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS segments (

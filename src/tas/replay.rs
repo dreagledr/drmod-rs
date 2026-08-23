@@ -7,14 +7,14 @@
 //! Логирование — в `crate::logger`. Прямая запись в сырые кэши и поля
 //! `Pl0000` не работает — игрок читает ввод из `g_InputUnit0`, а не из этих мест.
 
-use super::types::{InputOverride, InputUnit};
 #[cfg(debug_assertions)]
 use super::addresses;
 #[cfg(debug_assertions)]
 use super::types::{CameraState, PlayerState, ReplayFrame, ReplayRunMeta};
+use super::types::{InputOverride, InputUnit};
 use crate::logger;
 #[cfg(debug_assertions)]
-use crate::segment;
+use crate::segment::{self, in_any_start_zone};
 #[cfg(debug_assertions)]
 use chrono::Local;
 #[cfg(debug_assertions)]
@@ -154,10 +154,7 @@ pub(super) fn clear_playback_feed() {
 /// воспроизведение и флашит лог.
 #[cfg(debug_assertions)]
 pub(super) fn playback_done() -> bool {
-    PLAYBACK_FEED
-        .lock()
-        .map(|g| g.done)
-        .unwrap_or(false)
+    PLAYBACK_FEED.lock().map(|g| g.done).unwrap_or(false)
 }
 
 /// Сколько кадров подано / всего (для debug-панели).
@@ -383,8 +380,8 @@ pub(super) fn camera_correction(cam: &CameraState) -> f32 {
     let play_yaw = cam_yaw(cam);
     let mut dyaw = play_yaw - rec_yaw;
     // перенос в [-PI, PI)
-    dyaw = (dyaw + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI)
-        - std::f32::consts::PI;
+    dyaw =
+        (dyaw + std::f32::consts::PI).rem_euclid(2.0 * std::f32::consts::PI) - std::f32::consts::PI;
     if dyaw.abs() >= CAM_MAX_CORRECT_RAD || dyaw.abs() < CAM_THRESHOLD_RAD {
         return 0.0;
     }
@@ -481,26 +478,6 @@ pub(super) fn apply_override(unit: *mut InputUnit) {
     {
         unsafe { *unit = guard.input };
     }
-}
-
-/// Триггер отложенного старта записи/воспроизведения (спавн R-01 beach).
-/// Зеркалит `segment::START_CONDITIONS` для `mission_id == 0x0118`.
-#[cfg(debug_assertions)]
-const BARE_START_TRIGGER: segment::Vec3 = segment::Vec3 {
-    x: -24.7,
-    y: 12.14,
-    z: 120.7,
-};
-
-/// Попадает ли позиция игрока в триггерную зону (допуск как в `segment_action`).
-#[cfg(debug_assertions)]
-fn in_bare_trigger(pos: Option<segment::Vec3>) -> bool {
-    let Some(p) = pos else {
-        return false;
-    };
-    (p.x - BARE_START_TRIGGER.x).abs() <= 0.1
-        && (p.y - BARE_START_TRIGGER.y).abs() <= 1.0
-        && (p.z - BARE_START_TRIGGER.z).abs() <= 0.1
 }
 
 /// Состояние активной записи (NumPad5, отложенный старт по триггеру).
@@ -662,7 +639,7 @@ impl ReplayState {
         mission_id: i32,
         mission_name: &str,
     ) {
-        if !in_bare_trigger(pos) {
+        if !in_any_start_zone(pos) {
             return;
         }
         if self.record.armed {
