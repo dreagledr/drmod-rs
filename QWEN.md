@@ -47,6 +47,7 @@ protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPack
 replay-types/        # Общие replay-DTO (InputUnit/PlayerState/CameraState) + to_bytes/from_bytes
 tools/
 ├── dbdump/          # Экспорт replay-кадров в CSV/Parquet (x64, отдельный .cargo/config.toml)
+├── desync_analysis/ # pandas-скрипты анализа десинка Record→Playback (CSV от dbdump)
 └── disasm/          # Скрипты дизассемблирования (отдельный workspace, вне корневого)
 ref/                 # Git submodules — read-only reference projects
 ```
@@ -266,6 +267,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 - Error handling uses Windows `MessageBoxW` for user-facing errors.
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
 - **dbdump** (`tools/dbdump/`): экспорт кадров Record/Replay в CSV/Parquet — 83 плоские колонки (мета прогона + frame + InputUnit/PlayerState/CameraState + производные `cam_yaw`/`cam_pitch` + blade/ripper/raw). По id record-прогона дампит и его playback'и (`source_replay_id`). Сборка — x64 (`cd tools/dbdump && cargo build --release`, свой `.cargo/config.toml` как у server; arrow-rs только 64-bit; корневой `cargo build` тул не собирает). Запуск: `dbdump <run_id> [--out DIR] [--db PATH]`. Тесты: `cargo test` из `tools/dbdump`. Детали: `tools/dbdump/README.md`.
+- **Десинк Record→Playback** (`docs/DESYNC_ANALYSIS.md`, анализ 2026-08-23, record 73 → playbacks 78/81/82): гипотеза «дроп FPS» закрыта (длительности кадров record==playback побайтово, 60 FPS стабильно); главный источник — **лаг подачи ввода 1 кадр** (override из render(K) применяется тиком K+1, `play[fi]==rec[fi-1]` на 100%) + фазовая неопределённость Present↔тик (playback'и с идентичным вводом расходятся между собой до 17 м). **Вариант A реализован (2026-08-23):** `playback_tick` подаёт `frame[frame_idx + 1]` — тик N+1 применяет `frame[N+1]`, как в записи; `frame[0]` (нулевой ввод спавна) не подаётся; `playback.log[N]` теперь синхронен с `record[N]`. Критическая точка десинка — вход в ninja run (r_anim 5→13→14→71, fi≈233–248). Анализ: `tools/desync_analysis/` (pandas, `py -3 tools/desync_analysis/analyze*.py [DIR]`, `plot_cam.py [DIR] [OUT.png]`). План B (подача в детур) и C (snap-коррекция) — в документе, не реализованы.
 
 ### Reference Projects
 

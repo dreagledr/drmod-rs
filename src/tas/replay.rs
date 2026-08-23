@@ -485,9 +485,12 @@ impl ReplayState {
     /// Подача кадра воспроизведения по индексу + захват результата.
     /// Кадры подаются строго по индексу (1 кадр на вызов render), а не по dt —
     /// dt-сопоставление теряло однокадровые фронты pressed/released.
-    /// NOTE: override, выставленный здесь, применяется игрой на СЛЕДУЮЩЕМ тике,
-    /// поэтому playback.log[N] = результат кадра frame[N-1] (сдвиг на 1 кадр
-    /// относительно record[N]); playback.log[0] — состояние спавна до подачи.
+    /// Компенсация лага в 1 кадр: override, выставленный в render(K),
+    /// применяется игрой на тике K+1, поэтому подаём frame[frame_idx + 1] —
+    /// тик N+1 применит frame[N+1], как в записи (record[N+1] = ввод тика N+1).
+    /// frame[0] записи — нулевой ввод спавна, не подаётся (потеря безвредна).
+    /// playback.log[N] = результат кадра frame[N] — синхронно с record[N]
+    /// (до компенсации был сдвиг на 1 кадр относительно record).
     fn playback_tick(
         &mut self,
         conn: Option<&Connection>,
@@ -498,8 +501,8 @@ impl ReplayState {
         if !self.playback.active {
             return;
         }
-        if self.playback.frame_idx < self.playback.frames.len() {
-            let frame = self.playback.frames[self.playback.frame_idx];
+        if self.playback.frame_idx + 1 < self.playback.frames.len() {
+            let frame = self.playback.frames[self.playback.frame_idx + 1];
 
             // Ripper/blade не идут через InputUnit — handleActions читает их
             // из DirectInput напрямую через isKeybindPressed(11)/isKeybindDown(8).
@@ -512,7 +515,7 @@ impl ReplayState {
                 super::hooks::set_ripper_frames(1);
                 logger::log_line(&format!(
                     "playback: ripper pressed at frame {}",
-                    self.playback.frame_idx
+                    self.playback.frame_idx + 1
                 ));
             }
             let blade_on = frame.blade_down != 0;
@@ -521,7 +524,7 @@ impl ReplayState {
                 logger::log_line(&format!(
                     "playback: blade hold {} at frame {}",
                     if blade_on { "ON" } else { "OFF" },
-                    self.playback.frame_idx
+                    self.playback.frame_idx + 1
                 ));
             }
 
@@ -538,7 +541,7 @@ impl ReplayState {
                 input.buttons_down &= !addresses::input_bits::WEAPON_SELECT;
                 logger::log_line(&format!(
                     "playback: gated weapon_select hold at frame {}",
-                    self.playback.frame_idx
+                    self.playback.frame_idx + 1
                 ));
             }
 
