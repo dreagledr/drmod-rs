@@ -42,6 +42,166 @@ const INPUT_OVERRIDE_INIT: InputOverride = InputOverride {
 
 static INPUT_OVERRIDE: Mutex<InputOverride> = Mutex::new(INPUT_OVERRIDE_INIT);
 
+/// Буфер кадров воспроизведения для подачи прямо из детура `updateInputUnit`
+/// (в тике симуляции, вариант B) — в отличие от `INPUT_OVERRIDE`, который
+/// ставится из render и применяется игрой на СЛЕДУЮЩЕМ тике.
+/// Заполняется при старте воспроизведения (`start_playback_feed`), очищается
+/// при остановке. Кадры предобработаны (`prepare_frame`): weapon_select gate
+/// и конвертация raw-клавиш меню выполнены заранее, детур только копирует.
+#[cfg(debug_assertions)]
+pub(super) static PLAYBACK_FEED: Mutex<PlaybackFeed> = Mutex::new(PlaybackFeed {
+    frames: Vec::new(),
+    next_idx: 0,
+    done: false,
+});
+
+#[cfg(debug_assertions)]
+pub(super) struct PlaybackFeed {
+    /// Кадры для подачи (1 кадр на тик симуляции).
+    frames: Vec<ReplayFrame>,
+    /// Индекс следующего кадра.
+    next_idx: usize,
+    /// Все кадры поданы — render должен остановить воспроизведение.
+    done: bool,
+}
+
+/// Готовит один кадр к подаче детуром: weapon_select hold-gate и конвертация
+/// raw-клавиш меню в D-Pad биты. Раньше выполнялось каждый кадр в render
+/// (`playback_tick`); теперь — один раз при старте.
+#[cfg(debug_assertions)]
+fn prepare_frame(mut f: ReplayFrame) -> ReplayFrame {
+    // weapon_select (бит 0x01) в записи: 1-й кадр (фронт pressed) — toggle
+    // меню. Удержание (down без pressed) никогда не нужно — зануляем всегда.
+    let mut input = f.input;
+    if input.buttons_down & addresses::input_bits::WEAPON_SELECT != 0
+        && input.buttons_pressed & addresses::input_bits::WEAPON_SELECT == 0
+    {
+        input.buttons_down &= !addresses::input_bits::WEAPON_SELECT;
+    }
+    // Навигация в меню: запись хранит её в сырых клавишах (стрелки
+    // 0x90/0x93/0x92/0x91, Enter 0x15) — меню читает их через
+    // isKeyDown/isKeyPressed из ms_KeyInput, а не из InputUnit.
+    // Конвертируем в D-Pad биты InputUnit + фронт pressed. Клавиша 2 (0x2D) —
+    // дубликат weapon_select (бит 0x01 уже в InputUnit) — зануляем.
+    let mut raw_down = f.raw_down;
+    let mut raw_pressed = f.raw_pressed;
+    // KEY_ENTER=0x15 (запись), KEY_ESC=0x8E, KEY_UP=0x90,
+    // KEY_RIGHT=0x91, KEY_LEFT=0x92, KEY_DOWN=0x93
+    let menu_map = [
+        (addresses::KEY_UP, addresses::input_bits::MENU_UP),
+        (addresses::KEY_DOWN, addresses::input_bits::MENU_DOWN),
+        (addresses::KEY_LEFT, addresses::input_bits::MENU_LEFT),
+        (addresses::KEY_RIGHT, addresses::input_bits::MENU_RIGHT),
+        (0x15, addresses::input_bits::CONFIRM), // Enter = KEY_ENTER в записи
+        (addresses::KEY_ESC, addresses::input_bits::CANCEL), // Esc = BUTTON_B (отмена)
+    ];
+    for (code, bit) in menu_map {
+        let idx = (code >> 5) as usize;
+        let b = 1u32 << (code & 31);
+        if idx < 6 && raw_down[idx] & b != 0 {
+            input.buttons_down |= bit;
+            if raw_pressed[idx] & b != 0 {
+                input.buttons_pressed |= bit;
+            }
+            raw_down[idx] &= !b;
+            raw_pressed[idx] &= !b;
+        }
+    }
+    let key2_idx = (addresses::KEY_DIGIT2 >> 5) as usize;
+    let key2_bit = 1u32 << (addresses::KEY_DIGIT2 & 31);
+    if key2_idx < 6 && raw_down[key2_idx] & key2_bit != 0 {
+        raw_down[key2_idx] &= !key2_bit;
+        raw_pressed[key2_idx] &= !key2_bit;
+    }
+    f.input = input;
+    f.raw_down = raw_down;
+    f.raw_pressed = raw_pressed;
+    f
+}
+
+/// Заполняет буфер подачи кадрами воспроизведения (вызывается при старте).
+/// `next_idx = 1`: frames[0] — нулевой ввод спавна, не подаётся. Компенсация
+/// лага подачи та же, что в варианте A: кадр, заданный в детуре тика N,
+/// применяется игрой в тике N+1, поэтому детур тика N+1 подаёт frames[N+1]
+/// (в записи тик N+1 имел ввод frames[N+1]).
+#[cfg(debug_assertions)]
+pub(super) fn start_playback_feed(frames: Vec<ReplayFrame>) {
+    if let Ok(mut g) = PLAYBACK_FEED.lock() {
+        g.frames = frames.into_iter().map(prepare_frame).collect();
+        g.next_idx = 1;
+        g.done = false;
+    }
+}
+
+/// Очищает буфер подачи (при остановке воспроизведения).
+#[cfg(debug_assertions)]
+pub(super) fn clear_playback_feed() {
+    if let Ok(mut g) = PLAYBACK_FEED.lock() {
+        g.frames.clear();
+        g.next_idx = 0;
+        g.done = false;
+    }
+}
+
+/// Все ли кадры поданы (детур подал последний) — render останавливает
+/// воспроизведение и флашит лог.
+#[cfg(debug_assertions)]
+pub(super) fn playback_done() -> bool {
+    PLAYBACK_FEED
+        .lock()
+        .map(|g| g.done)
+        .unwrap_or(false)
+}
+
+/// Сколько кадров подано / всего (для debug-панели).
+#[cfg(debug_assertions)]
+pub(super) fn playback_progress() -> (usize, usize) {
+    PLAYBACK_FEED
+        .lock()
+        .map(|g| (g.next_idx.min(g.frames.len()), g.frames.len()))
+        .unwrap_or((0, 0))
+}
+
+/// Подача следующего кадра из детура `updateInputUnit` (в тике симуляции).
+/// Перезаписывает unit + ставит raw-клавиши меню и blade/ripper в атомики —
+/// всё применяется игрой в ЭТОМ же тике. Возвращает true, если буфер активен
+/// (обычный `INPUT_OVERRIDE` из render применять не нужно).
+/// При исчерпании кадров подаёт нулевой ввод и помечает `done`.
+/// NOTE: детур вызывается игрой в тике; считается, что для `user_index == 0`
+/// это ровно один вызов на тик (стабильность лага 1 в старых данных
+/// подтверждает соотношение render:тик = 1:1).
+#[cfg(debug_assertions)]
+pub(super) fn feed_playback(unit: *mut InputUnit) -> bool {
+    let mut g = match PLAYBACK_FEED.lock() {
+        Ok(x) => x,
+        Err(e) => e.into_inner(),
+    };
+    if g.frames.is_empty() {
+        return false;
+    }
+    if g.next_idx < g.frames.len() {
+        let frame = g.frames[g.next_idx];
+        g.next_idx += 1;
+        unsafe { *unit = frame.input };
+        // Raw-клавиши меню и blade/ripper — в атомики; детур применит raw
+        // ниже (apply_raw_keys), blade/ripper игра прочитает в handleActions
+        // того же тика.
+        super::hooks::set_raw_keys(frame.raw_down, frame.raw_pressed);
+        if frame.ripper_pressed != 0 {
+            super::hooks::set_ripper_frames(1);
+        }
+        let blade_on = frame.blade_down != 0;
+        if blade_on != super::hooks::blade_hold() {
+            super::hooks::set_blade_hold(blade_on);
+        }
+    } else {
+        // Конец: отпустить кнопки, render вскоре остановит воспроизведение.
+        unsafe { *unit = InputUnit::default() };
+        g.done = true;
+    }
+    true
+}
+
 /// Базовый адрес модуля игры (для чтения GameMenuStatus при гейте
 /// weapon_select в playback). Устанавливается один раз при init.
 static BASE_ADDR: AtomicUsize = AtomicUsize::new(0);
@@ -259,6 +419,8 @@ impl ReplayState {
         // Снять keybind-эмуляцию (ripper/blade): иначе удержание blade
         // останется активным и будет подмешиваться в реальный ввод.
         super::hooks::clear_keybind_emulation();
+        // Очистить буфер подачи детура (вариант B).
+        clear_playback_feed();
         let was_active = self.playback.active;
         self.playback.active = false;
         self.playback.frame_idx = 0;
@@ -319,6 +481,8 @@ impl ReplayState {
             super::hooks::clear_keybind_emulation();
             self.playback.active = true;
             self.playback.frame_idx = 0;
+            // Заполняем буфер подачи для детура (вариант B).
+            start_playback_feed(self.playback.frames.clone());
             self.playback.log.clear();
             self.playback.start = Some(Instant::now());
             self.playback.started_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -482,15 +646,13 @@ impl ReplayState {
         }
     }
 
-    /// Подача кадра воспроизведения по индексу + захват результата.
-    /// Кадры подаются строго по индексу (1 кадр на вызов render), а не по dt —
-    /// dt-сопоставление теряло однокадровые фронты pressed/released.
-    /// Компенсация лага в 1 кадр: override, выставленный в render(K),
-    /// применяется игрой на тике K+1, поэтому подаём frame[frame_idx + 1] —
-    /// тик N+1 применит frame[N+1], как в записи (record[N+1] = ввод тика N+1).
-    /// frame[0] записи — нулевой ввод спавна, не подаётся (потеря безвредна).
-    /// playback.log[N] = результат кадра frame[N] — синхронно с record[N]
-    /// (до компенсации был сдвиг на 1 кадр относительно record).
+    /// Захват результата кадра воспроизведения (вызывается из `update` каждый
+    /// render-кадр). Подача кадров — в детуре `updateInputUnit` (вариант B):
+    /// детур берёт следующий кадр из `PLAYBACK_FEED` в тике симуляции, так что
+    /// фаза Present↔тик не влияет на момент применения ввода. Здесь — только
+    /// лог результата (состояние после тика, прочитанное в render) и остановка,
+    /// когда детур подал все кадры.
+    /// playback.log[N] = результат кадра frame[N] — синхронно с record[N].
     fn playback_tick(
         &mut self,
         conn: Option<&Connection>,
@@ -501,110 +663,22 @@ impl ReplayState {
         if !self.playback.active {
             return;
         }
-        if self.playback.frame_idx + 1 < self.playback.frames.len() {
-            let frame = self.playback.frames[self.playback.frame_idx + 1];
-
-            // Ripper/blade не идут через InputUnit — handleActions читает их
-            // из DirectInput напрямую через isKeybindPressed(11)/isKeybindDown(8).
-            // Подаём их через keybind-эмуляцию прямо из записанных флагов
-            // реального ввода (сэмплы детуров при записи): ripper — фронт
-            // ripper_pressed, blade — удержание blade_down. Задание в render(K)
-            // применяется на тике K+1, т.е. синхронно с override InputUnit.
-            // Флаг ripper сбрасывается каждый кадр в api::frame_update.
-            if frame.ripper_pressed != 0 {
-                super::hooks::set_ripper_frames(1);
-                logger::log_line(&format!(
-                    "playback: ripper pressed at frame {}",
-                    self.playback.frame_idx + 1
-                ));
-            }
-            let blade_on = frame.blade_down != 0;
-            if blade_on != super::hooks::blade_hold() {
-                super::hooks::set_blade_hold(blade_on);
-                logger::log_line(&format!(
-                    "playback: blade hold {} at frame {}",
-                    if blade_on { "ON" } else { "OFF" },
-                    self.playback.frame_idx + 1
-                ));
-            }
-
-            // weapon_select (бит 0x01) в записи: 1-й кадр (фронт pressed) —
-            // toggle меню (открытие вне меню, закрытие в меню). Удержание
-            // (down без pressed) никогда не нужно — зануляем всегда: после
-            // открытия меню оно стало бы навигацией влево (листает слоты),
-            // а после закрытия — повторным открытием. Фронт (pressed) — это
-            // menu_left или повторный toggle, его не трогаем.
-            let mut input = frame.input;
-            if input.buttons_down & addresses::input_bits::WEAPON_SELECT != 0
-                && input.buttons_pressed & addresses::input_bits::WEAPON_SELECT == 0
-            {
-                input.buttons_down &= !addresses::input_bits::WEAPON_SELECT;
-                logger::log_line(&format!(
-                    "playback: gated weapon_select hold at frame {}",
-                    self.playback.frame_idx + 1
-                ));
-            }
-
-            // Навигация в меню: запись хранит её в сырых клавишах (стрелки
-            // 0x90/0x93/0x92/0x91, Enter 0x15) — меню читает их через
-            // isKeyDown/isKeyPressed из ms_KeyInput, а не из InputUnit.
-            // Конвертируем в D-Pad биты InputUnit (как menu_*/confirm в
-            // api.rs — проверено, меню навигируется ими) + фронт pressed.
-            // Клавиша 2 (0x2D) — дубликат weapon_select (бит 0x01 уже в
-            // InputUnit): подача обоих = двойной toggle (меню открылось и
-            // сразу закрылось) — зануляем.
-            let mut raw_down = frame.raw_down;
-            let mut raw_pressed = frame.raw_pressed;
-            // KEY_ENTER=0x15 (запись), KEY_ESC=0x8E, KEY_UP=0x90,
-            // KEY_RIGHT=0x91, KEY_LEFT=0x92, KEY_DOWN=0x93
-            let menu_map = [
-                (addresses::KEY_UP, addresses::input_bits::MENU_UP),
-                (addresses::KEY_DOWN, addresses::input_bits::MENU_DOWN),
-                (addresses::KEY_LEFT, addresses::input_bits::MENU_LEFT),
-                (addresses::KEY_RIGHT, addresses::input_bits::MENU_RIGHT),
-                (0x15, addresses::input_bits::CONFIRM), // Enter = KEY_ENTER в записи
-                (addresses::KEY_ESC, addresses::input_bits::CANCEL), // Esc = BUTTON_B (отмена)
-            ];
-            for (code, bit) in menu_map {
-                let idx = (code >> 5) as usize;
-                let b = 1u32 << (code & 31);
-                if idx < 6 && raw_down[idx] & b != 0 {
-                    input.buttons_down |= bit;
-                    if raw_pressed[idx] & b != 0 {
-                        input.buttons_pressed |= bit;
-                    }
-                    raw_down[idx] &= !b;
-                    raw_pressed[idx] &= !b;
-                }
-            }
-            let key2_idx = (addresses::KEY_DIGIT2 >> 5) as usize;
-            let key2_bit = 1u32 << (addresses::KEY_DIGIT2 & 31);
-            if key2_idx < 6 && raw_down[key2_idx] & key2_bit != 0 {
-                raw_down[key2_idx] &= !key2_bit;
-                raw_pressed[key2_idx] &= !key2_bit;
-            }
-
-            set_input_override(InputOverride {
-                active: true,
-                input,
-            });
-            // Остаток сырых клавиш (Esc 0x8E и др.) — подаём через raw-кэш:
-            // меню читает их через isKeyDown/isKeyPressed из ms_KeyInput.
-            super::hooks::set_raw_keys(raw_down, raw_pressed);
-            self.playback.frame_idx += 1;
-            self.playback.log.push(ReplayFrame {
-                frame_index: self.playback.log.len() as u32,
-                input: cur_input,
-                state,
-                camera,
-                blade_down: frame.blade_down,
-                ripper_pressed: frame.ripper_pressed,
-                raw_down: frame.raw_down,
-                raw_pressed: frame.raw_pressed,
-            });
-        } else {
-            // Конец записи — снять override и флашнуть лог воспроизведения.
+        if playback_done() {
+            // Все кадры поданы детуром — снять override и флашнуть лог.
             self.stop_playback(conn);
+            return;
         }
+        // Счётчик подачи для debug-панели.
+        self.playback.frame_idx = playback_progress().0;
+        self.playback.log.push(ReplayFrame {
+            frame_index: self.playback.log.len() as u32,
+            input: cur_input,
+            state,
+            camera,
+            blade_down: super::hooks::read_blade_down_sampled() as u8,
+            ripper_pressed: super::hooks::read_ripper_pressed_sampled() as u8,
+            raw_down: super::hooks::read_raw_keys_sampled().0,
+            raw_pressed: super::hooks::read_raw_keys_sampled().1,
+        });
     }
 }

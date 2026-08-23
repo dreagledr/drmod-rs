@@ -241,14 +241,27 @@ unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_
         }
     }
 
+    // Подача кадра воспроизведения (вариант B, debug-only): детур сам берёт
+    // следующий кадр из PLAYBACK_FEED в тике симуляции — момент применения
+    // ввода не зависит от фазы Present. Если буфер пуст (воспроизведение не
+    // активно) — обычный override из render (API-скрипты, debug-инжекция).
+    #[cfg(debug_assertions)]
+    {
+        if replay::feed_playback(unit) {
+            // Кадр подан: raw-клавиши уже в атомиках, применим их ниже.
+        } else {
+            replay::apply_override(unit);
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    replay::apply_override(unit);
+
     // Подача raw-клавиш меню: кэш ms_KeyInput заморожен и перезаписан нашими
     // битмасками — меню читает стрелки/Enter через isKeyDown/isKeyPressed
     // (0x9D93A0/0x9D9400), а не через keybind'ы.
     if RAW_KEYS_ACTIVE.load(Ordering::Relaxed) != 0 {
         apply_raw_keys();
     }
-
-    replay::apply_override(unit);
 }
 
 /// Записывает эмулируемые raw-клавиши в `ms_KeyInput` и замораживает кэш

@@ -112,16 +112,25 @@ fi≈259, потом выросло лишь до 1.38 м.
 - Реализация: в `src/tas/replay.rs::playback_tick` — гейт `frame_idx + 1 < len`,
   доступ `frames[frame_idx + 1]`; лог кадра — `frame_idx + 1`.
 
-### Вариант B — подача в детур (синхронно с тиком)
+### Вариант B — подача в детур (синхронно с тиком) ✅ РЕАЛИЗОВАН (2026-08-23)
 
 Выдавать следующий кадр прямо в `update_input_unit_detour` (в тике, для
 `user_index == 0`), а не из render. Каждый тик получает ровно один кадр ввода
 **в том же тике** — лаг исчезает, фаза Present перестаёт влиять.
 
+- Реализация: `replay::PLAYBACK_FEED` (static `Mutex<PlaybackFeed{frames, next_idx, done}>`) —
+  заполняется при старте (`start_playback_feed`), очищается при стопе
+  (`clear_playback_feed`); детур вызывает `replay::feed_playback(unit)` вместо
+  `apply_override` (fallback на обычный override для API-скриптов/debug — при
+  пустом буфере). Кадры предобрабатываются один раз при старте (`prepare_frame`:
+  weapon_select gate + конвертация raw-клавиш меню в D-Pad биты) — детур только
+  копирует. `next_idx = 1`: `frames[0]` (нулевой ввод спавна) не подаётся —
+  компенсация та же, что в варианте A. `playback_tick` теперь только логирует
+  результат и останавливает воспроизведение при `done`.
 - Ожидание: убирает и лаг, и фазовую неопределённость — кандидат на устранение
-  недетерминизма 78 vs 82 (playback↔playback должны сойтись).
-- Требует: доступ к `playback.frames` из детура (static Mutex/pending-слот),
-  аккуратная thread-safety (игровой поток тика vs render).
+  недетерминизма 88/89/90 (playback↔playback должны сойтись).
+- Верификация: `cargo build --release` + `cargo clippy --all-targets` — без новых
+  предупреждений. Рантайм-тест (record + 3 playback + dbdump + analyze*) — pending.
 
 ### Вариант C — snap-коррекция по позиции (гибрид, если A/B не хватит)
 
