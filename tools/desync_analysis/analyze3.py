@@ -19,6 +19,9 @@ def dpos(a, b):
 
 PLAY_IDS = [int(a) for a in sys.argv[2:]] if len(sys.argv) > 2 else [78, 81, 82]
 p = {rid: load(rid) for rid in PLAY_IDS}
+# длины могут различаться (вариант D: дубли добавляют кадры) — обрезаем до минимума
+n0 = min(len(v) for v in p.values())
+p = {rid: v.iloc[:n0] for rid, v in p.items()}
 
 # Ввод у всех одинаковый?
 a = p[PLAY_IDS[0]][INPUT_COLS].astype("float64").to_numpy()
