@@ -19,7 +19,7 @@ use crate::segment;
 use chrono::Local;
 #[cfg(debug_assertions)]
 use rusqlite::Connection;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 #[cfg(debug_assertions)]
 use std::time::Instant;
@@ -131,6 +131,9 @@ pub(super) fn start_playback_feed(frames: Vec<ReplayFrame>) {
         g.next_idx = 1;
         g.done = false;
     }
+    DUP_REQUESTED.store(false, Ordering::Relaxed);
+    DUP_LAST.store(0, Ordering::Relaxed);
+    DUP_COUNT.store(0, Ordering::Relaxed);
 }
 
 /// Очищает буфер подачи (при остановке воспроизведения).
@@ -181,7 +184,12 @@ pub(super) fn feed_playback(unit: *mut InputUnit) -> bool {
     }
     if g.next_idx < g.frames.len() {
         let frame = g.frames[g.next_idx];
-        g.next_idx += 1;
+        // Вариант D: дубль кадра — render запросил повторную подачу текущего
+        // кадра (компенсация отставания); next_idx не растёт.
+        let dup = DUP_REQUESTED.swap(false, Ordering::Relaxed);
+        if !dup {
+            g.next_idx += 1;
+        }
         unsafe { *unit = frame.input };
         // Raw-клавиши меню и blade/ripper — в атомики; детур применит raw
         // ниже (apply_raw_keys), blade/ripper игра прочитает в handleActions
@@ -205,6 +213,112 @@ pub(super) fn feed_playback(unit: *mut InputUnit) -> bool {
 /// Базовый адрес модуля игры (для чтения GameMenuStatus при гейте
 /// weapon_select в playback). Устанавливается один раз при init.
 static BASE_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+// --- Вариант D: дубль кадра ввода (компенсация отставания вдоль) ---
+// Render оценивает отставание вдоль вектора движения; при превышении порога
+// и безопасном hold-кадре ставит DUP_REQUESTED; детур feed_playback подаёт
+// текущий кадр повторно (не инкрементит next_idx) — персонаж проходит ещё
+// одно смещение кадра (~0.11-0.16 м) и догоняет запись.
+
+/// Запрошен ли дубль следующего кадра (render ставит, детур снимает).
+#[cfg(debug_assertions)]
+static DUP_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// Индекс подачи, на котором сделан последний дубль (частота: не чаще 1 на 3).
+#[cfg(debug_assertions)]
+static DUP_LAST: AtomicUsize = AtomicUsize::new(0);
+/// Число дублей за текущий прогон (лимит).
+#[cfg(debug_assertions)]
+static DUP_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+/// Порог отставания вдоль (м), при котором запрашиваем дубль.
+const DUP_LAG_THRESHOLD: f32 = 0.15;
+/// Минимальный интервал между дублями (кадров подачи).
+const DUP_MIN_INTERVAL: usize = 3;
+/// Максимум дублей за прогон.
+const DUP_MAX: usize = 30;
+/// Окно безопасности перед фронтом/сменой анимации (кадров).
+const DUP_SAFE_AHEAD: usize = 5;
+
+/// Анимации с поступательным движением — в них дубль кадра безопасен
+/// (бег, ninja run, ходьба; переходы 13/14 не включаем).
+const DUP_MOVING_ANIMS: &[i32] = &[5, 71, 4, 11, 3];
+
+/// Запрашивает дубль следующего кадра (вызывается из render при отставании).
+#[cfg(debug_assertions)]
+pub(super) fn request_frame_dup() {
+    DUP_REQUESTED.store(true, Ordering::Relaxed);
+}
+
+/// Оценивает, нужно ли продублировать следующий кадр: отставание вдоль
+/// превысило порог и текущий кадр — безопасный hold (удержание движения,
+/// без фронтов в ближайшие `DUP_SAFE_AHEAD` кадров). Вызывается из render
+/// (`playback_tick`) с текущей позицией игрока.
+#[cfg(debug_assertions)]
+pub(super) fn should_dup_frame(play_pos: [f32; 3]) -> bool {
+    let g = match PLAYBACK_FEED.lock() {
+        Ok(x) => x,
+        Err(e) => e.into_inner(),
+    };
+    let n = g.frames.len();
+    let idx = g.next_idx;
+    if g.frames.is_empty() || idx == 0 || idx >= n {
+        return false;
+    }
+    // Направление движения: разность записанных позиций поданного и следующего кадра.
+    let prev = g.frames[idx - 1].state.pos;
+    let next = g.frames[idx].state.pos;
+    let dir = [next[0] - prev[0], next[1] - prev[1], next[2] - prev[2]];
+    let dlen = (dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]).sqrt();
+    if dlen < 0.01 {
+        return false; // не двигаемся
+    }
+    // Отставание вдоль: проекция (play_pos - prev) на направление движения.
+    let along = ((play_pos[0] - prev[0]) * dir[0]
+        + (play_pos[1] - prev[1]) * dir[1]
+        + (play_pos[2] - prev[2]) * dir[2])
+        / dlen;
+    if along > -DUP_LAG_THRESHOLD {
+        return false; // не отстали
+    }
+    // Безопасность: удержание движения, без фронтов впереди.
+    let cur = g.frames[idx].input;
+    if cur.buttons_pressed != 0 || cur.buttons_released != 0 {
+        return false;
+    }
+    if cur.left_stick[0] == 0.0 && cur.left_stick[1] == 0.0 {
+        return false; // нет движения (стик в нуле)
+    }
+    if !DUP_MOVING_ANIMS.contains(&g.frames[idx].state.r_anim) {
+        return false;
+    }
+    let end = (idx + DUP_SAFE_AHEAD).min(n);
+    for i in idx..end {
+        let f = g.frames[i];
+        if i > idx
+            && (f.input.buttons_down != cur.buttons_down
+                || f.state.r_anim != g.frames[idx].state.r_anim)
+        {
+            return false; // впереди смена ввода/анимации
+        }
+        if i > idx && (f.input.buttons_pressed != 0 || f.input.buttons_released != 0) {
+            return false; // впереди фронт
+        }
+    }
+    // Частота и лимит.
+    if idx.saturating_sub(DUP_LAST.load(Ordering::Relaxed)) < DUP_MIN_INTERVAL {
+        return false;
+    }
+    if DUP_COUNT.load(Ordering::Relaxed) >= DUP_MAX {
+        return false;
+    }
+    DUP_LAST.store(idx, Ordering::Relaxed);
+    DUP_COUNT.fetch_add(1, Ordering::Relaxed);
+    logger::log_line(&format!(
+        "playback: frame dup at idx {} (along {:.2} m)",
+        idx, along
+    ));
+    true
+}
 
 /// Устанавливает базовый адрес модуля (вызывается при init из `lib.rs`).
 pub fn set_base_addr(base: usize) {
@@ -680,5 +794,11 @@ impl ReplayState {
             raw_down: super::hooks::read_raw_keys_sampled().0,
             raw_pressed: super::hooks::read_raw_keys_sampled().1,
         });
+        // Вариант D: компенсация отставания вдоль — если текущий кадр —
+        // безопасный hold и мы отстали от записи, продублировать следующий
+        // кадр (детур подаст его повторно, next_idx не сдвинется).
+        if should_dup_frame(state.pos) {
+            request_frame_dup();
+        }
     }
 }
