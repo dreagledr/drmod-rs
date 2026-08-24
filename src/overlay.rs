@@ -48,30 +48,23 @@ pub fn format_duration_ms(ms: u64) -> String {
 pub fn draw_world_pos(
     ui: &Ui,
     world_pos: (f32, f32, f32),
-    camera_ptr: *const u8,
+    view_proj: &[f32; 16],
+    camera_pos: (f32, f32, f32),
     viewport: [f32; 4],
     color: u32,
     label: &str,
 ) {
-    let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
-    let cam_x = unsafe { *(camera_ptr.add(0x1B0) as *const f32) };
-    let cam_y = unsafe { *(camera_ptr.add(0x1B4) as *const f32) };
-    let cam_z = unsafe { *(camera_ptr.add(0x1B8) as *const f32) };
     let [vp_x, vp_y, vp_w, vp_h] = viewport;
 
-    if let Some(([scr_x, scr_y], dist)) =
-        world_to_screen(world_pos, &view_proj, viewport, (cam_x, cam_y, cam_z))
+    if let Some(([scr_x, scr_y], dist)) = world_to_screen(world_pos, view_proj, viewport, camera_pos)
     {
         let on_screen = scr_x >= vp_x && scr_x <= vp_x + vp_w && scr_y >= vp_y && scr_y <= vp_y + vp_h;
 
         // Screen-space radius for a 0.5m world-space offset
         let (wx, wy, wz) = world_pos;
-        let radius = if let Some(([rx, _], _)) = world_to_screen(
-            (wx + 0.5, wy, wz),
-            &view_proj,
-            viewport,
-            (cam_x, cam_y, cam_z),
-        ) {
+        let radius = if let Some(([rx, _], _)) =
+            world_to_screen((wx + 0.5, wy, wz), view_proj, viewport, camera_pos)
+        {
             (rx - scr_x).abs().clamp(2.0, 64.0)
         } else {
             8.0
@@ -91,12 +84,9 @@ pub fn draw_world_pos(
 
         if on_screen {
             // Beam: vertical line ground → +2m
-            if let Some(([head_x, head_y], _)) = world_to_screen(
-                (wx, wy + 2.0, wz),
-                &view_proj,
-                viewport,
-                (cam_x, cam_y, cam_z),
-            ) {
+            if let Some(([head_x, head_y], _)) =
+                world_to_screen((wx, wy + 2.0, wz), view_proj, viewport, camera_pos)
+            {
                 draw_list
                     .add_line([scr_x, scr_y], [head_x, head_y], color)
                     .thickness(1.5)

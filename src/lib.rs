@@ -2,7 +2,6 @@ use chrono::Local;
 use hudhook::{IDirect3DDevice9, ImguiRenderLoop, RenderContext};
 use imgui::*;
 use rusqlite::Connection;
-use std::ptr::NonNull;
 use std::time::Instant;
 
 mod api;
@@ -19,12 +18,14 @@ mod ui;
 
 use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
+#[cfg(debug_assertions)]
 use tas::addresses;
 use tas::db;
 #[cfg(debug_assertions)]
 use tas::hooks;
 #[cfg(debug_assertions)]
 use tas::replay;
+#[cfg(debug_assertions)]
 use tas::types;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";
@@ -94,8 +95,8 @@ struct HelloHud {
     pub(crate) prev_run_start: Option<String>,
     pub(crate) db_conn: Option<Connection>,
     pub(crate) base_addr: usize,
-    pub(crate) static_ptr_addr: Option<NonNull<u8>>,
-    pub(crate) camera_ptr_addr: Option<NonNull<u8>>,
+    pub(crate) player: game::Player,
+    pub(crate) camera: game::Camera,
     pub(crate) saved_position: Option<(f32, f32, f32)>,
     pub(crate) saved_bones: Option<Vec<BonePos>>,
     // Segment tracking
@@ -113,7 +114,6 @@ struct HelloHud {
     // 3D test dummy
     dummy: CylinderRenderer,
     remote_sphere: SphereRenderer,
-    pub(crate) cached_player_obj_ptr: *mut u8,
     // Хуки ввода (MinHook) + адреса сырого ввода — живут в tas::hooks.
     #[allow(dead_code)] // keep-alive: поле не читается, но Drop снимает хуки
     input_hooks: tas::hooks::InputHooks,
@@ -179,38 +179,6 @@ unsafe extern "system" fn veh_handler(
     windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH
 }
 
-/// Проверяет, что адрес указывает на committed и читаемую память.
-/// Защита от dangling-указателя объекта игрока при быстром рестарте:
-/// `static_ptr` (`base+0x177B4A4`) может указывать на память, освобождённую
-/// через `VirtualFree` (не `null`), не проходя через loading-состояние. В этом
-/// случае `VirtualQuery` вернёт `Protect = 0` (MEM_FREE/MEM_RESERVE), и чтение
-/// по такому адресу даёт ACCESS_VIOLATION.
-fn is_readable_ptr(addr: usize) -> bool {
-    use windows::Win32::System::Memory::{
-        VirtualQuery, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-        PAGE_GUARD, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE,
-    };
-
-    const PAGE_READABLE: PAGE_PROTECTION_FLAGS = PAGE_PROTECTION_FLAGS(
-        PAGE_READONLY.0 | PAGE_READWRITE.0 | PAGE_EXECUTE_READ.0 | PAGE_EXECUTE_READWRITE.0,
-    );
-
-    let mut mbi = MEMORY_BASIC_INFORMATION::default();
-    let ok = unsafe {
-        VirtualQuery(
-            Some(addr as *const core::ffi::c_void),
-            &mut mbi,
-            std::mem::size_of::<MEMORY_BASIC_INFORMATION>(),
-        )
-    };
-    // PAGE_GUARD (0x100) — комбинированный флаг: чтение guard-страницы даёт
-    // STATUS_GUARD_PAGE_VIOLATION, хотя бит «readable» в protect может стоять.
-    // Исключаем (см. docs/REPLAY_FINDINGS.md №3).
-    ok != 0
-        && (mbi.Protect & PAGE_READABLE).0 != 0
-        && (mbi.Protect & PAGE_GUARD).0 == 0
-}
-
 impl HelloHud {
     fn new() -> Self {
         // Логируем SEH-исключения (креши) в debug.log — диагностика.
@@ -230,18 +198,10 @@ impl HelloHud {
         .map(|h| h.0 as usize)
         .unwrap_or(0);
 
-        let static_ptr_addr = if base_addr == 0 {
-            None
-        } else {
-            NonNull::new(unsafe { (base_addr as *mut u8).add(0x177B4A4) })
-        };
-
-        let camera_ptr_addr = if base_addr == 0 {
-            None
-        } else {
-            // base + 0x17EA1D0 — статический адрес cCameraGame::Instance (SDK)
-            NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA1D0) })
-        };
+        // Сущности игры: игрок (Pl0000) и камера (cCameraGame) — инкапсулируют
+        // свои статические адреса и кэш указателей, наружу отдают read_* методы.
+        let player = game::Player::new(base_addr);
+        let camera = game::Camera::new(base_addr);
 
         // Хуки ввода (updateInputUnit / isKeybindPressed / isKeybindDown)
         // и адреса сырого ввода — устанавливаются и логируются в tas::hooks.
@@ -260,8 +220,8 @@ impl HelloHud {
             prev_run_start,
             db_conn,
             base_addr,
-            static_ptr_addr,
-            camera_ptr_addr,
+            player,
+            camera,
             saved_position: None,
             saved_bones: None,
             active_segment: None,
@@ -276,7 +236,6 @@ impl HelloHud {
             settings: settings::Settings::default(),
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
-            cached_player_obj_ptr: std::ptr::null_mut(),
             input_hooks,
             #[cfg(debug_assertions)]
             replay: replay::ReplayState::default(),
@@ -383,35 +342,12 @@ impl HelloHud {
         // Читаем объект игрока только когда он «читаем» (не loading): в loading
         // статический указатель может указывать на освобождённую память
         // (dangling, не null) — разыменование даёт access violation при рестарте.
-        let mut r_anim = 0;
-        if let Some(static_ptr) = self.static_ptr_addr {
-            self.cached_player_obj_ptr = if player_readable {
-                unsafe { *(static_ptr.as_ptr() as *const *mut u8) }
-            } else {
-                std::ptr::null_mut()
-            };
-            // Защита от dangling: при быстром рестарте static_ptr может указывать
-            // на освобождённую память (не null), не проходя через loading-состояние.
-            // Обнуляем кэш, если страница игрока больше не committed/читаема.
-            if !self.cached_player_obj_ptr.is_null()
-                && !is_readable_ptr(self.cached_player_obj_ptr as usize)
-            {
-                self.cached_player_obj_ptr = std::ptr::null_mut();
-            }
-            if !self.cached_player_obj_ptr.is_null() {
-                state.player_found = true;
-                // rAnim лежит в самом объекте Pl0000 по смещению 0x618
-                // (подтверждено disasm vtable 241: `mov eax,[ecx+0x618]`).
-                // Читаем из cached_player_obj_ptr, а не из отдельной
-                // кэшированной цепочки указателей — при рестарте цепочка
-                // становится dangling и даёт access violation.
-                r_anim = unsafe { *(self.cached_player_obj_ptr.add(0x618) as *const i32) };
-                state.position = Some(segment::Vec3 {
-                    x: unsafe { *(self.cached_player_obj_ptr.add(0x50) as *const f32) },
-                    y: unsafe { *(self.cached_player_obj_ptr.add(0x54) as *const f32) },
-                    z: unsafe { *(self.cached_player_obj_ptr.add(0x58) as *const f32) },
-                });
-            }
+        // Кэш объекта обновляет и защищает от dangling сама сущность Player.
+        self.player.refresh(player_readable);
+        let r_anim = self.player.r_anim();
+        if self.player.is_found() {
+            state.player_found = true;
+            state.position = self.player.position();
         }
 
         // --- SEGMENT ACTION ---
@@ -507,221 +443,6 @@ impl HelloHud {
         state
     }
 
-    /// Читает нормализованный ввод игрока (Pl0000::m_CurrentInput).
-    pub(crate) fn read_current_input(&self) -> types::InputUnit {
-        if self.cached_player_obj_ptr.is_null() {
-            return types::InputUnit::default();
-        }
-        unsafe {
-            self.cached_player_obj_ptr
-                .add(addresses::CURRENT_INPUT_OFFSET)
-                .cast::<types::InputUnit>()
-                .read()
-        }
-    }
-
-    /// Читает направление ввода и кнопку прыжка игрока (Pl0000) по
-    /// подтверждённым SDK-смещениям.
-    pub(crate) fn read_pl_input(&self) -> types::PlInputSnapshot {
-        if self.cached_player_obj_ptr.is_null() {
-            return types::PlInputSnapshot::default();
-        }
-        let p = self.cached_player_obj_ptr;
-        unsafe {
-            types::PlInputSnapshot {
-                input_direction: *(p.add(addresses::PL_INPUT_DIR) as *const f32),
-                button_jump: *(p.add(addresses::PL_BUTTON_JUMP) as *const i32),
-            }
-        }
-    }
-
-    /// Читает полное состояние персонажа (позиция/поворот/скорость/HP/состояния)
-    /// из `cached_player_obj_ptr`. Смещения из SDK — см. `types::PlayerState`.
-    /// Новые смещения 0x90/0x890/0x3184/0x40C8 требуют рантайм-верификации.
-    pub(crate) fn read_player_state(&self) -> Option<types::PlayerState> {
-        if self.cached_player_obj_ptr.is_null() {
-            return None;
-        }
-        let p = self.cached_player_obj_ptr;
-        Some(unsafe {
-            types::PlayerState {
-                pos: [
-                    *(p.add(0x50) as *const f32),
-                    *(p.add(0x54) as *const f32),
-                    *(p.add(0x58) as *const f32),
-                ],
-                rotation: [
-                    *(p.add(0x90) as *const f32),
-                    *(p.add(0x94) as *const f32),
-                    *(p.add(0x98) as *const f32),
-                ],
-                velocity: [
-                    *(p.add(0x890) as *const f32),
-                    *(p.add(0x894) as *const f32),
-                    *(p.add(0x898) as *const f32),
-                ],
-                hp: *(p.add(0x870) as *const i32),
-                r_anim: *(p.add(0x618) as *const i32),
-                sword_state: *(p.add(0x13FC) as *const i32),
-                sword_hidden: *(p.add(0xB74) as *const i32),
-                input_direction: *(p.add(0xD2C) as *const f32),
-                desired_heading: *(p.add(0xD30) as *const f32),
-                button_jump: *(p.add(0xE18) as *const i32),
-                button_light_attack: *(p.add(0xE20) as *const i32),
-                button_heavy_attack: *(p.add(0xE24) as *const i32),
-                button_ninjarun: *(p.add(0xE48) as *const i32),
-                button_blademode: *(p.add(0xE50) as *const i32),
-                ripper_enabled: *(p.add(0x3184) as *const i32),
-                blade_mode_type: *(p.add(0x40C8) as *const i32),
-            }
-        })
-    }
-
-    /// Читает врагов (сущности Em*/Ba*/Pl001*) из EntitySystem::m_EntityList.
-    /// Адреса и смещения — из `ref/mgr-plugin-sdk` + дизассемблирование:
-    /// `EntitySystem::ms_Instance` = base + 0x17E9A98, список `m_EntityList`
-    /// (Hw::cFixedList<Entity*>) на +0x38 (size +0x0C, m_pFirst +0x14, узел:
-    /// value/prev/next); Entity: имя +0x04, Behavior* (m_pSceneModel) +0x3C
-    /// (подтверждено disasm `Entity::getTransPos` 0x67C8B0: `mov eax,[ecx+0x3C]`,
-    /// `add eax,0x50`). У Behavior: позиция +0x50 (cParts::m_vecTransPos),
-    /// HP +0x870, r_anim +0x618 — та же иерархия, что у игрока.
-    /// Высота клинка врага: сущность Em0010_Blade → владелец (+0x518) Em0160Body →
-    /// +0x360 → EmSetCorps; мировая Y клинка — из матрицы cParts (+0x10 → m[3].y = +0x44).
-    /// Возвращает (всего сущностей, враги). Только для debug-панели.
-    #[cfg(debug_assertions)]
-    pub(crate) fn read_enemies(&self) -> (usize, Vec<ui::EnemyInfo>) {
-        let mut out = Vec::new();
-        let mut enemy_beh: Vec<(*mut u8, usize)> = Vec::new();
-        let mut blades: Vec<(*mut u8, f32)> = Vec::new();
-        if self.base_addr == 0 {
-            return (0, out);
-        }
-        let player_pos = if self.cached_player_obj_ptr.is_null() {
-            None
-        } else {
-            let p = self.cached_player_obj_ptr;
-            Some(unsafe {
-                [
-                    *(p.add(0x50) as *const f32),
-                    *(p.add(0x54) as *const f32),
-                    *(p.add(0x58) as *const f32),
-                ]
-            })
-        };
-        let list = (self.base_addr + 0x17E9A98 + 0x38) as *const u8;
-        if !is_readable_ptr(list as usize) {
-            return (0, out);
-        }
-        let total = unsafe { *(list.add(0x0C) as *const usize) };
-        let first = unsafe { *(list.add(0x14) as *const *mut u8) };
-        let mut node = first;
-        for _ in 0..total.min(256) {
-            if node.is_null() || !is_readable_ptr(node as usize) {
-                break;
-            }
-            let ent = unsafe { *(node as *const *mut u8) };
-            if !ent.is_null() && is_readable_ptr(ent as usize) {
-                let name = unsafe { std::ffi::CStr::from_ptr(ent.add(0x04) as *const i8) }
-                    .to_string_lossy()
-                    .into_owned();
-                let behavior = unsafe { *(ent.add(0x3C) as *const *mut u8) };
-                // Клинок врага (часть): мировая высота из матрицы, владелец
-                // (Body) — для сопоставления с врагом после цикла.
-                if name == "Em0010_Blade"
-                    && !behavior.is_null()
-                    && is_readable_ptr(behavior as usize)
-                {
-                    unsafe {
-                        let owner = *(behavior.add(0x518) as *const *mut u8);
-                        let world_y = *(behavior.add(0x44) as *const f32);
-                        if !owner.is_null() && is_readable_ptr(owner as usize) {
-                            blades.push((owner, world_y));
-                        }
-                    }
-                }
-                // Игрок (Pl0010/Pl0000 в зависимости от сцены) — не враг.
-                let is_player = !behavior.is_null() && behavior == self.cached_player_obj_ptr;
-                // Кандидат во враги: Em*/Ba*/Pl001* (включая Em0010_Assault —
-                // подчёркивание в имени не всегда часть модели).
-                let is_enemy_candidate = !is_player
-                    && !name.is_empty()
-                    && (name.starts_with("Em")
-                        || name.starts_with("Ba")
-                        || name.starts_with("Pl001"));
-                if is_enemy_candidate && !behavior.is_null() && is_readable_ptr(behavior as usize) {
-                    unsafe {
-                        let pos = [
-                            *(behavior.add(0x50) as *const f32),
-                            *(behavior.add(0x54) as *const f32),
-                            *(behavior.add(0x58) as *const f32),
-                        ];
-                        let hp = *(behavior.add(0x870) as *const i32);
-                        // r_anim — текущая анимация (как у игрока); у врагов
-                        // слот анимации (+0x770) не работает — значения из +0x618.
-                        let r_anim = *(behavior.add(0x618) as *const i32);
-                        // Настоящий враг: реальная позиция в сцене (не спавн
-                        // (0,0,0)) и живое HP в разумных пределах (не мусор).
-                        let pos_nonzero = pos[0] != 0.0 || pos[1] != 0.0 || pos[2] != 0.0;
-                        if pos_nonzero && hp > 0 && hp < 1_000_000 {
-                            let dist = player_pos.map(|pp| {
-                                ((pos[0] - pp[0]).powi(2)
-                                    + (pos[1] - pp[1]).powi(2)
-                                    + (pos[2] - pp[2]).powi(2))
-                                .sqrt()
-                            });
-                            let idx = out.len();
-                            out.push(ui::EnemyInfo {
-                                name,
-                                pos,
-                                hp,
-                                r_anim,
-                                dist,
-                                blade_y: None,
-                            });
-                            enemy_beh.push((behavior, idx));
-                        }
-                    }
-                }
-            }
-            node = unsafe { *(node.add(0x08) as *const *mut u8) };
-        }
-        // Сопоставление клинков с врагами: Blade.owner (Em0160Body) +0x360 → враг.
-        for (body_beh, y) in &blades {
-            if is_readable_ptr(*body_beh as usize) {
-                unsafe {
-                    let enemy = *(body_beh.add(0x360) as *const *mut u8);
-                    if let Some((_, idx)) = enemy_beh.iter().find(|(b, _)| *b == enemy) {
-                        out[*idx].blade_y = Some(*y);
-                    }
-                }
-            }
-        }
-        (total, out)
-    }
-
-    /// Читает состояние камеры: позиция (+0x1B0), look-at (+0x1C0), крен
-    /// (+0x1F0) и view-proj матрица (+0x200). Смещения — из
-    /// `Hw::cCameraBase`/`cCameraViewProj` (ref/mgr-plugin-sdk).
-    pub(crate) fn read_camera_state(&self) -> Option<types::CameraState> {
-        let addr = self.camera_ptr_addr?.as_ptr();
-        Some(unsafe {
-            types::CameraState {
-                pos: [
-                    *(addr.add(0x1B0) as *const f32),
-                    *(addr.add(0x1B4) as *const f32),
-                    *(addr.add(0x1B8) as *const f32),
-                ],
-                look_at: [
-                    *(addr.add(0x1C0) as *const f32),
-                    *(addr.add(0x1C4) as *const f32),
-                    *(addr.add(0x1C8) as *const f32),
-                ],
-                roll: *(addr.add(0x1F0) as *const f32),
-                view_proj: *(addr.add(0x200) as *const [f32; 16]),
-            }
-        })
-    }
-
     /// Выгрузка DLL: отключение сети, остановка HTTP-потока (снятие override
     /// ввода), затем флаг eject для hudhook (обрабатывается в render-цикле
     /// после Present). Единая точка для кнопки «Выход» и `POST /eject`.
@@ -764,11 +485,10 @@ impl ImguiRenderLoop for HelloHud {
         }
 
         // Read camera view*proj matrix (needed for all draws)
-        let camera_ptr = match self.camera_ptr_addr {
-            Some(addr) => addr.as_ptr(),
+        let view_proj = match self.camera.view_proj() {
+            Some(vp) => vp,
             None => return,
         };
-        let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
 
         // ── Ghost cylinder (red, semi-transparent) ──────────────────
         if self.settings.show_best_ghost
@@ -876,9 +596,9 @@ impl ImguiRenderLoop for HelloHud {
     }
 
     fn render(&mut self, ui: &mut Ui) {
-        // Сначала собираем состояние игры: read_game_state обновляет
-        // cached_player_obj_ptr (в loading игра обнуляет static_ptr → кэш = null),
-        // иначе диагностика ниже читает stale-указатель освобождённого игрока.
+        // Сначала собираем состояние игры: read_game_state обновляет кэш игрока
+        // (в loading игра обнуляет static_ptr → кэш = null), иначе диагностика
+        // ниже читает stale-указатель освобождённого игрока.
         let ui_state = self.read_game_state();
 
         // ── Multiplayer network (выполняется каждый кадр, независимо от UI) ──
@@ -886,34 +606,13 @@ impl ImguiRenderLoop for HelloHud {
             nc.poll_tcp();
 
             // Читаем позицию для отправки
-            let pos_opt = self.static_ptr_addr.and_then(|addr| {
-                let player_obj_ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
-                if player_obj_ptr.is_null() {
-                    None
-                } else {
-                    Some(segment::Vec3 {
-                        x: unsafe { *(player_obj_ptr.add(0x50) as *const f32) },
-                        y: unsafe { *(player_obj_ptr.add(0x54) as *const f32) },
-                        z: unsafe { *(player_obj_ptr.add(0x58) as *const f32) },
-                    })
-                }
-            });
+            let pos_opt = self.player.position();
 
             if let (Some(pos), Some(seg)) = (pos_opt, self.active_segment.as_ref()) {
                 let changed =
                     self.last_sent_pos != Some(pos) || self.last_sent_mission_id != seg.mission_id;
                 if changed {
-                    let hp = self
-                        .static_ptr_addr
-                        .and_then(|addr| {
-                            let player_obj_ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
-                            if player_obj_ptr.is_null() {
-                                None
-                            } else {
-                                Some(unsafe { *(player_obj_ptr.add(0x870) as *const i32) })
-                            }
-                        })
-                        .unwrap_or(0);
+                    let hp = self.player.read_player_state().map(|s| s.hp).unwrap_or(0);
                     nc.send_position(pos, hp, seg.mission_id);
                     self.last_sent_pos = Some(pos);
                     self.last_sent_mission_id = seg.mission_id;
@@ -925,16 +624,10 @@ impl ImguiRenderLoop for HelloHud {
             // Отправляем скелет раз в ~100 мс
             if self.last_skeleton_send.elapsed() > std::time::Duration::from_millis(30) {
                 self.last_skeleton_send = Instant::now();
-                let player_obj_ptr = self.static_ptr_addr.and_then(|addr| {
-                    let ptr = unsafe { *(addr.as_ptr() as *const *mut u8) };
-                    if ptr.is_null() { None } else { Some(ptr) }
-                });
-                if let Some(ptr) = player_obj_ptr {
-                    let bones = unsafe { skeleton::read_full_skeleton(ptr) };
-                    if !bones.is_empty() {
-                        let wire = skeleton::bones_to_wire(&bones);
-                        nc.send_skeleton(&wire);
-                    }
+                let bones = self.player.read_skeleton();
+                if !bones.is_empty() {
+                    let wire = skeleton::bones_to_wire(&bones);
+                    nc.send_skeleton(&wire);
                 }
             }
         }
@@ -946,20 +639,14 @@ impl ImguiRenderLoop for HelloHud {
         // 120 кадров (чтобы видеть движение и стики даже без кнопок).
         #[cfg(debug_assertions)]
         {
-            let ci = self.read_current_input();
+            let ci = self.player.read_current_input();
             let changed = replay::cur_in_changed(ci.buttons_down, ci.buttons_pressed);
             if changed || self.d3d_frame_count.is_multiple_of(120) {
-                let (px, py, pz) = if self.cached_player_obj_ptr.is_null() {
-                    (0.0, 0.0, 0.0)
-                } else {
-                    unsafe {
-                        (
-                            *(self.cached_player_obj_ptr.add(0x50) as *const f32),
-                            *(self.cached_player_obj_ptr.add(0x54) as *const f32),
-                            *(self.cached_player_obj_ptr.add(0x58) as *const f32),
-                        )
-                    }
-                };
+                let (px, py, pz) = self
+                    .player
+                    .position()
+                    .map(|p| (p.x, p.y, p.z))
+                    .unwrap_or((0.0, 0.0, 0.0));
                 let ov = replay::input_override();
                 // Глобальный InputUnit[0] (0x01AEB850 = base+0x177B850) —
                 // реальный источник входа игрока.
@@ -974,14 +661,14 @@ impl ImguiRenderLoop for HelloHud {
                 };
                 // Семантические кнопки Pl0000 + сырые клавиши/мышь —
                 // для сопоставления «физическая клавиша → бит в cur_in».
-                let pl = self.read_pl_input();
+                let pl = self.player.read_pl_input();
                 let mouse_btns = hooks::read_mouse().map(|m| m.buttons).unwrap_or(0);
                 let keys_down = hooks::read_keys().map(|(d, _)| d).unwrap_or([0; 6]);
                 let space = keys_down[1] & 0x8000_0000 != 0;
                 let w_down = keys_down[2] & 0x100 != 0;
                 logger::log_line(&format!(
                     "frame: player=0x{:08X} status_raw={} cur_in down={:08X} pressed={:08X} L=({:.2},{:.2}) R=({:.2},{:.2}) dir={:.2} jump={} mouse={:X} space={} w={} pos=({:.2},{:.2},{:.2}) ov_active={} g_unit0: down={:08X} pressed={:08X} L=({:.2},{:.2}) valid={}",
-                    self.cached_player_obj_ptr as usize,
+                    self.player.obj_ptr(),
                     ui_state.menu_status_raw,
                     ci.buttons_down,
                     ci.buttons_pressed,
@@ -1014,8 +701,8 @@ impl ImguiRenderLoop for HelloHud {
         // освобождённую память при рестарте.
         #[cfg(debug_assertions)]
         if ui_state.player_found {
-            let ps = self.read_player_state();
-            let cs = self.read_camera_state();
+            let ps = self.player.read_player_state();
+            let cs = self.camera.read_camera_state();
             let (pos, vel, rot, heading, dir, ripper, blade, ninja, jump) = match ps {
                 Some(p) => (
                     p.pos,
@@ -1034,18 +721,7 @@ impl ImguiRenderLoop for HelloHud {
             // field_900 — предыдущая позиция (лаг ~1 кадр): дельта pos-prev
             // даёт скорость перемещения за кадр (горизонтальное движение
             // кинематическое — отдельного поля горизонтальной скорости нет).
-            let prev = if self.cached_player_obj_ptr.is_null() {
-                [0.0; 3]
-            } else {
-                let p = self.cached_player_obj_ptr;
-                unsafe {
-                    [
-                        *(p.add(0x900) as *const f32),
-                        *(p.add(0x904) as *const f32),
-                        *(p.add(0x908) as *const f32),
-                    ]
-                }
-            };
+            let prev = self.player.prev_position().unwrap_or([0.0; 3]);
             logger::log_state_line(&format!(
                 "f={} pos=({:.3},{:.3},{:.3}) vel=({:.3},{:.3},{:.3}) prev=({:.3},{:.3},{:.3}) rot=({:.3},{:.3},{:.3}) heading={:.3} dir={:.3} ripper={} blade={} ninja={} jump={} cam=({:.1},{:.1},{:.1})",
                 self.d3d_frame_count,
@@ -1060,9 +736,9 @@ impl ImguiRenderLoop for HelloHud {
 
         // --- API: продвижение скрипта + кольцевой буфер + снимок (debug+release) ---
         // Чтение ввода/состояния — общий код: нужно и API, и record/replay.
-        let input = self.read_current_input();
-        let state = self.read_player_state().unwrap_or_default();
-        let camera = self.read_camera_state().unwrap_or_default();
+        let input = self.player.read_current_input();
+        let state = self.player.read_player_state().unwrap_or_default();
+        let camera = self.camera.read_camera_state().unwrap_or_default();
 
         self.api.frame_update(&ui_state, input, state, camera);
 
@@ -1087,29 +763,19 @@ impl ImguiRenderLoop for HelloHud {
 
         // Key handlers (NumPad1/2/3) — debug only
         #[cfg(debug_assertions)]
-        if !self.cached_player_obj_ptr.is_null() {
-            let p = self.cached_player_obj_ptr;
+        if self.player.is_found() {
             if ui.is_key_pressed_no_repeat(Key::Keypad1) {
-                unsafe {
-                    *(p.add(0x54) as *mut f32) += 10.0;
-                }
+                self.player.add_y(10.0);
             }
-            if ui.is_key_pressed_no_repeat(Key::Keypad2) {
-                unsafe {
-                    let x = *(p.add(0x50) as *const f32);
-                    let y = *(p.add(0x54) as *const f32);
-                    let z = *(p.add(0x58) as *const f32);
-                    self.saved_position = Some((x, y, z));
-                }
+            if ui.is_key_pressed_no_repeat(Key::Keypad2)
+                && let Some(pos) = self.player.position()
+            {
+                self.saved_position = Some((pos.x, pos.y, pos.z));
             }
             if ui.is_key_pressed_no_repeat(Key::Keypad3)
                 && let Some((sx, sy, sz)) = self.saved_position
             {
-                unsafe {
-                    *(p.add(0x50) as *mut f32) = sx;
-                    *(p.add(0x54) as *mut f32) = sy;
-                    *(p.add(0x58) as *mut f32) = sz;
-                }
+                self.player.set_position((sx, sy, sz));
             }
             // NumPad4 — встроенный скрипт (бег → прыжок → удар → камера) через
             // общий ScriptRunner API — тот же механизм, что POST /script/run.
@@ -1146,12 +812,14 @@ impl ImguiRenderLoop for HelloHud {
 
         // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ (debug) ---
         #[cfg(debug_assertions)]
-        if let (Some((sx, sy, sz)), Some(camera_addr)) = (self.saved_position, self.camera_ptr_addr)
+        if let (Some((sx, sy, sz)), Some(vp), Some(cam_pos)) =
+            (self.saved_position, self.camera.view_proj(), self.camera.pos())
         {
             overlay::draw_world_pos(
                 ui,
                 (sx, sy, sz),
-                camera_addr.as_ptr(),
+                &vp,
+                (cam_pos[0], cam_pos[1], cam_pos[2]),
                 self.viewport,
                 0xFF_00_FF_00,
                 "Saved",
@@ -1163,30 +831,35 @@ impl ImguiRenderLoop for HelloHud {
             && self.active_segment.is_some()
             && !self.ghost_positions.is_empty()
             && !self.ghost_label.is_empty()
-            && let (Some(camera_addr), Some(seg)) =
-                (self.camera_ptr_addr, self.active_segment.as_ref())
-            {
-                let current_ms = seg.start_instant.elapsed().as_millis() as i64;
-                let idx = self
-                    .ghost_positions
-                    .partition_point(|&(_, dur)| dur <= current_ms);
-                if idx > 0 {
-                    let (gp, _) = self.ghost_positions[idx - 1];
-                    overlay::draw_world_pos(
-                        ui,
-                        (gp.x, gp.y, gp.z),
-                        camera_addr.as_ptr(),
-                        self.viewport,
-                        0xFF0000FF,
-                        &self.ghost_label,
-                    );
-                }
+            && let (Some(vp), Some(cam_pos), Some(seg)) = (
+                self.camera.view_proj(),
+                self.camera.pos(),
+                self.active_segment.as_ref(),
+            )
+        {
+            let current_ms = seg.start_instant.elapsed().as_millis() as i64;
+            let idx = self
+                .ghost_positions
+                .partition_point(|&(_, dur)| dur <= current_ms);
+            if idx > 0 {
+                let (gp, _) = self.ghost_positions[idx - 1];
+                overlay::draw_world_pos(
+                    ui,
+                    (gp.x, gp.y, gp.z),
+                    &vp,
+                    (cam_pos[0], cam_pos[1], cam_pos[2]),
+                    self.viewport,
+                    0xFF0000FF,
+                    &self.ghost_label,
+                );
             }
+        }
 
         // --- ОТРИСОВКА ЧУЖИХ ИГРОКОВ (2D маркеры) ---
-        if let (Some(nc), Some(camera_addr), Some(seg)) = (
+        if let (Some(nc), Some(vp), Some(cam_pos), Some(seg)) = (
             &self.net_client,
-            self.camera_ptr_addr,
+            self.camera.view_proj(),
+            self.camera.pos(),
             self.active_segment.as_ref(),
         ) {
             for rp in &nc.remote_players {
@@ -1204,7 +877,8 @@ impl ImguiRenderLoop for HelloHud {
                 overlay::draw_world_pos(
                     ui,
                     (rp.pos.x, rp.pos.y, rp.pos.z),
-                    camera_addr.as_ptr(),
+                    &vp,
+                    (cam_pos[0], cam_pos[1], cam_pos[2]),
                     self.viewport,
                     0xFF8080FF,
                     &label,

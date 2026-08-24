@@ -18,18 +18,6 @@ pub struct UiState {
     pub player_found: bool,
 }
 
-/// Враг (сущность Em*/Ba*/Pl001*) из EntitySystem для debug-панели: позиция,
-/// HP, анимация, дистанция до игрока, высота клинка (мировая, из матрицы части).
-#[cfg(debug_assertions)]
-pub(super) struct EnemyInfo {
-    pub name: String,
-    pub pos: [f32; 3],
-    pub hp: i32,
-    pub r_anim: i32,
-    pub dist: Option<f32>,
-    pub blade_y: Option<f32>,
-}
-
 #[cfg(debug_assertions)]
 pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
     ui.window("DrmodDebug")
@@ -109,7 +97,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
 
             // --- СОСТОЯНИЕ ИГРОКА (компактно) ---
             ui.separator();
-            if let Some(ps) = hud.read_player_state() {
+            if let Some(ps) = hud.player.read_player_state() {
                 ui.text(format!(
                     "Pos: ({:.2}, {:.2}, {:.2})",
                     ps.pos[0], ps.pos[1], ps.pos[2]
@@ -140,7 +128,7 @@ pub fn render_main_window(ui: &Ui, hud: &mut HelloHud, state: &UiState) {
             // --- ВРАГИ (позиции в бою) ---
             ui.separator();
             if state.menu_status_valid && !state.menu_status.is_loading() {
-                let (total, enemies) = hud.read_enemies();
+                let (total, enemies) = hud.player.read_enemies();
                 ui.text(format!("Entities: {}  Enemies: {}", total, enemies.len()));
                 for e in &enemies {
                     let d = e

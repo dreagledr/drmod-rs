@@ -29,7 +29,10 @@ src/
 ├── api.rs           # HTTP API (127.0.0.1:5223) — scripts, state, ring-buffer logs
 ├── segment.rs       # Segment tracking — start conditions, ASL-based finish triggers, DB cleanup
 ├── ui.rs            # ImGui windows — debug panel (debug only), multiplayer, settings
-├── game.rs          # GameMenuStatus enum, weapon name helpers
+├── game/            # Сущности игры — игрок (Pl0000), камера (cCameraGame), статус меню
+│   ├── mod.rs       #   GameMenuStatus enum, is_readable_ptr, re-export Player/Camera
+│   ├── player.rs    #   Player — кэш объекта игрока, read_player_state/read_current_input/read_pl_input/read_enemies/read_skeleton
+│   └── camera.rs    #   Camera — read_camera_state/view_proj/pos
 ├── net.rs           # TCP + UDP client for multiplayer
 ├── overlay.rs       # world_to_screen projection, draw_world_pos
 ├── settings.rs      # User settings (ghost opacity, show ghost toggle)
@@ -108,7 +111,7 @@ Static pointer: `base + 0x17EA1D0` (cCameraGame::Instance).
 - `Entity`: имя `+0x04`, Behavior* (m_pSceneModel) `+0x3C` (disasm `Entity::getTransPos`
   0x67C8B0: `mov eax,[ecx+0x3C]`), m_pInstance `+0x48` (disasm `getEntityInstance` 0x67C8A0).
 - У Behavior: позиция `+0x50` (cParts::m_vecTransPos), HP `+0x870`, r_anim `+0x618`.
-- Фильтр врагов: имена `Em*`/`Ba*`/`Pl001*` (без игрока по `cached_player_obj_ptr`),
+- Фильтр врагов: имена `Em*`/`Ba*`/`Pl001*` (без игрока по кэшу объекта игрока в `Player`),
   позиция не (0,0,0), HP 1..1 000 000. Части моделей (`Pl0010_Hair` и т.п.) и фон
   (`byBgManager`, пустые имена) отсекаются позицией/HP.
 - Анимация врага — подтверждено рантаймом (диагностика полей): `+0x618` — текущая
