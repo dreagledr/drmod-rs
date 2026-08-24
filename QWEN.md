@@ -9,7 +9,7 @@ A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**
 - **Server (`server/`)**: Multiplayer relay server (tokio, Docker, 64-bit)
 - **Protocol (`protocol/`)**: Shared types for TCP (JSON) and UDP (binary) communication
 - **Replay-types (`replay-types/`)**: Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout replay BLOB'ов
-- **dbdump (`tools/dbdump/`)**: CLI-экспорт кадров Record/Replay из `runs.db` в CSV/Parquet (83 плоские колонки) для аналитики
+- **dbdump (`tools/dbdump/`)**: CLI-экспорт кадров Record/Replay из `runs.db` в CSV/Parquet (90 плоских колонок) для аналитики
 
 Features:
 - Segment-based autosplitter with SQLite persistence and ghost replay
@@ -218,13 +218,14 @@ CREATE TABLE replay_record_frames (
     ripper_pressed INTEGER NOT NULL DEFAULT 0,
     raw_down BLOB,                       -- m_aKeysDown [u32; 6]
     raw_pressed BLOB,                    -- m_aKeysPressed [u32; 6]
+    enemy BLOB,                          -- EnemyState (32 байта) — ближайший враг
     FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
 );
 -- replay_playback_frames — та же форма
 ```
 
-- BLOB'ы — сырые байты структур из `replay-types/` (layout версионируется размером: camera 76 байт = legacy до 2026-08-18, не читается dbdump)
-- Миграция старых БД (`ensure_replay_frame_columns`): `ALTER TABLE` добавляет blade/ripper/raw-колонки
+- BLOB'ы — сырые байты структур из `replay-types/` (layout версионируется размером: camera 76 байт = legacy до 2026-08-18, не читается dbdump; enemy 32 байта = `EnemyState`, колонка добавлена 2026-08-24)
+- Миграция старых БД (`ensure_replay_frame_columns`): `ALTER TABLE` добавляет blade/ripper/raw/enemy-колонки
 - Мод БД не читает (воспроизведение идёт из памяти сессии) — таблицы только для истории/аналитики, экспорт: `tools/dbdump`
 
 ## Building and Running
@@ -294,10 +295,10 @@ cargo run --release -- -n "Custom Window Name.exe"
 - **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since addresses are computed once in `new()` and never mutated.
 - All static addresses are calculated once at init time, not per-frame.
 - **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window (record/playback status, segment timer, mission/menu status, compact player state), `Actions` window (numpad hotkey reference), Numpad keys, saved position display. Release builds keep only Multiplayer and Settings windows.
-- **HTTP API** (`src/api.rs`, debug + release): own minimal HTTP server (raw `TcpListener`, no tiny_http) on `127.0.0.1:5223` — `POST /script/run` (JSON scripts in frames), `GET /state`, `GET /logs?from_ms&to_ms&script_id`, `GET /health`, `POST /eject` (unloads the DLL: HTTP thread sets a flag, the render loop performs `shutdown()` + `hudhook::eject()`). Ring buffer of 3600 frames (60 s). Scripts stop automatically on loading and before eject. NumPad4 runs the builtin script through the same `ScriptRunner`. Design: `docs/API.md`. The server is a single thread with non-blocking accept (10 ms stop-flag poll) and 1 s read/write timeouts per connection — `shutdown()` joins it in bounded time, so DLL eject never hangs (tiny_http was replaced because it had no socket timeouts and spawned unjoinable internal threads).
+- **HTTP API** (`src/api.rs`, debug + release): own minimal HTTP server (raw `TcpListener`, no tiny_http) on `127.0.0.1:5223` — `POST /script/run` (JSON scripts in frames; optional `trigger: {pos: [x,y,z]}` arms the script — starts when the player enters the zone, like deferred record/playback), `GET /state`, `GET /logs?from_ms&to_ms&script_id`, `GET /health`, `POST /eject` (unloads the DLL: HTTP thread sets a flag, the render loop performs `shutdown()` + `hudhook::eject()`). Ring buffer of 3600 frames (60 s). Scripts stop automatically on loading and before eject. NumPad4 runs the builtin script through the same `ScriptRunner`. Design: `docs/API.md`. The server is a single thread with non-blocking accept (10 ms stop-flag poll) and 1 s read/write timeouts per connection — `shutdown()` joins it in bounded time, so DLL eject never hangs (tiny_http was replaced because it had no socket timeouts and spawned unjoinable internal threads).
 - Error handling uses Windows `MessageBoxW` for user-facing errors.
 - Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
-- **dbdump** (`tools/dbdump/`): экспорт кадров Record/Replay в CSV/Parquet — 83 плоские колонки (мета прогона + frame + InputUnit/PlayerState/CameraState + производные `cam_yaw`/`cam_pitch` + blade/ripper/raw). По id record-прогона дампит и его playback'и (`source_replay_id`). Сборка — x64 (`cd tools/dbdump && cargo build --release`, свой `.cargo/config.toml` как у server; arrow-rs только 64-bit; корневой `cargo build` тул не собирает). Запуск: `dbdump <run_id> [--out DIR] [--db PATH]`. Тесты: `cargo test` из `tools/dbdump`. Детали: `tools/dbdump/README.md`.
+- **dbdump** (`tools/dbdump/`): экспорт кадров Record/Replay в CSV/Parquet — 90 плоских колонок (мета прогона + frame + InputUnit/PlayerState/CameraState + производные `cam_yaw`/`cam_pitch` + blade/ripper/raw + ближайший враг `enemy_pos_x/y/z`/`enemy_blade_y`/`enemy_anim`/`enemy_frame`/`enemy_hp`). По id record-прогона дампит и его playback'и (`source_replay_id`). Сборка — x64 (`cd tools/dbdump && cargo build --release`, свой `.cargo/config.toml` как у server; arrow-rs только 64-bit; корневой `cargo build` тул не собирает). Запуск: `dbdump <run_id> [--out DIR] [--db PATH]`. Тесты: `cargo test` из `tools/dbdump`. Детали: `tools/dbdump/README.md`.
 - **Десинк Record→Playback** (`docs/DESYNC_ANALYSIS.md`, анализ 2026-08-23, record 73 → playbacks 78/81/82): гипотеза «дроп FPS» закрыта (длительности кадров record==playback побайтово, 60 FPS стабильно); главный источник — **лаг подачи ввода 1 кадр** (override из render(K) применяется тиком K+1, `play[fi]==rec[fi-1]` на 100%) + фазовая неопределённость Present↔тик (playback'и с идентичным вводом расходятся между собой до 17 м). **Вариант A (2026-08-23):** `playback_tick` подаёт `frame[frame_idx + 1]` — тик N+1 применяет `frame[N+1]`, как в записи; лаг 0 = 100%, лучший прогон 88 — |Δpos| 2.7 м (было ~17 м); недетерминизм сохранился (89/90 до 25 м, приземления мимо зон по высоте). **Вариант B (2026-08-23):** подача кадров перенесена из render в детур `updateInputUnit` (`replay::PLAYBACK_FEED` + `feed_playback`) — каждый тик симуляции получает кадр синхронно, фаза Present не влияет; `playback_tick` только логирует и останавливает при `done`; `next_idx=1` (frames[0] — нулевой спавн). **Вариант D (2026-08-23, ОТКЛЮЧЁН `DUP_ENABLED=false`):** дубль кадра при отставании вдоль (hold-окна) — на прогоне 96 дал перелёт при прыжках, исход не изменил. **Вариант E (2026-08-23):** компенсация курса — render считает dYaw (текущая камера vs запись), ставит поправку к `right_stick_x` следующего кадра (`rsx_correction`, чувствительность ~0.00065 °/ед/кадр, gain 0.6, порог 0.5°, клэмп ±2000; эталон — последний поданный кадр, коррекция только |dYaw|<90°, знак «плюс» — положительный rsx поворачивает камеру влево). **Результат (record 110 → 111/112/113/114): 4/4 успех, |Δpos| 0.7–1.0 м, |Δyaw| медиана 0.12–0.26°.** Критическая точка десинка — вход в ninja run (r_anim 5→13→14→71, fi≈233–248). Анализ: `tools/desync_analysis/` (pandas, `py -3 tools/desync_analysis/analyze*.py [DIR] [REC_ID PLAY_ID...]`, `plot_cam.py [DIR] [OUT.png] [REC_ID PLAY_ID...]`). Вариант C (snap-коррекция) — в документе, не реализован.
 
 ### Reference Projects

@@ -17,6 +17,7 @@
 //! Дизайн — `docs/API.md`.
 
 use crate::logger;
+use crate::segment;
 use crate::tas::addresses;
 use crate::tas::hooks;
 use crate::tas::replay;
@@ -68,6 +69,8 @@ const BUILTIN_SCRIPT: &str = r#"{
 #[derive(Clone, Copy, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum ScriptStatus {
+    /// Взведён с триггером старта по позиции — ждёт попадания игрока в зону.
+    Armed,
     Running,
     Done,
     Stopped,
@@ -194,12 +197,25 @@ struct ScriptCommand {
     input: ScriptInput,
 }
 
+/// Триггер старта скрипта: скрипт взводится (`Armed`) и стартует, когда
+/// позиция игрока попадает в зону вокруг `pos` (допуск как у отложенного
+/// старта record/playback: ±0.1 м по X/Z, ±1.0 м по Y).
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ScriptTrigger {
+    pos: [f32; 3],
+}
+
 /// Тело `POST /script/run` (JSON).
 #[derive(Deserialize)]
 struct ScriptRequest {
     #[serde(default = "default_script_name")]
     name: String,
     commands: Vec<ScriptCommand>,
+    /// Если задан — скрипт взводится и стартует по попаданию в зону;
+    /// иначе запускается сразу (текущее поведение).
+    #[serde(default)]
+    trigger: Option<ScriptTrigger>,
 }
 
 fn default_script_name() -> String {
@@ -214,6 +230,8 @@ struct ScriptState {
     frame: u32,
     status: ScriptStatus,
     total_frames: u32,
+    /// Точка триггера старта (если скрипт взведён через `trigger`).
+    trigger: Option<segment::Vec3>,
 }
 
 /// Один кадр кольцевого буфера (сырые данные, JSON-форма — `LogFrameJson`).
@@ -347,6 +365,8 @@ struct ScriptRunResponse {
     script_id: u32,
     name: String,
     total_frames: u32,
+    /// `armed` — скрипт взведён и ждёт триггера, `running` — выполняется.
+    status: ScriptStatus,
 }
 
 /// `POST /script/stop` — ответ.
@@ -534,6 +554,9 @@ impl ApiServer {
 
         // Продвижение активного скрипта: вычисляем InputUnit кадра и подаём
         // через override; по завершении снимаем override и keybind-эмуляцию.
+        // Взведённый скрипт (Armed) стартует, когда игрок попадает в зону
+        // триггера — первый тик выполняется со следующего кадра (как при
+        // запуске через HTTP).
         let base_addr = guard.base_addr;
         let script_id = if let Some(s) = guard.script.as_mut() {
             if s.status == ScriptStatus::Running {
@@ -545,6 +568,18 @@ impl ApiServer {
                     logger::log_line(&format!("api: script {} '{}' done", s.id, s.name));
                 }
                 Some(s.id)
+            } else if s.status == ScriptStatus::Armed
+                && let Some(target) = s.trigger
+                && segment::in_zone(ui_state.position, target)
+            {
+                s.status = ScriptStatus::Running;
+                s.frame = 0;
+                hooks::clear_keybind_emulation();
+                logger::log_line(&format!(
+                    "api: script {} '{}' trigger -> started",
+                    s.id, s.name
+                ));
+                None
             } else {
                 None
             }
@@ -591,17 +626,21 @@ impl ApiServer {
         }
     }
 
-    /// Активен ли скрипт (используется, чтобы debug-инжекция/record/playback
-    /// не вмешивались в ввод, которым управляет API-скрипт). В release
-    /// вызывается только извне (HTTP) — отсюда allow.
+    /// Активен ли скрипт (выполняется или взведён с триггером). Используется,
+    /// чтобы debug-инжекция/record/playback не вмешивались в ввод, которым
+    /// управляет API-скрипт: взведённый скрипт вот-вот стартует, и параллельный
+    /// playback конфликтовал бы за override. В release вызывается только извне
+    /// (HTTP) — отсюда allow.
     #[allow(dead_code)]
-    pub fn is_script_running(&self) -> bool {
+    pub fn is_script_active(&self) -> bool {
         self.state
             .lock()
             .unwrap()
             .script
             .as_ref()
-            .is_some_and(|s| s.status == ScriptStatus::Running)
+            .is_some_and(|s| {
+                s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed
+            })
     }
 
     /// Запрошен ли eject через `POST /eject`. Проверяется в render-цикле
@@ -633,9 +672,11 @@ impl ApiServer {
         if guard
             .script
             .as_ref()
-            .is_some_and(|s| s.status == ScriptStatus::Running)
+            .is_some_and(|s| {
+                s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed
+            })
         {
-            logger::log_line("api: builtin script ignored (another script running)");
+            logger::log_line("api: builtin script ignored (another script active)");
             return;
         }
         let id = guard.next_script_id;
@@ -654,6 +695,7 @@ impl ApiServer {
             frame: 0,
             status: ScriptStatus::Running,
             total_frames,
+            trigger: None,
         });
         logger::log_line(&format!(
             "api: builtin script {} '{}' started ({} frames)",
@@ -673,7 +715,7 @@ impl ApiServer {
         hooks::clear_keybind_emulation();
         if let Ok(mut guard) = self.state.lock()
             && let Some(s) = guard.script.as_mut()
-            && s.status == ScriptStatus::Running
+            && (s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed)
         {
             s.status = ScriptStatus::Stopped;
         }
@@ -886,13 +928,15 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     if guard
         .script
         .as_ref()
-        .is_some_and(|s| s.status == ScriptStatus::Running)
+        .is_some_and(|s| {
+            s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed
+        })
     {
         let s = guard.script.as_ref().unwrap();
         return (
             409,
             Response::Error(ErrorResponse {
-                error: format!("script already running: id={} name={}", s.id, s.name),
+                error: format!("script already active: id={} name={}", s.id, s.name),
             }),
         );
     }
@@ -906,24 +950,43 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
         .unwrap_or(0);
     // Сброс остатков keybind-эмуляции (ripper/blade) до старта.
     hooks::clear_keybind_emulation();
+    let trigger = req.trigger.map(|t| segment::Vec3 {
+        x: t.pos[0],
+        y: t.pos[1],
+        z: t.pos[2],
+    });
+    let status = if trigger.is_some() {
+        ScriptStatus::Armed
+    } else {
+        ScriptStatus::Running
+    };
     guard.script = Some(ScriptState {
         id,
         name: req.name.clone(),
         commands: req.commands,
         frame: 0,
-        status: ScriptStatus::Running,
+        status,
         total_frames,
+        trigger,
     });
-    logger::log_line(&format!(
-        "api: script {} '{}' started ({} frames)",
-        id, req.name, total_frames
-    ));
+    if let Some(t) = trigger {
+        logger::log_line(&format!(
+            "api: script {} '{}' armed, waiting for trigger ({:.1},{:.1},{:.1})",
+            id, req.name, t.x, t.y, t.z
+        ));
+    } else {
+        logger::log_line(&format!(
+            "api: script {} '{}' started ({} frames)",
+            id, req.name, total_frames
+        ));
+    }
     (
         200,
         Response::ScriptRun(ScriptRunResponse {
             script_id: id,
             name: req.name,
             total_frames,
+            status,
         }),
     )
 }
@@ -932,7 +995,7 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
 fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     let mut guard = state.lock().unwrap();
     match guard.script.as_mut() {
-        Some(s) if s.status == ScriptStatus::Running => {
+        Some(s) if s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed => {
             let id = s.id;
             stop_script(s);
             logger::log_line(&format!("api: script {} stopped by request", id));

@@ -199,16 +199,24 @@ pub fn segment_action(
     SegmentAction::None
 }
 
-/// Попадает ли позиция игрока в триггерную зону любой из стартовых точек
-/// (`START_CONDITIONS`, допуск как в `segment_action`). Без привязки к миссии —
-/// используется отложенным стартом записи/воспроизведения в `tas::replay`.
-pub fn in_any_start_zone(pos: Option<Vec3>) -> bool {
+/// Попадает ли позиция игрока в триггерную зону вокруг `target` (допуск как
+/// в `segment_action`: ±0.1 м по X/Z, ±1.0 м по Y). Используется отложенным
+/// стартом записи/воспроизведения (`in_any_start_zone`) и триггером скрипта
+/// в `api.rs`.
+pub fn in_zone(pos: Option<Vec3>, target: Vec3) -> bool {
     let Some(p) = pos else {
         return false;
     };
-    START_CONDITIONS.iter().any(|&(_, s)| {
-        (p.x - s.x).abs() <= 0.1 && (p.y - s.y).abs() <= 1.0 && (p.z - s.z).abs() <= 0.1
-    })
+    (p.x - target.x).abs() <= 0.1 && (p.y - target.y).abs() <= 1.0 && (p.z - target.z).abs() <= 0.1
+}
+
+/// Попадает ли позиция игрока в триггерную зону любой из стартовых точек
+/// (`START_CONDITIONS`). Без привязки к миссии — используется отложенным
+/// стартом записи/воспроизведения в `tas::replay`.
+pub fn in_any_start_zone(pos: Option<Vec3>) -> bool {
+    START_CONDITIONS
+        .iter()
+        .any(|&(_, s)| in_zone(pos, s))
 }
 
 pub fn create_segment_tables(conn: &Connection) -> Result<(), rusqlite::Error> {

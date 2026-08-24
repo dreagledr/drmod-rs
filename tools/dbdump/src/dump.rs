@@ -7,7 +7,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Float32Array, Int64Array, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use drmod_replay_types::{from_bytes, CameraState, InputUnit, PlayerState};
+use drmod_replay_types::{from_bytes, CameraState, EnemyState, InputUnit, PlayerState};
 use parquet::arrow::arrow_writer::ArrowWriter;
 use rusqlite::{params, Connection};
 
@@ -25,8 +25,8 @@ pub(crate) struct RunMeta {
 }
 
 /// Один кадр, прочитанный из БД (BLOB уже декодирован).
-/// `raw_down`/`raw_pressed` — `None`, если колонки отсутствуют (старая схема)
-/// или для строки значение NULL.
+/// `raw_down`/`raw_pressed`/`enemy` — `None`, если колонки отсутствуют
+/// (старая схема) или для строки значение NULL.
 #[derive(Debug)]
 pub(crate) struct Frame {
     pub frame_index: i64,
@@ -38,6 +38,7 @@ pub(crate) struct Frame {
     pub ripper_pressed: i64,
     pub raw_down: Option<[u32; 6]>,
     pub raw_pressed: Option<[u32; 6]>,
+    pub enemy: Option<EnemyState>,
 }
 
 /// Тип колонки экспорта. Все колонки в parquet помечаются nullable:
@@ -151,6 +152,14 @@ const SCHEMA: &[(&str, ColType)] = &[
     ("raw_pressed_3", ColType::I64),
     ("raw_pressed_4", ColType::I64),
     ("raw_pressed_5", ColType::I64),
+    // Ближайший враг (EnemyState; NULL — старая схема без колонки enemy)
+    ("enemy_pos_x", ColType::F32),
+    ("enemy_pos_y", ColType::F32),
+    ("enemy_pos_z", ColType::F32),
+    ("enemy_blade_y", ColType::F32),
+    ("enemy_anim", ColType::I64),
+    ("enemy_frame", ColType::I64),
+    ("enemy_hp", ColType::I64),
 ];
 
 /// Собирает строку экспорта для кадра.
@@ -234,6 +243,18 @@ fn build_row(meta: &RunMeta, f: &Frame) -> Vec<Cell> {
     match f.raw_pressed {
         Some(a) => row.extend(a.iter().map(|v| Cell::Int(*v as i64))),
         None => row.extend(std::iter::repeat_n(Cell::Null, 6)),
+    }
+    match &f.enemy {
+        Some(e) => row.extend([
+            Cell::Float(e.pos[0]),
+            Cell::Float(e.pos[1]),
+            Cell::Float(e.pos[2]),
+            Cell::Float(e.blade_y),
+            Cell::Int(e.r_anim as i64),
+            Cell::Int(e.frame as i64),
+            Cell::Int(e.hp as i64),
+        ]),
+        None => row.extend(std::iter::repeat_n(Cell::Null, 7)),
     }
     debug_assert_eq!(row.len(), SCHEMA.len(), "схема и build_row разошлись");
     row
@@ -326,7 +347,7 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
         "record" => "replay_record_frames",
         _ => "replay_playback_frames",
     };
-    const ALL: [&str; 9] = [
+    const ALL: [&str; 10] = [
         "frame_index",
         "duration_ms",
         "input_unit",
@@ -336,6 +357,7 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
         "ripper_pressed",
         "raw_down",
         "raw_pressed",
+        "enemy",
     ];
     let have = table_columns(conn, table)?;
     let present: Vec<&str> = ALL
@@ -359,6 +381,7 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
     let i_ripper = idx("ripper_pressed");
     let i_raw_down = idx("raw_down");
     let i_raw_pressed = idx("raw_pressed");
+    let i_enemy = idx("enemy");
 
     let mut raw = Vec::new();
     {
@@ -386,6 +409,10 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
                         Some(i) => r.get::<_, Option<Vec<u8>>>(i)?,
                         None => None,
                     },
+                    match i_enemy {
+                        Some(i) => r.get::<_, Option<Vec<u8>>>(i)?,
+                        None => None,
+                    },
                 ))
             })
             .map_err(|e| format!("query frames: {e}"))?;
@@ -395,7 +422,7 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
     }
 
     let mut frames = Vec::with_capacity(raw.len());
-    for (fi, dur, input_b, state_b, cam_b, blade, ripper, raw_d, raw_p) in raw {
+    for (fi, dur, input_b, state_b, cam_b, blade, ripper, raw_d, raw_p, enemy_b) in raw {
         let input = from_bytes::<InputUnit>(&input_b).ok_or_else(|| {
             format!(
                 "Кадр {fi}: input_unit BLOB размер {} != {}",
@@ -432,6 +459,18 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
             ),
             None => None,
         };
+        let enemy = match enemy_b {
+            Some(b) => Some(
+                from_bytes::<EnemyState>(&b).ok_or_else(|| {
+                    format!(
+                        "Кадр {fi}: enemy BLOB размер {} != {}",
+                        b.len(),
+                        std::mem::size_of::<EnemyState>()
+                    )
+                })?,
+            ),
+            None => None,
+        };
         frames.push(Frame {
             frame_index: fi,
             duration_ms: dur,
@@ -442,6 +481,7 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
             ripper_pressed: ripper,
             raw_down,
             raw_pressed,
+            enemy,
         });
     }
     Ok(frames)
@@ -600,6 +640,7 @@ mod tests {
                 ripper_pressed INTEGER NOT NULL DEFAULT 0,
                 raw_down BLOB,
                 raw_pressed BLOB,
+                enemy BLOB,
                 FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
             );
             CREATE TABLE replay_playback_frames (
@@ -614,6 +655,7 @@ mod tests {
                 ripper_pressed INTEGER NOT NULL DEFAULT 0,
                 raw_down BLOB,
                 raw_pressed BLOB,
+                enemy BLOB,
                 FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
             );",
         )
@@ -630,7 +672,7 @@ mod tests {
         conn.last_insert_rowid()
     }
 
-    fn sample_frame(i: u32) -> (InputUnit, PlayerState, CameraState, [u32; 6]) {
+    fn sample_frame(i: u32) -> (InputUnit, PlayerState, CameraState, [u32; 6], EnemyState) {
         let input = InputUnit {
             buttons_down: 1 + i,
             buttons_pressed: i,
@@ -652,16 +694,24 @@ mod tests {
             view_proj: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6],
         };
         let raw = [1u32, 2, 3, 4, 5, 6];
-        (input, state, camera, raw)
+        let enemy = EnemyState {
+            pos: [100.0, 0.0, 200.0],
+            blade_y: 1.03,
+            r_anim: 19,
+            frame: 7 + i as i32,
+            hp: 500,
+            found: 1,
+        };
+        (input, state, camera, raw, enemy)
     }
 
     fn insert_frames(conn: &Connection, table: &str, replay_id: i64) {
         let sql = format!(
-            "INSERT INTO {table} (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+            "INSERT INTO {table} (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed, enemy)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
         );
         for i in 0..2 {
-            let (input, state, camera, raw) = sample_frame(i);
+            let (input, state, camera, raw, enemy) = sample_frame(i);
             conn.execute(
                 &sql,
                 params![
@@ -675,6 +725,7 @@ mod tests {
                     0i64,
                     to_bytes(&raw),
                     to_bytes(&raw),
+                    to_bytes(&enemy),
                 ],
             )
             .unwrap();
@@ -722,6 +773,11 @@ mod tests {
         assert_eq!(first[col_idx("raw_down_0")], "1");
         assert_eq!(first[col_idx("raw_pressed_5")], "6");
         assert_eq!(first[col_idx("cam_yaw")], "0.7853982");
+        assert_eq!(first[col_idx("enemy_pos_x")], "100");
+        assert_eq!(first[col_idx("enemy_blade_y")], "1.03");
+        assert_eq!(first[col_idx("enemy_anim")], "19");
+        assert_eq!(first[col_idx("enemy_frame")], "7");
+        assert_eq!(first[col_idx("enemy_hp")], "500");
 
         // Parquet
         let parquet_path = dir.join("run_1_record.parquet");
@@ -807,7 +863,7 @@ mod tests {
         let rid = insert_run(&conn, "record", None);
         let sql = "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera)
                    VALUES (?1, ?2, ?3, ?4, ?5, ?6)";
-        let (input, state, camera, _) = sample_frame(0);
+        let (input, state, camera, _, _) = sample_frame(0);
         conn.execute(
             sql,
             params![rid, 0i64, 0i64, to_bytes(&input), to_bytes(&state), to_bytes(&camera)],
@@ -819,10 +875,13 @@ mod tests {
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].blade_down, 0);
         assert!(frames[0].raw_down.is_none());
+        assert!(frames[0].enemy.is_none());
         let rows = build_rows(&meta, &frames);
         assert!(matches!(rows[0][col_idx("raw_down_0")], Cell::Null));
         assert!(matches!(rows[0][col_idx("blade_down")], Cell::Int(0)));
         assert!(matches!(rows[0][col_idx("source_replay_id")], Cell::Null));
+        assert!(matches!(rows[0][col_idx("enemy_pos_x")], Cell::Null));
+        assert!(matches!(rows[0][col_idx("enemy_hp")], Cell::Null));
 
         // CSV: NULL-ячейки — пустые
         let csv_path = dir.join("old.csv");
@@ -831,6 +890,7 @@ mod tests {
         let first: Vec<&str> = content.lines().nth(1).unwrap().split(',').collect();
         assert_eq!(first[col_idx("raw_down_0")], "");
         assert_eq!(first[col_idx("source_replay_id")], "");
+        assert_eq!(first[col_idx("enemy_pos_x")], "");
 
         // Parquet: NULL-ячейки — null
         let parquet_path = dir.join("old.parquet");

@@ -1,7 +1,7 @@
 //! Типы данных (DTO) системы ввода и записи/воспроизведения —
 //! снимки памяти игры и кадры записи.
 
-pub use drmod_replay_types::{CameraState, InputUnit, PlayerState};
+pub use drmod_replay_types::{CameraState, EnemyState, InputUnit, PlayerState};
 
 /// Сырой ввод клавиатуры (cInput::KeyInput).
 #[repr(C)]
@@ -71,6 +71,10 @@ pub struct ReplayFrame {
     /// InputUnit — без захвата навигация по меню не воспроизводится.
     pub raw_down: [u32; 6],
     pub raw_pressed: [u32; 6],
+    /// Ближайший к игроку враг в этом кадре (found=0 — врага нет).
+    /// Для офлайн-сопоставления air-атаки игрока с состоянием врага
+    /// (docs/ENEMY_TRACKING.md).
+    pub enemy: EnemyState,
 }
 
 /// Метаданные одного прогона записи/воспроизведения (строка в `replay_runs`).

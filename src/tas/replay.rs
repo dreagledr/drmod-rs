@@ -10,7 +10,7 @@
 #[cfg(debug_assertions)]
 use super::addresses;
 #[cfg(debug_assertions)]
-use super::types::{CameraState, PlayerState, ReplayFrame, ReplayRunMeta};
+use super::types::{CameraState, EnemyState, PlayerState, ReplayFrame, ReplayRunMeta};
 use super::types::{InputOverride, InputUnit};
 use crate::logger;
 #[cfg(debug_assertions)]
@@ -531,6 +531,11 @@ pub(crate) struct ReplayState {
 
 #[cfg(debug_assertions)]
 impl ReplayState {
+    /// Активна ли запись или воспроизведение (для гейта чтения врага в render).
+    pub(crate) fn is_active(&self) -> bool {
+        self.record.active || self.playback.active
+    }
+
     /// Переключает запись по NumPad5 (отложенный старт).
     /// `active → стоп + flush`, `armed → отмена`, `idle → arm` (старт по триггеру).
     pub(crate) fn toggle_record(&mut self, conn: Option<&Connection>) {
@@ -777,7 +782,7 @@ impl ReplayState {
 
     /// Единый покадровый апдейт Record/Replay (вызывается из render).
     /// Порядок важен: инжекция → отложенный старт → захват кадра записи →
-    /// подача кадра воспроизведения. Кадр (input/state/camera) читается
+    /// подача кадра воспроизведения. Кадр (input/state/camera/enemy) читается
     /// вызывающей стороной один раз и используется и для записи, и для
     /// лога воспроизведения.
     pub(crate) fn update(
@@ -789,11 +794,12 @@ impl ReplayState {
         input: InputUnit,
         state: PlayerState,
         camera: CameraState,
+        enemy: EnemyState,
     ) {
         self.update_input_injection();
         self.update_deferred_start(pos, mission_id, mission_name);
-        self.capture_frame(input, state, camera);
-        self.playback_tick(conn, input, state, camera);
+        self.capture_frame(input, state, camera, enemy);
+        self.playback_tick(conn, input, state, camera, enemy);
         // Сырые клавиши НЕ сбрасываем здесь: override/raw-биты, выставленные
         // в render(K), применяются игрой на тике K+1 — сброс в конце кадра
         // убил бы их до применения. Каждый кадр playback перезаписывает биты
@@ -811,7 +817,13 @@ impl ReplayState {
     /// m_aKeysPressed из ms_KeyInput) — сэмпл детура `updateInputUnit` ПОСЛЕ
     /// оригинала: меню читает стрелки/Enter/Esc через `isKeyDown`/
     /// `isKeyPressed` из этого кэша, а не из InputUnit.
-    fn capture_frame(&mut self, input: InputUnit, state: PlayerState, camera: CameraState) {
+    fn capture_frame(
+        &mut self,
+        input: InputUnit,
+        state: PlayerState,
+        camera: CameraState,
+        enemy: EnemyState,
+    ) {
         if self.record.active {
             let (raw_down, raw_pressed) = super::hooks::read_raw_keys_sampled();
             self.record.frames.push(ReplayFrame {
@@ -823,6 +835,7 @@ impl ReplayState {
                 ripper_pressed: super::hooks::read_ripper_pressed_sampled() as u8,
                 raw_down,
                 raw_pressed,
+                enemy,
             });
         }
     }
@@ -840,6 +853,7 @@ impl ReplayState {
         cur_input: InputUnit,
         state: PlayerState,
         camera: CameraState,
+        enemy: EnemyState,
     ) {
         if !self.playback.active {
             return;
@@ -860,6 +874,7 @@ impl ReplayState {
             ripper_pressed: super::hooks::read_ripper_pressed_sampled() as u8,
             raw_down: super::hooks::read_raw_keys_sampled().0,
             raw_pressed: super::hooks::read_raw_keys_sampled().1,
+            enemy,
         });
         // Вариант D: компенсация отставания вдоль — если текущий кадр —
         // безопасный hold и мы отстали от записи, продублировать следующий

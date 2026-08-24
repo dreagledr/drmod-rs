@@ -19,6 +19,8 @@ pub(crate) struct EnemyInfo {
     pub pos: [f32; 3],
     pub hp: i32,
     pub r_anim: i32,
+    /// Кадр анимации врага (+0x8B4) — растёт 0..N и сбрасывается при смене.
+    pub anim_frame: i32,
     pub dist: Option<f32>,
     pub blade_y: Option<f32>,
 }
@@ -307,6 +309,8 @@ impl Player {
                         // r_anim — текущая анимация (как у игрока); у врагов
                         // слот анимации (+0x770) не работает — значения из +0x618.
                         let r_anim = *(behavior.add(0x618) as *const i32);
+                        // Кадр анимации (+0x8B4) — растёт 0..N, сбрасывается.
+                        let anim_frame = *(behavior.add(0x8B4) as *const i32);
                         // Настоящий враг: реальная позиция в сцене (не спавн
                         // (0,0,0)) и живое HP в разумных пределах (не мусор).
                         let pos_nonzero = pos[0] != 0.0 || pos[1] != 0.0 || pos[2] != 0.0;
@@ -323,6 +327,7 @@ impl Player {
                                 pos,
                                 hp,
                                 r_anim,
+                                anim_frame,
                                 dist,
                                 blade_y: None,
                             });
@@ -345,5 +350,28 @@ impl Player {
             }
         }
         (total, out)
+    }
+
+    /// Ближайший к игроку враг в формате `EnemyState` (для кадров Record/Replay).
+    /// Переиспользует обход `read_enemies`; `found = 0`, если врагов нет
+    /// (не бой, loading) или позиция игрока неизвестна. Только для debug-записи.
+    #[cfg(debug_assertions)]
+    pub(crate) fn read_nearest_enemy(&self) -> types::EnemyState {
+        let (_, enemies) = self.read_enemies();
+        let nearest = enemies
+            .iter()
+            .filter(|e| e.dist.is_some())
+            .min_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap_or(std::cmp::Ordering::Equal));
+        match nearest {
+            Some(e) => types::EnemyState {
+                pos: e.pos,
+                blade_y: e.blade_y.unwrap_or(0.0),
+                r_anim: e.r_anim,
+                frame: e.anim_frame,
+                hp: e.hp,
+                found: 1,
+            },
+            None => types::EnemyState::default(),
+        }
     }
 }

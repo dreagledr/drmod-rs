@@ -33,6 +33,7 @@ pub(crate) fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Er
             ripper_pressed INTEGER NOT NULL DEFAULT 0,
             raw_down BLOB,
             raw_pressed BLOB,
+            enemy BLOB,
             FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
         )",
         (),
@@ -50,6 +51,7 @@ pub(crate) fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Er
             ripper_pressed INTEGER NOT NULL DEFAULT 0,
             raw_down BLOB,
             raw_pressed BLOB,
+            enemy BLOB,
             FOREIGN KEY (replay_id) REFERENCES replay_runs(id) ON DELETE CASCADE
         )",
         (),
@@ -85,6 +87,7 @@ fn ensure_replay_frame_columns(conn: &Connection, table: &str) -> Result<(), rus
     add("ripper_pressed", "ripper_pressed INTEGER NOT NULL DEFAULT 0")?;
     add("raw_down", "raw_down BLOB")?;
     add("raw_pressed", "raw_pressed BLOB")?;
+    add("enemy", "enemy BLOB")?;
     Ok(())
 }
 
@@ -116,8 +119,8 @@ pub(crate) fn flush_replay(
     }
 
     let sql = match meta.kind {
-        "record" => "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
-        _ => "INSERT INTO replay_playback_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        "record" => "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed, enemy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        _ => "INSERT INTO replay_playback_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed, enemy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     };
 
     let _ = conn.execute("BEGIN", []);
@@ -137,7 +140,8 @@ pub(crate) fn flush_replay(
             f.blade_down as i64,
             f.ripper_pressed as i64,
             to_bytes(&f.raw_down),
-            to_bytes(&f.raw_pressed)
+            to_bytes(&f.raw_pressed),
+            to_bytes(&f.enemy)
         ]);
     }
     let _ = conn.execute("COMMIT", []);

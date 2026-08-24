@@ -749,7 +749,18 @@ impl ImguiRenderLoop for HelloHud {
         // воспроизведения. Не выполняется, пока активен API-скрипт — скрипт
         // эксклюзивно владеет override ввода.
         #[cfg(debug_assertions)]
-        if !self.api.is_script_running() {
+        if !self.api.is_script_active() {
+            // Ближайший враг — только пока активны запись/воспроизведение и
+            // не loading (EntitySystem может быть невалиден). Гейт по is_active
+            // экономит обход EntitySystem вне записи.
+            let enemy = if self.replay.is_active()
+                && ui_state.menu_status_valid
+                && !ui_state.menu_status.is_loading()
+            {
+                self.player.read_nearest_enemy()
+            } else {
+                types::EnemyState::default()
+            };
             self.replay.update(
                 self.db_conn.as_ref(),
                 ui_state.position,
@@ -758,6 +769,7 @@ impl ImguiRenderLoop for HelloHud {
                 input,
                 state,
                 camera,
+                enemy,
             );
         }
 

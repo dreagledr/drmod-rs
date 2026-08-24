@@ -113,8 +113,54 @@ try {
     }
 }
 
-# ── Step 7: error paths ──
-Write-Host "`n=== Step 7: error paths ===" -ForegroundColor Cyan
+# ── Step 7: POST /script/run with trigger (armed) ──
+Write-Host "`n=== Step 7: POST /script/run with trigger ===" -ForegroundColor Cyan
+$armedBody = @{
+    name     = "trigger-test"
+    commands = @(
+        @{ t = 0; duration = 20; input = @{ forward = $true } }
+    )
+    trigger  = @{ pos = @(99999.0, 99999.0, 99999.0) }
+} | ConvertTo-Json -Depth 5
+$armedId = $null
+try {
+    $run = Invoke-RestMethod -Uri "$BaseUrl/script/run" -Method Post -Body $armedBody -ContentType "application/json" -TimeoutSec 3
+    $armedId = $run.script_id
+    Assert-True "script_id returned" ($null -ne $armedId)
+    Assert-Equal "status" $run.status "armed"
+} catch {
+    Write-Host "  FAIL: /script/run (trigger): $_" -ForegroundColor Red
+    $script:Failures++
+}
+
+# ── Step 8: GET /script/{id} — armed ──
+if ($null -ne $armedId) {
+    Write-Host "`n=== Step 8: GET /script/$armedId (armed) ===" -ForegroundColor Cyan
+    try {
+        $st = Invoke-RestMethod -Uri "$BaseUrl/script/$armedId" -Method Get -TimeoutSec 3
+        Assert-Equal "id" $st.id $armedId
+        Assert-Equal "status" $st.status "armed"
+    } catch {
+        Write-Host "  FAIL: /script/$armedId : $_" -ForegroundColor Red
+        $script:Failures++
+    }
+}
+
+# ── Step 9: POST /script/stop (armed) ──
+if ($null -ne $armedId) {
+    Write-Host "`n=== Step 9: POST /script/stop (armed) ===" -ForegroundColor Cyan
+    try {
+        $stop = Invoke-RestMethod -Uri "$BaseUrl/script/stop" -Method Post -TimeoutSec 3
+        Assert-True "stopped response" ($null -ne $stop)
+        Assert-Equal "script_id" $stop.script_id $armedId
+    } catch {
+        Write-Host "  FAIL: /script/stop (armed): $_" -ForegroundColor Red
+        $script:Failures++
+    }
+}
+
+# ── Step 10: error paths ──
+Write-Host "`n=== Step 10: error paths ===" -ForegroundColor Cyan
 try {
     Invoke-RestMethod -Uri "$BaseUrl/script/run" -Method Post -Body "not json" -ContentType "application/json" -TimeoutSec 3 | Out-Null
     Write-Host "  FAIL: invalid JSON should be 400" -ForegroundColor Red
@@ -152,8 +198,8 @@ try {
     }
 }
 
-# ── Step 8: load test (20 параллельных /state) ──
-Write-Host "`n=== Step 8: load test (20 parallel /state) ===" -ForegroundColor Cyan
+# ── Step 11: load test (20 параллельных /state) ──
+Write-Host "`n=== Step 11: load test (20 parallel /state) ===" -ForegroundColor Cyan
 try {
     Add-Type -AssemblyName System.Net.Http
     $client = [System.Net.Http.HttpClient]::new()
@@ -171,9 +217,9 @@ try {
     $script:Failures++
 }
 
-# ── Step 9: POST /eject (только с -Eject) ──
+# ── Step 12: POST /eject (только с -Eject) ──
 if ($Eject) {
-    Write-Host "`n=== Step 9: POST /eject ===" -ForegroundColor Cyan
+    Write-Host "`n=== Step 12: POST /eject ===" -ForegroundColor Cyan
     try {
         $ej = Invoke-RestMethod -Uri "$BaseUrl/eject" -Method Post -TimeoutSec 3
         Assert-True "ejecting response" ($ej.ejecting -eq $true)
