@@ -6,6 +6,7 @@
 //! для playback — его исходную запись.
 
 mod dump;
+mod script;
 
 use std::path::PathBuf;
 use std::process;
@@ -13,7 +14,7 @@ use std::process;
 use rusqlite::Connection;
 
 fn usage() -> String {
-    "Использование: dbdump <run_id> [--out DIR] [--db PATH]".to_string()
+    "Использование: dbdump <run_id> [--script [--pretty]] [--out DIR] [--db PATH]".to_string()
 }
 
 /// `%LOCALAPPDATA%\drmod\runs.db` — как в `init_db` мода.
@@ -24,15 +25,19 @@ fn default_db_path() -> Result<PathBuf, String> {
     }
 }
 
-fn parse_args() -> Result<(i64, PathBuf, PathBuf), String> {
+fn parse_args() -> Result<(i64, PathBuf, PathBuf, bool, bool), String> {
     let mut args = std::env::args().skip(1);
     let mut run_id: Option<i64> = None;
     let mut out = PathBuf::from(".");
     let mut db = default_db_path()?;
+    let mut script = false;
+    let mut pretty = false;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--out" => out = PathBuf::from(args.next().ok_or("--out: нужен путь")?),
             "--db" => db = PathBuf::from(args.next().ok_or("--db: нужен путь")?),
+            "--script" => script = true,
+            "--pretty" => pretty = true,
             other => {
                 if run_id.is_none() {
                     run_id = Some(
@@ -50,11 +55,13 @@ fn parse_args() -> Result<(i64, PathBuf, PathBuf), String> {
         run_id.ok_or_else(usage)?,
         out,
         db,
+        script,
+        pretty,
     ))
 }
 
 fn run() -> Result<(), String> {
-    let (run_id, out, db) = parse_args()?;
+    let (run_id, out, db, script, pretty) = parse_args()?;
     let conn = Connection::open(&db).map_err(|e| format!("Не удалось открыть БД {}: {e}", db.display()))?;
 
     let meta = match dump::load_run_meta(&conn, run_id)? {
@@ -73,6 +80,22 @@ fn run() -> Result<(), String> {
         meta.frame_count,
         db.display()
     );
+
+    if script {
+        // JSON-скрипт для HTTP API (POST /script/run) — только указанный прогон.
+        let frames = dump::load_frames(&conn, &meta)?;
+        let json = script::build_script(&meta, &frames, pretty)?;
+        std::fs::create_dir_all(&out).map_err(|e| format!("Создать {}: {e}", out.display()))?;
+        let path = out.join(format!("run_{}_script.json", meta.id));
+        std::fs::write(&path, json).map_err(|e| format!("Записать {}: {e}", path.display()))?;
+        println!(
+            "  run_{}_script: {} кадров -> {}",
+            meta.id,
+            frames.len(),
+            path.display()
+        );
+        return Ok(());
+    }
 
     let ids = dump::linked_run_ids(&conn, &meta)?;
     std::fs::create_dir_all(&out).map_err(|e| format!("Создать {}: {e}", out.display()))?;

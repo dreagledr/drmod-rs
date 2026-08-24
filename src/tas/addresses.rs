@@ -129,70 +129,10 @@ pub(crate) const CURRENT_INPUT_OFFSET: usize = 0xCF8;
 /// Pl0000::updateInput копирует его в m_CurrentInput (гипотеза №1 FINDINGS).
 pub(crate) const GLOBAL_INPUT_UNIT0: usize = 0x177B850;
 
-/// Биты действий в `InputUnit.buttons_down`/`buttons_pressed` (эмпирически,
-/// подтверждено сопоставлением с сырыми клавишами/мышью в debug-логе).
-pub(crate) mod input_bits {
-    /// Прыжок (Space) — бит 0x10 (эмпирически, 2026-08-18: ручной прыжок даёт
-    /// `cur_in down=00000010 pressed=00000010` + `space=true`, y поднимается;
-    /// удержание держит down). Бит 0x1 — кнопка меню выбора оружия (открывает
-    /// меню и навигирует по слотам), НЕ прыжок.
-    pub const JUMP: u32 = 0x0000_0010;
-    /// AR-режим (клавиша 1) — бит 0x08 в InputUnit (эмпирически, 2026-08-19).
-    /// Игра кодирует AR-режим этим битом; raw-подача через кэш `ms_KeyInput`
-    /// не работает (§10.3) — механизм как у прыжка: бит + фронт pressed.
-    pub const AR_MODE: u32 = 0x0000_0008;
-    /// Меню выбора оружия (клавиша 2) — бит 0x1 в InputUnit (эмпирически,
-    /// 2026-08-19). Игра кодирует меню оружия этим битом (тот, что раньше
-    /// ошибочно считался прыжком, §10.1); raw-подача через кэш `ms_KeyInput`
-    /// не работает (§10.3) — механизм как у прыжка: бит + фронт pressed.
-    /// Примечание (2026-08-19): меню теперь открывается прямой записью
-    /// GameMenuStatus (см. api.rs) — бит 0x1 остаётся как reference.
-    #[allow(dead_code)]
-    pub const WEAPON_SELECT: u32 = 0x0000_0001;
-    /// Навигация в меню — D-Pad биты геймпада (`eInputButton` из SDK):
-    /// DPAD_LEFT=0x1, DPAD_RIGHT=0x2, DPAD_DOWN=0x4, DPAD_UP=0x8.
-    /// Проверено live (2026-08-19): подача бита 0x1 в открытом меню оружия
-    /// двигает выбор. В геймплее эти же биты — кнопки D-Pad (0x1 = weapon
-    /// select, 0x8 = AR mode), поэтому меню нужно открывать отдельно (прямая
-    /// запись GameMenuStatus), а навигацию подавать после открытия.
-    pub const MENU_LEFT: u32 = 0x0000_0001;
-    pub const MENU_RIGHT: u32 = 0x0000_0002;
-    pub const MENU_DOWN: u32 = 0x0000_0004;
-    pub const MENU_UP: u32 = 0x0000_0008;
-    /// Подтверждение в меню — BUTTON_A (0x10) геймпада. В геймплее A = jump,
-    /// в меню A = confirm (SDK `eInputButton`). Тот же бит, что JUMP.
-    pub const CONFIRM: u32 = 0x0000_0010;
-    /// Отмена/назад в меню — BUTTON_B (0x20) геймпада. В геймплее B = лёгкая
-    /// атака, в меню B = отмена (SDK `eInputButton`). Клавиатурный эквивалент
-    /// — Esc (0x8E). Гипотеза 2026-08-19: в записи Esc (0x8E) закрывает меню
-    /// оружия — вероятно, маппится в этот бит.
-    pub const CANCEL: u32 = 0x0000_0020;
-    /// Лёгкая атака (ЛКМ)
-    pub const LIGHT_ATTACK: u32 = 0x0000_0040;
-    /// Тяжёлая атака (ПКМ)
-    pub const HEAVY_ATTACK: u32 = 0x0000_0080;
-    /// Движение вперёд (W) — сопутствует left_stick=(0,-1000)
-    pub const FORWARD: u32 = 0x0040_0000;
-    /// Движение назад (S) — left_stick=(0,1000). Подтверждено логом (2026-08-18):
-    /// `cur_in down=00800000` при S.
-    pub const BACK: u32 = 0x0080_0000;
-    /// Движение влево (A) — left_stick=(-1000,0). Подтверждено логом:
-    /// `cur_in down=00200000` при A.
-    pub const LEFT: u32 = 0x0020_0000;
-    /// Движение вправо (D) — left_stick=(1000,0). Подтверждено логом:
-    /// `cur_in down=00100000` при D.
-    pub const RIGHT: u32 = 0x0010_0000;
-    /// Ninja run (LCtrl) — бит в InputUnit, сопутствует FORWARD при удержании
-    /// LCtrl (лог: `cur_in down=00404000`). Сам keybind — KEYBIND_NINJARUN (9),
-    /// подаётся через isKeybindDown; бит нужен только для декодирования логов.
-    pub const NINJA_RUN: u32 = 0x0000_4000;
-    /// Blade mode — бит в InputUnit (эмпирически, 2026-08-18: запись 33 в БД —
-    /// реальное удержание клавиши блейда даёт `down=00400800` + фронт
-    /// `pressed=00000800` на 1-м кадре). Игра кодирует блейд этим битом
-    /// (как ninja_run — 0x4000); keybind-эмуляция (isKeybindDown(8)) НЕ
-    /// работает для скриптов — игра читает её только в key-event обработке.
-    pub const BLADE: u32 = 0x0000_0800;
-}
+/// Биты действий в `InputUnit.buttons_down`/`buttons_pressed` — общие с
+/// инструментами (dbdump декодирует записи в скрипты API), определены в
+/// `drmod-replay-types` (единый источник истины).
+pub(crate) use drmod_replay_types::input_bits;
 
 /// Pl0000::m_fInputDirection — направление ввода (спроецировано на камеру).
 pub(crate) const PL_INPUT_DIR: usize = 0xD2C;

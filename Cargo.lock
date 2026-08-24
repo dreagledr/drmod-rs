@@ -558,6 +558,8 @@ dependencies = [
  "drmod-replay-types",
  "parquet",
  "rusqlite",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
