@@ -13,6 +13,12 @@ use crate::logger;
 
 /// cInput::ms_KeyInput — адрес сырого ввода клавиатуры (вычисляется в `install`).
 static KEY_INPUT_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// База модуля игры (сохранена для чтения GameMenuStatus из детуров).
+static BASE_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// Битмап кодов клавиш, нажатия которых игра увидела в меню (результат != 0):
+/// каждый код логируется один раз — так видно, какие коды реально приходят
+/// с устройства (и, значит, что можно подавать для меню).
+static MENU_PRESS_SEEN: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
 /// cInput::ms_MouseInput — адрес сырого ввода мыши (вычисляется в `install`).
 static MOUSE_INPUT_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// cInput::ms_bUpdateKeyboard — флаг автообновления кэша клавиш из DirectInput.
@@ -54,6 +60,9 @@ static RAW_KEYS_PRESSED: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
 /// Активна ли подача raw-клавиш: кэш `ms_KeyInput` заморожен
 /// (`ms_bUpdateKeyboard = false`) и перезаписывается нашими битмасками.
 static RAW_KEYS_ACTIVE: AtomicU32 = AtomicU32::new(0);
+/// true, если мы записали свои биты в `ms_KeyInput` (чтобы вернуть нули и не
+/// оставить «залипшую» клавишу — в паузе игра кэш сама не обновляет).
+static RAW_KEYS_IN_CACHE: AtomicU32 = AtomicU32::new(0);
 /// Сэмпл реального удержания blade (keybind 8) за кадр — результат оригинала
 /// `isKeybindDown`, накопленный детуром. Читается записью в render.
 #[cfg(debug_assertions)]
@@ -111,8 +120,8 @@ pub(crate) fn blade_hold() -> bool {
 /// (навигация в меню), `false` — удержание.
 #[allow(dead_code)]
 pub(crate) fn set_raw_key(code: u8, pressed: bool) {
-    let index = (code >> 5) as usize;
-    let bit = 1u32 << (code & 31);
+    let index = drmod_replay_types::key_codes::index(u32::from(code));
+    let bit = drmod_replay_types::key_codes::bit(u32::from(code));
     if index < 6 {
         if pressed {
             RAW_KEYS_PRESSED[index].fetch_or(bit, Ordering::Relaxed);
@@ -159,6 +168,7 @@ pub(crate) fn clear_raw_keys() {
         slot.store(0, Ordering::Relaxed);
     }
     RAW_KEYS_ACTIVE.store(0, Ordering::Relaxed);
+    unstick_raw_keys_cache();
     let addr = UPDATE_KEYBOARD_ADDR.load(Ordering::Relaxed);
     if addr != 0 {
         unsafe { *(addr as *mut u8) = 1 };
@@ -266,9 +276,13 @@ unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_
 
 /// Записывает эмулируемые raw-клавиши в `ms_KeyInput` и замораживает кэш
 /// (`ms_bUpdateKeyboard = false`), чтобы DirectInput не перезаписал их.
-/// Вызывается из детура `updateInputUnit` после оригинала — до `handleActions`,
-/// который читает кэш через `isKeyDown`/`isKeyPressed`.
-fn apply_raw_keys() {
+/// В геймплее вызывается из детура `updateInputUnit` после оригинала — до
+/// `handleActions`, который читает кэш через `isKeyDown`/`isKeyPressed`.
+/// В меню детур не выполняется (игра не гоняет тик ввода), поэтому
+/// `script_tick` зовёт эту функцию из render-потока: тогда кэш обновляем мы,
+/// а DirectInput его не трогает (меню читает именно кэш — проверено
+/// 2026-09-10: реальные нажатия меню видны как `menu: press isKeyDown(0x8C)=1`).
+pub(crate) fn apply_raw_keys() {
     let addr = KEY_INPUT_ADDR.load(Ordering::Relaxed);
     if addr == 0 {
         return;
@@ -280,9 +294,29 @@ fn apply_raw_keys() {
             (*k).keys_pressed[i] = RAW_KEYS_PRESSED[i].load(Ordering::Relaxed);
         }
     }
+    RAW_KEYS_IN_CACHE.store(1, Ordering::Relaxed);
     let ua = UPDATE_KEYBOARD_ADDR.load(Ordering::Relaxed);
     if ua != 0 {
         unsafe { *(ua as *mut u8) = 0 };
+    }
+}
+
+/// Возвращает нули в `ms_KeyInput`, если мы туда писали, — иначе в меню
+/// останется «залипшая» клавиша (игра кэш в паузе сама не обновляет).
+fn unstick_raw_keys_cache() {
+    if RAW_KEYS_IN_CACHE.swap(0, Ordering::Relaxed) == 0 {
+        return;
+    }
+    let addr = KEY_INPUT_ADDR.load(Ordering::Relaxed);
+    if addr == 0 {
+        return;
+    }
+    let k = addr as *mut types::KeyInput;
+    unsafe {
+        for i in 0..6 {
+            (*k).keys_down[i] = 0;
+            (*k).keys_pressed[i] = 0;
+        }
     }
 }
 
@@ -340,38 +374,186 @@ unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
     result
 }
 
+/// Диагностика меню: логирует первое нажатие (результат != 0), которое игра
+/// увидела в меню — так видно, какие коды реально приходят с устройства
+/// (`menu: press isKeyDown(0x8C)=1` — так была найдена кодировка бит).
+fn log_menu_press(kind: &str, vkey: i32, result: i32) {
+    if result == 0 {
+        return;
+    }
+    if let Some((index, bit, status)) = menu_key_slot(vkey)
+        && MENU_PRESS_SEEN[index].fetch_or(bit, Ordering::Relaxed) & bit == 0
+    {
+        logger::log_line(&format!(
+            "menu: press {}(0x{:X})=1 при статусе {}",
+            kind, vkey, status
+        ));
+    }
+}
+
+/// (индекс битмапа, бит, статус меню) — только если игра не в геймплее.
+fn menu_key_slot(vkey: i32) -> Option<(usize, u32, i32)> {
+    let base = BASE_ADDR.load(Ordering::Relaxed);
+    if base == 0 {
+        return None;
+    }
+    let status = unsafe { *((base + addresses::GAME_MENU_STATUS) as *const i32) };
+    if status == 1 {
+        return None; // геймплей — это не меню
+    }
+    let index = ((vkey as u32 & 0xFF) >> 5) as usize;
+    if index >= 8 {
+        return None;
+    }
+    Some((index, drmod_replay_types::key_codes::bit(vkey as u32), status))
+}
+
+/// Снимки сырого состояния клавиатуры для логирования изменений (диагностика:
+/// по ним видно, какое состояние меняет реальное нажатие в меню).
+static PREV_KEYS_DOWN: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
+static PREV_KEYS_PRESSED: [AtomicU32; 6] = [const { AtomicU32::new(0) }; 6];
+static PREV_INPUT_KEYS: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
+
+/// Диагностика: логирует изменения `ms_KeyInput` (игровые коды) и
+/// `ms_InputKeys` (DirectInput, DIK-коды). Вызывается из render-цикла: по этим
+/// строкам видно, какое состояние меняет реальное нажатие клавиши — и, значит,
+/// что нужно подавать, чтобы меню увидело ввод.
+pub(crate) fn log_key_state_changes() {
+    let ki = KEY_INPUT_ADDR.load(Ordering::Relaxed);
+    if ki != 0 {
+        let k = ki as *const types::KeyInput;
+        let (down, pressed) = unsafe { ((*k).keys_down, (*k).keys_pressed) };
+        for i in 0..6 {
+            let prev = PREV_KEYS_DOWN[i].swap(down[i], Ordering::Relaxed);
+            if prev != down[i] {
+                logger::log_line(&format!(
+                    "keys: ms_KeyInput.down[{i}] {prev:08X} -> {:08X}",
+                    down[i]
+                ));
+            }
+            let prev = PREV_KEYS_PRESSED[i].swap(pressed[i], Ordering::Relaxed);
+            if prev != pressed[i] {
+                logger::log_line(&format!(
+                    "keys: ms_KeyInput.pressed[{i}] {prev:08X} -> {:08X}",
+                    pressed[i]
+                ));
+            }
+        }
+    }
+    let base = BASE_ADDR.load(Ordering::Relaxed);
+    if base == 0 {
+        return;
+    }
+    let addr = base + addresses::INPUT_KEYS;
+    for byte in 0..256usize {
+        let value = unsafe { *((addr + byte) as *const u8) };
+        let word = byte >> 5;
+        let bit = 1u32 << (byte & 31);
+        let had = PREV_INPUT_KEYS[word].load(Ordering::Relaxed) & bit != 0;
+        let has = value != 0;
+        if had != has {
+            if has {
+                PREV_INPUT_KEYS[word].fetch_or(bit, Ordering::Relaxed);
+            } else {
+                PREV_INPUT_KEYS[word].fetch_and(!bit, Ordering::Relaxed);
+            }
+            logger::log_line(&format!(
+                "keys: ms_InputKeys[0x{byte:02X}] {} (DIK)",
+                if has { "down" } else { "up" }
+            ));
+        }
+    }
+}
+
+/// DIK-биты, которые мы подмешиваем в `ms_InputKeys` после опроса DirectInput
+/// (битмап по DIK-кодам: 8 слов = 256 кодов). Подаются из `script_tick`.
+static EMULATED_DIK: [AtomicU32; 8] = [const { AtomicU32::new(0) }; 8];
+static ORIG_KEYBOARD_POLL: OnceLock<unsafe extern "thiscall" fn(*const u8)> = OnceLock::new();
+
+/// Подаёт DIK-клавиши (DirectInput, 8 слов = 256 кодов) — их подмешает детур
+/// `KEYBOARD_POLL` после опроса устройства, и игра увидит клавишу как реальную
+/// (меню читает именно этот путь; запись в кэши не работает — игра их
+/// перезаписывает каждый кадр, проверено 2026-09-10).
+pub(crate) fn set_dik_mask(mask: [u32; 8]) {
+    for (slot, value) in EMULATED_DIK.iter().zip(mask) {
+        slot.store(value, Ordering::Relaxed);
+    }
+}
+
+/// Снимает поданные DIK-клавиши.
+pub(crate) fn clear_dik_mask() {
+    set_dik_mask([0; 8]);
+}
+
+/// Детур опроса клавиатуры (`base+0x9D9670`): вызывает оригинал (DirectInput
+/// `GetDeviceState` заполняет `ms_InputKeys`), затем подмешивает наши DIK-биты.
+unsafe extern "thiscall" fn keyboard_poll_detour(this: *const u8) {
+    if let Some(&orig) = ORIG_KEYBOARD_POLL.get() {
+        unsafe { orig(this) };
+    }
+    let base = BASE_ADDR.load(Ordering::Relaxed);
+    if base == 0 {
+        return;
+    }
+    let keys = (base + addresses::INPUT_KEYS) as *mut u8;
+    for (word_index, word) in EMULATED_DIK.iter().enumerate() {
+        let word = word.load(Ordering::Relaxed);
+        if word == 0 {
+            continue;
+        }
+        for bit in 0..32 {
+            if word & (1 << bit) == 0 {
+                continue;
+            }
+            let dik = (word_index * 32 + bit) as usize;
+            unsafe { *keys.add(dik) |= 0x80 };
+        }
+    }
+}
+
+/// Сохраняет trampoline оригинала опроса клавиатуры.
+fn set_original_keyboard_poll(
+    orig: unsafe extern "thiscall" fn(*const u8),
+) -> Result<(), ()> {
+    ORIG_KEYBOARD_POLL.set(orig).map_err(|_| ())
+}
+
 /// Детур `KeyInput::isKeyDown` (thiscall, 0x9D93A0). Для эмулируемых клавиш
 /// (`RAW_KEYS_DOWN[index] & bit != 0`) возвращает 1 — меню-клавиши
 /// (weapon_select/pause/confirm/codec/menu_*) работают через функцию 0x8AC570,
 /// которая вызывает `isKeyDown` с игровыми кодами клавиш (0x8D/0x8E/0x8C/0x8F/
 /// 0x90..0x93). Остальные клавиши идут в оригинал.
 unsafe extern "thiscall" fn is_key_down_detour(this: *const u8, vkey: i32) -> i32 {
-    let index = (vkey >> 5) as usize;
-    let bit = 1u32 << (vkey & 31);
+    let index = drmod_replay_types::key_codes::index(vkey as u32);
+    let bit = drmod_replay_types::key_codes::bit(vkey as u32);
     if index < 6 && RAW_KEYS_DOWN[index].load(Ordering::Relaxed) & bit != 0 {
         crate::logger::log_line(&format!("isKeyDown(0x{:X}) -> 1 (emulated)", vkey));
         return 1;
     }
-    if let Some(&orig) = ORIG_IS_KEY_DOWN.get() {
+    let result = if let Some(&orig) = ORIG_IS_KEY_DOWN.get() {
         unsafe { orig(this, vkey) }
     } else {
         0
-    }
+    };
+    log_menu_press("isKeyDown", vkey, result);
+    result
 }
 
 /// Детур `KeyInput::isKeyPressed` (thiscall, 0x9D9400). Аналогично
 /// `is_key_down_detour`, но для фронта нажатия (`RAW_KEYS_PRESSED`).
 unsafe extern "thiscall" fn is_key_pressed_detour(this: *const u8, vkey: i32) -> i32 {
-    let index = (vkey >> 5) as usize;
-    let bit = 1u32 << (vkey & 31);
+    let index = drmod_replay_types::key_codes::index(vkey as u32);
+    let bit = drmod_replay_types::key_codes::bit(vkey as u32);
     if index < 6 && RAW_KEYS_PRESSED[index].load(Ordering::Relaxed) & bit != 0 {
         return 1;
     }
-    if let Some(&orig) = ORIG_IS_KEY_PRESSED.get() {
+    let result = if let Some(&orig) = ORIG_IS_KEY_PRESSED.get() {
         unsafe { orig(this, vkey) }
     } else {
         0
-    }
+    };
+    log_menu_press("isKeyPressed", vkey, result);
+    result
 }
 
 /// Сохраняет trampoline (адрес оригинальной функции) после создания хука.
@@ -415,12 +597,14 @@ pub struct InputHooks {
     keybind_down: Option<MhHook>,
     key_down: Option<MhHook>,
     key_pressed: Option<MhHook>,
+    keyboard_poll: Option<MhHook>,
 }
 
 impl InputHooks {
     /// Устанавливает все хуки ввода и запоминает адреса сырого ввода.
     /// Каждый хук логирует свой результат в debug.log.
     pub fn new(base_addr: usize) -> Self {
+        BASE_ADDR.store(base_addr, Ordering::Relaxed);
         KEY_INPUT_ADDR.store(
             if base_addr == 0 {
                 0
@@ -451,15 +635,17 @@ impl InputHooks {
         let keybind_down = Self::create_keybind_down_hook(base_addr);
         let key_down = Self::create_key_down_hook(base_addr);
         let key_pressed = Self::create_key_pressed_hook(base_addr);
+        let keyboard_poll = Self::create_keyboard_poll_hook(base_addr);
 
         logger::log_line(&format!(
-            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={}",
+            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={}",
             base_addr,
             if input.is_some() { "OK" } else { "FAIL" },
             if keybind.is_some() { "OK" } else { "FAIL" },
             if keybind_down.is_some() { "OK" } else { "FAIL" },
             if key_down.is_some() { "OK" } else { "FAIL" },
-            if key_pressed.is_some() { "OK" } else { "FAIL" }
+            if key_pressed.is_some() { "OK" } else { "FAIL" },
+            if keyboard_poll.is_some() { "OK" } else { "FAIL" }
         ));
 
         Self {
@@ -468,6 +654,7 @@ impl InputHooks {
             keybind_down,
             key_down,
             key_pressed,
+            keyboard_poll,
         }
     }
 
@@ -614,6 +801,46 @@ impl InputHooks {
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_key_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// Устанавливает MinHook на опрос клавиатуры (`base+0x9D9670`, DirectInput
+    /// `GetDeviceState`): после оригинала подмешивает наши DIK-биты
+    /// (`set_dik_mask`) — так игра видит клавиши меню как реальные.
+    fn create_keyboard_poll_hook(base_addr: usize) -> Option<MhHook> {
+        use core::ffi::c_void;
+
+        if base_addr == 0 {
+            logger::log_line("create_keyboard_poll_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + addresses::KEYBOARD_POLL) as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, keyboard_poll_detour as *mut c_void) } {
+            Ok(h) => h,
+            Err(e) => {
+                logger::log_line(&format!(
+                    "create_keyboard_poll_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "thiscall" fn(*const u8) =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = set_original_keyboard_poll(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            logger::log_line(&format!(
+                "create_keyboard_poll_hook: queue_enable FAIL err={:?}",
+                e
+            ));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        logger::log_line(&format!(
+            "create_keyboard_poll_hook: OK target=0x{:08X} trampoline=0x{:08X}",
             target as usize,
             hook.trampoline() as usize
         ));

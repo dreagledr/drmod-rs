@@ -1,0 +1,11 @@
+{
+  "name": "r01-beach-restart-test",
+  "restart": {},
+  "trigger": { "pos": [-24.70, 12.15, 120.70] },
+  "commands": [
+    { "t": 0,  "duration": 40, "input": { "forward": true } },
+    { "t": 45, "duration": 3,  "input": { "jump": true } },
+    { "t": 55, "duration": 40, "input": { "forward": true } },
+    { "t": 100, "duration": 20, "input": { "camera": [120, 0] } }
+  ]
+}

@@ -1,9 +1,19 @@
 use drmod_rs_lib::DEFAULT_TITLE;
 use hudhook::inject::Process;
 use std::env;
+use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
+use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+use windows::Win32::System::Memory::{
+    MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE, VirtualAllocEx, VirtualFreeEx,
+};
+use windows::Win32::System::Threading::{
+    CreateRemoteThread, GetExitCodeThread, INFINITE, WaitForSingleObject,
+};
 use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
-use windows::core::{h, PCWSTR};
+use windows::core::{PCWSTR, h, s, w};
 
 // DLL embedded at compile time. Binary crate compiles after the library,
 // so the DLL already exists in the target directory.
@@ -46,8 +56,80 @@ fn main() {
         }
     };
 
-    if let Err(e) = process.inject(dll_path) {
-        show_msgbox(&format!("Не смогли внедрить мод в MGR.\n{}", e));
+    // Своя загрузка вместо `Process::inject`: hudhook не проверяет код выхода
+    // удалённого `LoadLibraryW`, поэтому неудачная загрузка DLL выглядит как
+    // «инжект прошёл, а мода нет». Здесь код выхода печатается (HMODULE или 0).
+    match inject_and_check(process.handle(), &dll_path) {
+        Ok(handle) if handle != 0 => {
+            println!("инжект OK: LoadLibraryW вернул 0x{handle:08X} ({})", dll_path.display());
+        }
+        Ok(_) => {
+            let msg = format!(
+                "LoadLibraryW в игре вернул 0 — DLL не загрузилась.\n{}",
+                dll_path.display()
+            );
+            println!("{msg}");
+            show_msgbox(&msg);
+        }
+        Err(e) => {
+            let msg = format!("Не смогли внедрить мод в MGR.\n{e}");
+            println!("{msg}");
+            show_msgbox(&msg);
+        }
+    }
+}
+
+/// Загружает DLL в процесс игры удалённым `LoadLibraryW` и возвращает код
+/// выхода потока (HMODULE при успехе, 0 при неудаче).
+fn inject_and_check(
+    process: HANDLE,
+    dll_path: &std::path::Path,
+) -> std::result::Result<usize, String> {
+    let wide: Vec<u16> = dll_path
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {}: {e}", dll_path.display()))?
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let bytes = wide.len() * size_of::<u16>();
+    unsafe {
+        let kernel32 =
+            GetModuleHandleW(w!("Kernel32")).map_err(|e| format!("GetModuleHandleW: {e}"))?;
+        let load_library =
+            GetProcAddress(kernel32, s!("LoadLibraryW")).ok_or("нет LoadLibraryW")?;
+        let remote = VirtualAllocEx(process, None, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if remote.is_null() {
+            return Err("VirtualAllocEx вернул NULL".into());
+        }
+        let mut written = 0usize;
+        WriteProcessMemory(
+            process,
+            remote,
+            wide.as_ptr().cast(),
+            bytes,
+            Some(&mut written),
+        )
+        .map_err(|e| format!("WriteProcessMemory: {e}"))?;
+        let thread = CreateRemoteThread(
+            process,
+            None,
+            0,
+            Some(std::mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
+            >(load_library)),
+            Some(remote),
+            0,
+            None,
+        )
+        .map_err(|e| format!("CreateRemoteThread: {e}"))?;
+        WaitForSingleObject(thread, INFINITE);
+        let mut code = 0u32;
+        GetExitCodeThread(thread, &mut code).map_err(|e| format!("GetExitCodeThread: {e}"))?;
+        let _ = CloseHandle(thread);
+        let _ = VirtualFreeEx(process, remote, 0, MEM_RELEASE);
+        Ok(code as usize)
     }
 }
 

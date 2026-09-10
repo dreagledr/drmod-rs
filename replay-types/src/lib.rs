@@ -33,6 +33,24 @@ pub struct InputUnit {
     pub repeat_count: i32,
 }
 
+/// Кодировка игровых кодов клавиш в словах `m_aKeysDown`/`m_aKeysPressed`
+/// (`cInput::ms_KeyInput`). Единый источник истины для мода (`src/tas`) и
+/// инструментов (`tools/dbdump`).
+pub mod key_codes {
+    /// Индекс слова: `code >> 5` (6 слов = 256 кодов).
+    pub fn index(code: u32) -> usize {
+        (code >> 5) as usize
+    }
+
+    /// Бит кода внутри слова. Порядок бит ОБРАТНЫЙ: старший бит — код 0
+    /// (`0x8000_0000 >> (code & 31)`). Проверено live 2026-09-10: нажатие
+    /// стрелки вниз (код 0x8C) меняет `down[4]` в `0x0008_0000`
+    /// (`0x8000_0000 >> 12`), а не `1 << 12`.
+    pub fn bit(code: u32) -> u32 {
+        0x8000_0000u32 >> (code & 31)
+    }
+}
+
 /// Биты действий в `InputUnit.buttons_down`/`buttons_pressed` (эмпирически,
 /// подтверждено сопоставлением с сырыми клавишами/мышью в debug-логе).
 /// Общие для мода (`src/tas/addresses.rs` — re-export) и инструментов
@@ -68,10 +86,14 @@ pub mod input_bits {
     /// в меню A = confirm (SDK `eInputButton`). Тот же бит, что JUMP.
     pub const CONFIRM: u32 = 0x0000_0010;
     /// Отмена/назад в меню — BUTTON_B (0x20) геймпада. В геймплее B = лёгкая
-    /// атака, в меню B = отмена (SDK `eInputButton`). Клавиатурный эквивалент
-    /// — Esc (0x8E). Гипотеза 2026-08-19: в записи Esc (0x8E) закрывает меню
-    /// оружия — вероятно, маппится в этот бит.
+    /// атака, в меню B = отмена (SDK `eInputButton`).
     pub const CANCEL: u32 = 0x0000_0020;
+    /// Пауза/меню — реальный Esc кодируется этим битом (эмпирически,
+    /// 2026-09-10, `debug.log` P118_BEACH: кадр смены `status_raw 1→3`
+    /// (InGame→PauseMenu) имеет `cur_in down=00000100 pressed=00000100`, т.е.
+    /// Esc = START-бит геймпада, а не BUTTON_B 0x20). Механизм как у `jump`:
+    /// бит + фронт `pressed` на первом кадре команды.
+    pub const PAUSE: u32 = 0x0000_0100;
     /// Лёгкая атака (ЛКМ)
     pub const LIGHT_ATTACK: u32 = 0x0000_0040;
     /// Тяжёлая атака (ПКМ)

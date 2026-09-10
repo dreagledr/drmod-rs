@@ -66,14 +66,23 @@ const BUILTIN_SCRIPT: &str = r#"{
 }"#;
 
 /// Статус скрипта.
-#[derive(Clone, Copy, PartialEq, Serialize)]
+#[derive(Clone, Copy, PartialEq, Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum ScriptStatus {
+    /// Идёт фаза рестарта миссии (поле `restart`) — меню паузы, стрелки, confirm.
+    Restarting,
     /// Взведён с триггером старта по позиции — ждёт попадания игрока в зону.
     Armed,
     Running,
     Done,
     Stopped,
+}
+
+impl ScriptStatus {
+    /// Активен ли скрипт: держит слот, второй `POST /script/run` получает 409.
+    fn is_active(self) -> bool {
+        matches!(self, Self::Restarting | Self::Armed | Self::Running)
+    }
 }
 
 /// Вход одной команды скрипта (JSON-объект `input`). Все поля опциональны;
@@ -89,11 +98,13 @@ enum ScriptStatus {
 /// - битовые (`jump`/`light_attack`/`heavy_attack`/`ar_mode`/`weapon_select`) — бит
 ///   в InputUnit + фронт pressed на первом кадре команды;
 /// - pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/
-///   `codec`/`pause`/`camera_reset`/`zandatsu`) — фронт keybind'а
+///   `codec`/`camera_reset`/`zandatsu`) — фронт keybind'а
 ///   на первом кадре команды (isKeybindPressed), `duration` игнорируется;
-/// - меню-клавиши (`confirm`/`menu_up`/`menu_down`/`menu_left`/`menu_right`) —
-///   сырые клавиши в кэш `ms_KeyInput` (меню читает их через isKeyDown/
-///   isKeyPressed, а не через keybind'ы), фронт на первом кадре.
+/// - меню-клавиши (`pause`/`confirm`/`menu_up`/`menu_down`/`menu_left`/
+///   `menu_right`) — биты геймпада в InputUnit + фронт pressed: `pause` —
+///   START-bit 0x100 (реальный Esc), `confirm` — BUTTON_A 0x10, `menu_*` —
+///   D-Pad 0x8/0x4/0x1/0x2. Подача через кэш `ms_KeyInput` не работает
+///   (docs/API.md §10.3).
 #[derive(Clone, Copy, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptInput {
@@ -151,6 +162,17 @@ struct ScriptInput {
     menu_left: bool,
     #[serde(default)]
     menu_right: bool,
+    /// Сырой игровой код клавиши (docs/REPLAY.md §2.1) — эмуляция через
+    /// детуры `isKeyDown`/`isKeyPressed`. Нужен для меню: в паузе игра не
+    /// гоняет тик ввода, поэтому InputUnit-override до меню не доходит, а
+    /// клавиши меню читаются как раз через `isKeyDown`. Пример: `139` (0x8B).
+    #[serde(default)]
+    raw_key: Option<u32>,
+    /// Сырой DIK-код клавиши DirectInput (`ms_InputKeys[dik] = 0x80`) — второй
+    /// канал для меню: игра маппит DIK в игровой код сама. Пример: 0xD0 —
+    /// стрелка вниз (DIK_DOWN), 0xC8 — вверх.
+    #[serde(default)]
+    dik_key: Option<u32>,
     #[serde(default)]
     left_stick: Option<[f32; 2]>,
 }
@@ -186,6 +208,8 @@ impl ScriptInput {
             && !self.menu_right
             && self.camera.is_none()
             && self.left_stick.is_none()
+            && self.raw_key.is_none()
+            && self.dik_key.is_none()
     }
 }
 
@@ -216,10 +240,109 @@ struct ScriptRequest {
     /// иначе запускается сразу (текущее поведение).
     #[serde(default)]
     trigger: Option<ScriptTrigger>,
+    /// Если задан — перед взводом скрипт сам рестартует миссию через меню
+    /// паузы (см. `RestartSpec`). Один активный скрипт на мод, поэтому рестарт
+    /// и полёт делаются одной фазой одного скрипта.
+    #[serde(default)]
+    restart: Option<RestartSpec>,
+}
+
+/// Параметры рестарта миссии из меню паузы (поле `restart` запроса).
+///
+/// Схема (проверено live 2026-09-10 на P118_BEACH): `pause` (START) открывает
+/// меню; курсор ходит клавишами DirectInput (`dik`, мод подмешивает их после
+/// опроса устройства — работает только при окне игры в фокусе); пункт Restart
+/// открывает диалог «Restart from last checkpoint?» с уже выбранным YES,
+/// поэтому нужно два `confirm`.
+#[derive(Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestartSpec {
+    /// Нажатий «вверх» (в меню паузы Restart — нижний пункт).
+    #[serde(default = "one")]
+    ups: u32,
+    #[serde(default)]
+    downs: u32,
+    /// Кадров удержания стрелки.
+    #[serde(default = "six")]
+    hold: u32,
+    /// Пауза после `pause`: меню должно успеть открыться (короткая пауза —
+    /// стрелка приходит в анимацию и теряется).
+    #[serde(default = "twenty")]
+    open_gap: u32,
+    /// Пауза между стрелками и подтверждением.
+    #[serde(default = "ten")]
+    gap: u32,
+    /// Подтверждений подряд (2: пункт Restart + диалог YES).
+    #[serde(default = "two")]
+    confirms: u32,
+    /// Пауза между подтверждениями (диалог должен появиться).
+    #[serde(default = "twenty_five")]
+    confirm_gap: u32,
+    /// Хвост после последнего подтверждения (кадров).
+    #[serde(default = "fifteen")]
+    tail: u32,
+}
+
+fn one() -> u32 { 1 }
+fn two() -> u32 { 2 }
+fn six() -> u32 { 6 }
+fn ten() -> u32 { 10 }
+fn fifteen() -> u32 { 15 }
+fn twenty() -> u32 { 20 }
+fn twenty_five() -> u32 { 25 }
+
+impl RestartSpec {
+    /// Команды фазы рестарта: pause → стрелки → confirm ×N.
+    fn commands(self) -> Vec<ScriptCommand> {
+        let menu = |dik: u32, t: u32| ScriptCommand {
+            t,
+            duration: self.hold,
+            input: ScriptInput { dik_key: Some(dik), ..Default::default() },
+        };
+        let confirm = |t: u32| ScriptCommand {
+            t,
+            duration: 3,
+            input: ScriptInput { confirm: true, ..Default::default() },
+        };
+        let pause = ScriptCommand {
+            t: 0,
+            duration: 3,
+            input: ScriptInput { pause: true, ..Default::default() },
+        };
+        let mut cmds = vec![pause];
+        let mut t = 3 + self.open_gap;
+        for _ in 0..self.ups {
+            cmds.push(menu(addresses::DIK_UP, t));
+            t += self.hold + self.gap;
+        }
+        for _ in 0..self.downs {
+            cmds.push(menu(addresses::DIK_DOWN, t));
+            t += self.hold + self.gap;
+        }
+        for i in 0..self.confirms {
+            cmds.push(confirm(t));
+            let last = i + 1 == self.confirms;
+            t += 3 + if last { self.tail } else { self.confirm_gap };
+        }
+        cmds
+    }
 }
 
 fn default_script_name() -> String {
     "script".to_string()
+}
+
+/// Сколько кадров после конца рестарт-последовательности ждать loading, прежде
+/// чем признать рестарт неудавшимся (~4 с: загрузка миссии начинается в пределах
+/// секунды после `confirm`).
+const RESTART_LOADING_WAIT: u32 = 240;
+
+/// Фаза, в которую переходит скрипт после рестарта: команды пользователя и
+/// статус (Armed — ждать триггер, либо Running — если триггера нет).
+struct PendingScript {
+    commands: Vec<ScriptCommand>,
+    total_frames: u32,
+    status: ScriptStatus,
 }
 
 /// Активный (или последний) скрипт.
@@ -232,6 +355,8 @@ struct ScriptState {
     total_frames: u32,
     /// Точка триггера старта (если скрипт взведён через `trigger`).
     trigger: Option<segment::Vec3>,
+    /// Следующая фаза (заполняется, когда скрипт стартует с рестарта).
+    pending: Option<PendingScript>,
 }
 
 /// Один кадр кольцевого буфера (сырые данные, JSON-форма — `LogFrameJson`).
@@ -240,6 +365,15 @@ struct LogFrame {
     t_ms: u64,
     frame: u32,
     script_id: Option<u32>,
+    /// Статус меню на кадре — без него нельзя проверить сценарии меню
+    /// (пауза/рестарт): переходы InGame→PauseMenu→NONE видны только здесь.
+    menu_status: &'static str,
+    /// Что мы подали через override на этом кадре. В паузе `input` (cur_in)
+    /// залипает на бите паузы и поданных битов не показывает — навигацию
+    /// в меню видно только здесь.
+    fed_down_bits: u32,
+    fed_pressed_bits: u32,
+    fed_left_stick: [f32; 2],
     pos: [f32; 3],
     rot: [f32; 3],
     vel: [f32; 3],
@@ -259,6 +393,10 @@ struct LogFrameJson {
     t_ms: u64,
     frame: u32,
     script_id: Option<u32>,
+    menu_status: &'static str,
+    fed_down_bits: u32,
+    fed_pressed_bits: u32,
+    fed_left_stick: [f32; 2],
     pos: [f32; 3],
     rot: [f32; 3],
     vel: [f32; 3],
@@ -276,6 +414,11 @@ struct LogFrameJson {
 #[derive(Serialize)]
 struct InputJson {
     buttons: Vec<&'static str>,
+    /// Сырые битмаски InputUnit: нужны для меню-битов, которые пересекаются
+    /// с игровыми (`confirm`==`jump` 0x10, `menu_up`==`ar_mode` 0x8,
+    /// `menu_left`==`weapon_select` 0x1) — по именам их не различить.
+    down_bits: u32,
+    pressed_bits: u32,
     left_stick: [f32; 2],
     right_stick: [f32; 2],
 }
@@ -559,7 +702,44 @@ impl ApiServer {
         // запуске через HTTP).
         let base_addr = guard.base_addr;
         let script_id = if let Some(s) = guard.script.as_mut() {
-            if s.status == ScriptStatus::Running {
+            if s.status == ScriptStatus::Restarting {
+                // Фаза рестарта: подаём меню-ввод, пока не начался loading
+                // (миссия реально перезагрузилась) — только тогда переходим к
+                // командам пользователя. Иначе триггер сработал бы по старой
+                // позиции игрока (он мог стоять в зоне спавна) и прогон был бы
+                // невалидным, а скрипт снялся бы авто-стопом на loading.
+                let ov = script_tick(s, base_addr);
+                replay::set_input_override(ov);
+                let loading = !ui_state.player_found;
+                let timeout = s.frame >= s.total_frames + RESTART_LOADING_WAIT;
+                if loading || timeout {
+                    replay::set_input_override(InputOverride::default());
+                    hooks::clear_keybind_emulation();
+                    if let Some(next) = s.pending.take() {
+                        s.commands = next.commands;
+                        s.total_frames = next.total_frames;
+                        s.frame = 0;
+                        s.status = if loading {
+                            next.status
+                        } else {
+                            // loading не наступил — рестарт не сработал
+                            // (курсор не на пункте Restart, нет фокуса окна)
+                            logger::log_line(&format!(
+                                "api: script {} '{}' рестарт не сработал: loading не наступил",
+                                s.id, s.name
+                            ));
+                            ScriptStatus::Stopped
+                        };
+                        logger::log_line(&format!(
+                            "api: script {} '{}' restart done -> {:?} (loading={})",
+                            s.id, s.name, next.status, loading
+                        ));
+                    } else {
+                        s.status = ScriptStatus::Done;
+                    }
+                }
+                Some(s.id)
+            } else if s.status == ScriptStatus::Running {
                 let ov = script_tick(s, base_addr);
                 replay::set_input_override(ov);
                 if s.status == ScriptStatus::Done {
@@ -607,10 +787,21 @@ impl ApiServer {
 
         if ui_state.player_found {
             let frame_count = guard.frame_count;
+            let fed = replay::input_override();
+            let (fed_down, fed_pressed, fed_left) = (
+                fed.input.buttons_down,
+                fed.input.buttons_pressed,
+                fed.input.left_stick,
+            );
+            drop(fed);
             guard.ring.push(LogFrame {
                 t_ms: elapsed_ms,
                 frame: frame_count,
                 script_id,
+                menu_status: ui_state.menu_status.name(),
+                fed_down_bits: fed_down,
+                fed_pressed_bits: fed_pressed,
+                fed_left_stick: fed_left,
                 pos: state.pos,
                 rot: state.rotation,
                 vel: state.velocity,
@@ -638,9 +829,7 @@ impl ApiServer {
             .unwrap()
             .script
             .as_ref()
-            .is_some_and(|s| {
-                s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed
-            })
+            .is_some_and(|s| s.status.is_active())
     }
 
     /// Запрошен ли eject через `POST /eject`. Проверяется в render-цикле
@@ -672,9 +861,7 @@ impl ApiServer {
         if guard
             .script
             .as_ref()
-            .is_some_and(|s| {
-                s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed
-            })
+            .is_some_and(|s| s.status.is_active())
         {
             logger::log_line("api: builtin script ignored (another script active)");
             return;
@@ -696,6 +883,7 @@ impl ApiServer {
             status: ScriptStatus::Running,
             total_frames,
             trigger: None,
+            pending: None,
         });
         logger::log_line(&format!(
             "api: builtin script {} '{}' started ({} frames)",
@@ -715,7 +903,7 @@ impl ApiServer {
         hooks::clear_keybind_emulation();
         if let Ok(mut guard) = self.state.lock()
             && let Some(s) = guard.script.as_mut()
-            && (s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed)
+            && s.status.is_active()
         {
             s.status = ScriptStatus::Stopped;
         }
@@ -928,9 +1116,7 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     if guard
         .script
         .as_ref()
-        .is_some_and(|s| {
-            s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed
-        })
+        .is_some_and(|s| s.status.is_active())
     {
         let s = guard.script.as_ref().unwrap();
         return (
@@ -942,8 +1128,38 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     }
     let id = guard.next_script_id;
     guard.next_script_id += 1;
-    let total_frames = req
-        .commands
+    // С рестартом: первая фаза — меню паузы (pause → стрелки → confirm), после
+    // неё скрипт переходит к командам пользователя (Armed или сразу Running).
+    let (phase_commands, phase_status, pending) = match req.restart {
+        Some(spec) => {
+            let total = req
+                .commands
+                .iter()
+                .map(|c| c.t + c.duration)
+                .max()
+                .unwrap_or(0);
+            let pending = PendingScript {
+                commands: req.commands,
+                total_frames: total,
+                status: if req.trigger.is_some() {
+                    ScriptStatus::Armed
+                } else {
+                    ScriptStatus::Running
+                },
+            };
+            (spec.commands(), ScriptStatus::Restarting, Some(pending))
+        }
+        None => (
+            req.commands,
+            if req.trigger.is_some() {
+                ScriptStatus::Armed
+            } else {
+                ScriptStatus::Running
+            },
+            None,
+        ),
+    };
+    let total_frames = phase_commands
         .iter()
         .map(|c| c.t + c.duration)
         .max()
@@ -955,21 +1171,24 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
         y: t.pos[1],
         z: t.pos[2],
     });
-    let status = if trigger.is_some() {
-        ScriptStatus::Armed
-    } else {
-        ScriptStatus::Running
-    };
+    let status = phase_status;
+    let next_status = pending.as_ref().map(|p| p.status);
     guard.script = Some(ScriptState {
         id,
         name: req.name.clone(),
-        commands: req.commands,
+        commands: phase_commands,
         frame: 0,
         status,
         total_frames,
         trigger,
+        pending,
     });
-    if let Some(t) = trigger {
+    if phase_status == ScriptStatus::Restarting {
+        logger::log_line(&format!(
+            "api: script {} '{}' restart phase ({} frames), затем {:?}",
+            id, req.name, total_frames, next_status
+        ));
+    } else if let Some(t) = trigger {
         logger::log_line(&format!(
             "api: script {} '{}' armed, waiting for trigger ({:.1},{:.1},{:.1})",
             id, req.name, t.x, t.y, t.z
@@ -995,7 +1214,7 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
 fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     let mut guard = state.lock().unwrap();
     match guard.script.as_mut() {
-        Some(s) if s.status == ScriptStatus::Running || s.status == ScriptStatus::Armed => {
+        Some(s) if s.status.is_active() => {
             let id = s.id;
             stop_script(s);
             logger::log_line(&format!("api: script {} stopped by request", id));
@@ -1180,6 +1399,14 @@ fn script_tick(script: &mut ScriptState, base_addr: usize) -> InputOverride {
     };
     let mut active = false;
     let mut ripper_edge = false;
+    // Сырые клавиши меню: в паузе игра не гоняет тик ввода (InputUnit-override
+    // до меню не доходит), клавиши меню читаются через isKeyDown/isKeyPressed
+    // — эмулируем их коды (`raw_key`), детуры в hooks.rs вернут 1.
+    let mut raw_down = [0u32; 6];
+    let mut raw_pressed = [0u32; 6];
+    // DIK-клавиша DirectInput подана на этом кадре (`dik_key`).
+    let mut dik_active = false;
+    let mut dik_mask = [0u32; 8];
     let mut blade_on = false;
     let mut ninja_on = false;
     let mut walk_on = false;
@@ -1330,6 +1557,17 @@ fn script_tick(script: &mut ScriptState, base_addr: usize) -> InputOverride {
             zandatsu = true;
             active = true;
         }
+        // Пауза (Esc) — бит 0x100 в InputUnit + фронт pressed: реальный Esc
+        // кодируется именно им (debug.log 2026-09-10, P118_BEACH: кадр смены
+        // статуса 1→3 PauseMenu имеет `cur_in down=00000100 pressed=00000100`).
+        // Esc — это START геймпада, а не BUTTON_B (0x20).
+        if inp.pause {
+            unit.buttons_down |= addresses::input_bits::PAUSE;
+            if k == cmd.t {
+                unit.buttons_pressed |= addresses::input_bits::PAUSE;
+            }
+            active = true;
+        }
         // Навигация в меню — D-Pad биты геймпада (0x1/0x2/0x4/0x8) + подтверждение
         // BUTTON_A (0x10). Проверено live (2026-08-19): подача битов в открытом
         // меню двигает выбор. Меню открывается отдельно — weapon_select через
@@ -1349,6 +1587,18 @@ fn script_tick(script: &mut ScriptState, base_addr: usize) -> InputOverride {
                 }
                 active = true;
             }
+        }
+        if let Some(code) = inp.raw_key {
+            set_key_bit(&mut raw_down, code);
+            if k == cmd.t {
+                set_key_bit(&mut raw_pressed, code);
+            }
+            active = true;
+        }
+        if let Some(dik) = inp.dik_key {
+            set_dik_bit(&mut dik_mask, dik);
+            dik_active = true;
+            active = true;
         }
         if let Some(ls) = inp.left_stick {
             unit.left_stick = ls;
@@ -1374,8 +1624,24 @@ fn script_tick(script: &mut ScriptState, base_addr: usize) -> InputOverride {
     hooks::set_keybind_hold(addresses::KEYBIND_USE_ITEM, item);
     hooks::set_keybind_hold(addresses::KEYBIND_CAMERA_RESET, camera_reset);
     hooks::set_keybind_hold(addresses::KEYBIND_EXECUTION, zandatsu);
+    // Сырые клавиши меню живут один кадр: ставим биты текущего кадра, иначе
+    // снимаем (меню не должно видеть «залипшую» стрелку).
+    if raw_down.iter().any(|b| *b != 0) || raw_pressed.iter().any(|b| *b != 0) {
+        hooks::set_raw_keys(raw_down, raw_pressed);
+        // В меню детур `updateInputUnit` не выполняется (игра не гоняет тик
+        // ввода), поэтому кэш `ms_KeyInput` обновляем сами — меню читает
+        // именно его (реальные нажатия видны как `menu: press isKeyDown(...)`).
+        hooks::apply_raw_keys();
+    } else {
+        hooks::clear_raw_keys();
+    }
+    if dik_active {
+        hooks::set_dik_mask(dik_mask);
+    } else {
+        hooks::clear_dik_mask();
+    }
     script.frame += 1;
-    if script.frame >= script.total_frames {
+    if script.frame >= script.total_frames && script.pending.is_none() {
         script.status = ScriptStatus::Done;
     }
     InputOverride {
@@ -1409,6 +1675,10 @@ impl LogFrame {
             t_ms: self.t_ms,
             frame: self.frame,
             script_id: self.script_id,
+            menu_status: self.menu_status,
+            fed_down_bits: self.fed_down_bits,
+            fed_pressed_bits: self.fed_pressed_bits,
+            fed_left_stick: self.fed_left_stick,
             pos: self.pos,
             rot: self.rot,
             vel: self.vel,
@@ -1421,10 +1691,30 @@ impl LogFrame {
             camera_rot: camera_angles(self.camera_pos, self.camera_look_at, self.camera_roll),
             input: InputJson {
                 buttons: decode_buttons(self.input.buttons_down),
+                down_bits: self.input.buttons_down,
+                pressed_bits: self.input.buttons_pressed,
                 left_stick: self.input.left_stick,
                 right_stick: self.input.right_stick,
             },
         }
+    }
+}
+
+/// Ставит бит игрового кода клавиши в битмаску `m_aKeysDown`/`m_aKeysPressed`
+/// (общая кодировка — `drmod_replay_types::key_codes`).
+fn set_key_bit(bits: &mut [u32; 6], code: u32) {
+    let index = drmod_replay_types::key_codes::index(code);
+    if index < 6 {
+        bits[index] |= drmod_replay_types::key_codes::bit(code);
+    }
+}
+
+/// Ставит бит DIK-кода (0–255) в битмап из 8 слов: DIK — это линейный индекс
+/// байта в `ms_InputKeys` (в отличие от игровых кодов клавиш — `key_codes`).
+fn set_dik_bit(mask: &mut [u32; 8], dik: u32) {
+    let index = (dik >> 5) as usize;
+    if index < 8 {
+        mask[index] |= 1 << (dik & 31);
     }
 }
 
@@ -1457,6 +1747,9 @@ fn decode_buttons(down: u32) -> Vec<&'static str> {
     }
     if down & addresses::input_bits::BLADE != 0 {
         v.push("blade");
+    }
+    if down & addresses::input_bits::PAUSE != 0 {
+        v.push("pause");
     }
     v
 }

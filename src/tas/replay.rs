@@ -100,8 +100,9 @@ fn prepare_frame(mut f: ReplayFrame) -> ReplayFrame {
         (addresses::KEY_ESC, addresses::input_bits::CANCEL), // Esc = BUTTON_B (отмена)
     ];
     for (code, bit) in menu_map {
-        let idx = (code >> 5) as usize;
-        let b = 1u32 << (code & 31);
+        let code = u32::from(code);
+        let idx = drmod_replay_types::key_codes::index(code);
+        let b = drmod_replay_types::key_codes::bit(code);
         if idx < 6 && raw_down[idx] & b != 0 {
             input.buttons_down |= bit;
             if raw_pressed[idx] & b != 0 {
@@ -111,8 +112,9 @@ fn prepare_frame(mut f: ReplayFrame) -> ReplayFrame {
             raw_pressed[idx] &= !b;
         }
     }
-    let key2_idx = (addresses::KEY_DIGIT2 >> 5) as usize;
-    let key2_bit = 1u32 << (addresses::KEY_DIGIT2 & 31);
+    let key2 = u32::from(addresses::KEY_DIGIT2);
+    let key2_idx = drmod_replay_types::key_codes::index(key2);
+    let key2_bit = drmod_replay_types::key_codes::bit(key2);
     if key2_idx < 6 && raw_down[key2_idx] & key2_bit != 0 {
         raw_down[key2_idx] &= !key2_bit;
         raw_pressed[key2_idx] &= !key2_bit;

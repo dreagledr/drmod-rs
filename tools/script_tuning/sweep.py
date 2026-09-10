@@ -11,12 +11,19 @@
 С `--run` шлёт по одному `POST /script/run`, ждёт `armed → running → done`,
 снимает `GET /logs?script_id=`, считает метрики и пишет `sweep.csv`.
 
-Порядок прогона: скрипт взводится ПЕРВЫМ (игрок в этот момент должен быть вне
-зоны спавна, а прошлый прогон — уже завершён), затем игрок жмёт рестарт миссии
-(P310_RESTART) — на спавне игрок попадает в зону триггера, и скрипт стартует сам.
-Взводить, стоя в зоне, нельзя: триггер — проверка уровня (`segment::in_zone` в
-каждом тике), такой скрипт стартует ближайшим же тиком, и `frame 0` перестаёт
-совпадать с началом миссии.
+Порядок прогона (автоматический, с 2026-09-10): один `POST /script/run` несёт
+и рестарт, и полёт — поле `restart` (`{...dik:0xC8...}`) заставляет мод сначала
+отыграть меню паузы (pause → вверх → confirm ×2), дождаться loading, взвести
+скрипт по триггеру спавна и стартовать на первой же позиции в зоне. Одним
+скриптом это делается потому, что активный скрипт в моде ровно один (второй
+`POST /script/run` → 409). Фаза рестарта требует фокуса окна игры: без него игра
+не опрашивает клавиатуру (`DirectInput`) и меню не двигается — поэтому `--run`
+активирует окно игры.
+
+Взводить, стоя в зоне, нельзя (триггер — проверка уровня `segment::in_zone` в
+каждом тике): такой скрипт стартует ближайшим же тиком, и `frame 0` перестаёт
+совпадать с началом миссии. Поле `restart` решает это тем, что взводится только
+после фактического loading новой миссии.
 """
 import argparse
 import csv
@@ -24,8 +31,8 @@ import json
 import os
 import sys
 import time
-import urllib.error
-import urllib.request
+
+import drmod_api as api
 
 from core117 import build, END, SPAWN, T_ATTACK, T_JUMP
 
@@ -35,40 +42,6 @@ LAUNCH_DY2 = 0.15
 # допуски триггера — зеркало segment::in_zone (src/segment.rs:206)
 ZONE_XY = 0.1
 ZONE_Y = 1.0
-
-
-# --- HTTP -------------------------------------------------------------------
-
-def http(base, path, method="GET", body=None, timeout=5.0):
-    data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
-    headers = {"Content-Type": "application/json"} if data else {}
-    req = urllib.request.Request(base + path, data=data, method=method, headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read()
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"{method} {path} → HTTP {e.code}: {e.read().decode('utf-8', 'replace')}")
-    return json.loads(raw) if raw else {}
-
-
-def stop_active(base):
-    """Снять зависший скрипт, иначе POST /script/run вернёт 409."""
-    try:
-        http(base, "/script/stop", "POST")
-        return True
-    except RuntimeError:
-        return False
-
-
-def start(base, script):
-    try:
-        return http(base, "/script/run", "POST", script)
-    except RuntimeError as e:
-        if "409" not in str(e):
-            raise
-        stop_active(base)
-        time.sleep(0.2)
-        return http(base, "/script/run", "POST", script)
 
 
 # --- взвод ------------------------------------------------------------------
@@ -86,45 +59,12 @@ def fmt_pos(pos):
     return "—" if pos is None else "(%.2f, %.2f, %.2f)" % tuple(pos)
 
 
-def arm_when_outside(base, script, label, tries=20):
-    """Взвести скрипт так, чтобы он НЕ стартовал в момент взвода.
-
-    Триггер в `api.rs` — проверка уровня в каждом тике, поэтому взведённый
-    скрипт стартует первым же тиком, когда игрок окажется в зоне спавна.
-    Стоя в зоне, взводить нельзя: `frame 0` перестанет совпадать с началом
-    миссии. Поэтому взводим вне зоны и убеждаемся, что статус остался `armed`.
-    """
-    for _ in range(tries):
-        pl = http(base, "/state", timeout=3.0).get("player") or {}
-        found = pl.get("found")
-        pos = pl.get("pos") if found else None  # в меню/загрузке позиция не валидна
-        if in_zone(pos, SPAWN):
-            print(f"  [{label}] игрок в зоне триггера {fmt_pos(pos)} — "
-                  f"взведённый скрипт стартует сразу.")
-            input("  отойдите от спавна (или выйдите в меню) и нажмите Enter ")
-            continue
-        res = start(base, script)
-        sid = res["script_id"]
-        time.sleep(0.15)
-        cur = http(base, "/state", timeout=3.0).get("script") or {}
-        if cur.get("id") == sid and cur.get("status") == "running":
-            stop_active(base)
-            print(f"  [{label}] скрипт стартовал в момент взвода — снимаю, пробуем снова.")
-            input("  отойдите от спавна и нажмите Enter ")
-            continue
-        print(f"  [{label}] взведён: script {sid} "
-              f"({cur.get('status') or res.get('status')}), игрок "
-              f"{'найден' if found else 'НЕ найден (меню/загрузка)'} {fmt_pos(pos)}")
-        return sid
-    raise RuntimeError("не удалось взвести скрипт вне зоны триггера")
-
-
 def wait_done(base, sid, arm_timeout, run_timeout, label):
     t_start = time.time()
     t_run = None
     last = None
     while True:
-        st = http(base, f"/script/{sid}")
+        st = api.http(base, f"/script/{sid}")
         s = st["status"]
         if s != last:
             print(f"  [{label}] script {sid}: {last or '?'} → {s} "
@@ -138,7 +78,7 @@ def wait_done(base, sid, arm_timeout, run_timeout, label):
         if t_run is None and now - t_start > arm_timeout:
             raise TimeoutError(f"не дождался триггера за {arm_timeout} с")
         if t_run is not None and now - t_run > run_timeout:
-            stop_active(base)
+            api.http(base, "/script/stop", "POST")
             raise TimeoutError(f"прогон не завершился за {run_timeout} с")
         time.sleep(0.05)
 
@@ -224,11 +164,13 @@ def main(argv=None):
         return 0
 
     try:
-        http(a.url, "/health", timeout=3.0)
+        api.http(a.url, "/health", wait=3.0)
     except Exception as e:  # noqa: BLE001 — сообщение важнее типа
         print(f"API недоступен: {a.url} ({e})")
         print("запустите игру с заинжекченным модом и повторите.")
         return 2
+    print(f"фокус окна игры: {'OK' if api.focus_and_settle() else 'НЕ ПОЛУЧИЛСЯ'} "
+          f"(нужен фазе рестарта: без фокуса игра не опрашивает клавиатуру)")
 
     rows = []
     for idx, (j, atk, path, script) in enumerate(variants, 1):
@@ -237,13 +179,15 @@ def main(argv=None):
             print(f"\n=== {label} ===")
             row = {"jump": j, "attack": atk, "run": rep, "status": "", "error": ""}
             try:
-                # Взвод ДО рестарта: взведённый скрипт стартует тем тиком, каким
-                # игрок окажется в зоне спавна, — то есть в начале миссии.
-                sid = arm_when_outside(a.url, script, label)
-                input(f"  [{label}] нажмите рестарт миссии (P310_RESTART) "
-                      f"и сразу Enter ")
+                # Рестарт и полёт — одним запросом (поле `restart`): мод сначала
+                # отыгрывает меню паузы, дожидается loading, взводится по спавну
+                # и стартует там же — то есть с начала миссии.
+                script["restart"] = {"ups": 1}
+                res = api.run_script(script, a.url)
+                sid = res["script_id"]
+                print(f"  [{label}] script {sid}: restart+trigger, статус {res['status']}")
                 row["status"] = wait_done(a.url, sid, a.arm_timeout, a.run_timeout, label)
-                m = metrics(http(a.url, f"/logs?script_id={sid}&limit=1000").get("frames", []))
+                m = metrics(api.logs(a.url, script_id=sid, limit=1000))
                 row.update(m or {"error": "нет кадров в логе"})
             except Exception as e:  # noqa: BLE001
                 row["error"] = str(e)

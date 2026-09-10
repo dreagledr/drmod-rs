@@ -691,6 +691,8 @@ impl ImguiRenderLoop for HelloHud {
                     g.2[1],
                     g.3
                 ));
+                // Диагностика меню: изменения сырого состояния клавиатуры.
+                hooks::log_key_state_changes();
             }
         }
 
