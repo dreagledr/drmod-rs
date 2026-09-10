@@ -5,3 +5,5 @@
 .qwen/
 # Отладочные логи верификации входов (перегенерируются тест-скриптами)
 test_inputs/logs_*.json
+# Python-тулы в tools/ (script_tuning, desync_analysis)
+__pycache__/
