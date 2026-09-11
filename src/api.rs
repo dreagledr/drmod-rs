@@ -246,7 +246,9 @@ struct ScriptCommand {
 #[serde(deny_unknown_fields)]
 struct EnemyCondition {
     /// Анимации врага (+0x618), в одной из которых команда разрешена.
+    /// Пусто — любая анимация: триггер может быть чисто по высоте игрока.
     /// Известные: 19 «выпад», 65545 «прыжок», 24 — попадание по врагу.
+    #[serde(default)]
     anim: Vec<i32>,
     /// Минимальный кадр анимации врага (+0x8B4).
     #[serde(default)]
@@ -293,7 +295,7 @@ fn enemy_condition_ok(
     enemy: &crate::tas::types::EnemyState,
     player_pos: [f32; 3],
 ) -> bool {
-    if enemy.found == 0 || !cond.anim.contains(&enemy.r_anim) {
+    if enemy.found == 0 || (!cond.anim.is_empty() && !cond.anim.contains(&enemy.r_anim)) {
         return false;
     }
     if enemy.frame < cond.frame_min || enemy.frame > cond.frame_max {
