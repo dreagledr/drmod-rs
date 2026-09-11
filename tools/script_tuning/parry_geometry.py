@@ -262,6 +262,14 @@ def main(argv=None):
     p.add_argument("--attack", type=int, default=None)
     p.add_argument("--run-frames", type=int, default=6)
     p.add_argument("--attack-duration", type=int, default=24)
+    p.add_argument("--ripper", type=int, default=core117.T_RIPPER,
+                   help="кадр риппера (должен быть вне удержания атаки)")
+    p.add_argument("--release-tail", type=int, default=0,
+                   help="отпустить разбег за N кадров до удара (ниже скорость "
+                        "сближения в контакте — сильнее вертикальный подброс)")
+    p.add_argument("--no-attack-forward", action="store_true",
+                   help="атака БЕЗ удержания forward (иначе разбег продолжается "
+                        "и release_tail не работает)")
     p.add_argument("--attack-when-enemy", default=None,
                    help='JSON-условие удара (по умолчанию — рабочий рецепт)')
     p.add_argument("--out", default=r"out\parry_geometry.csv")
@@ -288,11 +296,15 @@ def main(argv=None):
             {"anim": [65545], "player_y_min": 0.3, "player_y_max": 0.8,
              "player_vy_max": 0.0})
     script = core117.build(
-        jump=a.jump, attack=a.attack or core117.T_ATTACK,
+        jump=a.jump, attack=a.attack or core117.T_ATTACK, ripper=a.ripper,
         run_frames=a.run_frames, t_run=a.jump - a.run_frames,
-        dur_attack=a.attack_duration, attack_when_enemy=spec)
+        dur_attack=a.attack_duration, release_tail=a.release_tail,
+        attack_forward=not a.no_attack_forward, attack_when_enemy=spec)
     print(f"связка: jump={a.jump} run_frames={a.run_frames} "
-          f"attack_dur={a.attack_duration}\nусловие: {spec}\nпрогонов {a.runs}\n")
+          f"attack_dur={a.attack_duration} ripper={a.ripper} "
+          f"release_tail={a.release_tail} "
+          f"attack_forward={not a.no_attack_forward}\n"
+          f"условие: {spec}\nпрогонов {a.runs}\n")
 
     rows, win = [], []
     for n in range(1, a.runs + 1):

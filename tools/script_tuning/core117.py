@@ -91,6 +91,14 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
         forward=attack_forward, heavy_attack=True)
 
     after = attack + dur_attack
+    if ripper is not None and ripper < after:
+        # Иначе риппер пропадал МОЛЧА: его кадр накрыт удержанием атаки (на
+        # серии с `--attack 84 --attack-duration 24` так потерялся риппер
+        # записи, и её роль в подбросе проверялась без него).
+        raise ValueError(
+            f"ripper={ripper} попадает внутрь удержания атаки ({attack}+"
+            f"{dur_attack}={after}): выберите ripper >= {after} или меньший "
+            f"dur_attack")
     if ripper is not None and after <= ripper < end:
         # forward разрезается вокруг риппера — ровно как в выводе dbdump --script
         add(after, ripper - after, forward=True)
