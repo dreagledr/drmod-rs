@@ -256,6 +256,16 @@ struct EnemyCondition {
     /// Максимальная дистанция от игрока до врага (м) — удар должен доставать.
     #[serde(default = "f32_max")]
     dist_max: f32,
+    /// Минимальное превышение КЛИНКА врага над игроком (м). Тело врага всегда
+    /// на земле (`pos.y`), в атаке поднимается клинок (`blade_y`: пик «прыжка»
+    /// ~2.97 м) — подброс направляет вверх, только когда клинок сверху, а игрок
+    /// ниже; по телу врага условие не сработало бы никогда.
+    #[serde(default = "f32_min")]
+    blade_dy_min: f32,
+}
+
+fn f32_min() -> f32 {
+    f32::MIN
 }
 
 fn i32_max() -> i32 {
@@ -278,9 +288,12 @@ fn enemy_condition_ok(
     if enemy.frame < cond.frame_min || enemy.frame > cond.frame_max {
         return false;
     }
+    let dy = enemy.pos[1] - player_pos[1];
+    if enemy.blade_y - player_pos[1] < cond.blade_dy_min {
+        return false;
+    }
     if cond.dist_max < f32::MAX {
         let dx = enemy.pos[0] - player_pos[0];
-        let dy = enemy.pos[1] - player_pos[1];
         let dz = enemy.pos[2] - player_pos[2];
         if (dx * dx + dy * dy + dz * dz).sqrt() > cond.dist_max {
             return false;
@@ -1537,7 +1550,7 @@ fn script_tick(
                 script.fired_at[idx] = Some(k);
                 logger::log_line(&format!(
                     "api: script '{}' команда {} сработала по врагу: anim={} frame={} \
-                     дистанция={:.2} (кадр {})",
+                     дистанция={:.2} клинок_выше_игрока={:.2} (кадр {})",
                     script.name,
                     idx,
                     enemy.r_anim,
@@ -1546,6 +1559,7 @@ fn script_tick(
                         + (enemy.pos[1] - player_pos[1]).powi(2)
                         + (enemy.pos[2] - player_pos[2]).powi(2))
                     .sqrt(),
+                    enemy.pos[1] - player_pos[1],
                     k
                 ));
             }
