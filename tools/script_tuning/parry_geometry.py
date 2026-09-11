@@ -278,6 +278,9 @@ def main(argv=None):
     p.add_argument("--ninja", action="store_true",
                    help="держать ninja_run (бит 0x4000 + keybind 8) на разгоне, "
                         "прыжке, в полёте и в атаке")
+    p.add_argument("--no-ninja-flight", action="store_true",
+                   help="отпустить ninja сразу после прыжка (в полёте только "
+                        "forward), на удар включить снова")
     p.add_argument("--out", default=r"out\parry_geometry.csv")
     p.add_argument("--out-window", default=r"out\parry_geometry_window.csv")
     p.add_argument("--analyse", action="store_true",
@@ -307,10 +310,12 @@ def main(argv=None):
         run_frames=a.run_frames, t_run=a.jump - a.run_frames,
         dur_attack=a.attack_duration, release_tail=a.release_tail,
         attack_forward=not a.no_attack_forward, ninja=a.ninja,
+        ninja_flight=not a.no_ninja_flight,
         attack_when_enemy=spec)
     print(f"связка: jump={a.jump} run_frames={a.run_frames} "
           f"attack_dur={a.attack_duration} ripper={a.ripper} "
           f"release_tail={a.release_tail} ninja={a.ninja} "
+          f"ninja_flight={not a.no_ninja_flight} "
           f"attack_forward={not a.no_attack_forward}\n"
           f"условие: {spec}\nпрогонов {a.runs}\n")
 

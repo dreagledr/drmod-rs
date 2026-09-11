@@ -37,7 +37,8 @@ RUNUP = T_JUMP - T_FORWARD  # 5
 def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
           dur_attack=DUR_ATTACK, runup=RUNUP, end=END, name=None,
           run_frames=None, t_run=None, air_forward=True, release_tail=0,
-          attack_forward=True, ninja=False, attack_when_enemy=None):
+          attack_forward=True, ninja=False, ninja_flight=True,
+          attack_when_enemy=None):
     """Собрать очищенный скрипт. Кадры — абсолютные, от старта скрипта.
 
     `run_frames` — длина разгона до прыжка (по умолчанию `runup` = 5 как в
@@ -50,6 +51,9 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
     прыжке, полёте и в атаке: без него прыжок и удар в воздухе идут другими
     анимациями (проверено на игре 2026-09-11), а отпускание в `release_tail`
     глушит и ninja — «стоп в воздухе» перед атакой.
+    `ninja_flight=False` — отпустить ninja сразу после прыжка и держать в полёте
+    только `forward` (прыжок при этом был ninja-овым): анимация прыжка как на
+    бегу, но скорость ниже.
     `attack_when_enemy` — условие атаки по врагу (адаптивный удар): словарь
     `{"anim": [...], "frame_min": .., "frame_max": .., "dist_max": ..}`;
     команда атаки «спит» до выполнения условия — подброс даёт парирование
@@ -90,7 +94,8 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
     air_from = jump + dur_jump
     air_to = max(air_from, attack - release_tail)
     # Полёт: вперёд (по умолчанию) — отпускаем за `release_tail` кадров до атаки.
-    add(air_from, air_to - air_from, forward=air_forward, ninja_run=ninja)
+    add(air_from, air_to - air_from, forward=air_forward,
+        ninja_run=ninja and ninja_flight)
     add(attack, dur_attack, when_enemy=attack_when_enemy,
         forward=attack_forward, heavy_attack=True, ninja_run=ninja)
 
@@ -136,6 +141,9 @@ def main(argv=None):
     p.add_argument("--ninja", action="store_true",
                    help="держать ninja_run (бит 0x4000 + keybind 8) на разгоне, "
                         "прыжке, в полёте и в атаке")
+    p.add_argument("--no-ninja-flight", action="store_true",
+                   help="отпустить ninja сразу после прыжка (в полёте только "
+                        "forward), на удар включить снова")
     p.add_argument("--attack-when-enemy", default=None,
                    help='JSON-условие адаптивного удара, напр. '
                         '\'{"anim": [65545], "frame_max": 60, "dist_max": 2.5}\'')
@@ -148,7 +156,7 @@ def main(argv=None):
     script = build(jump=a.jump, attack=a.attack, ripper=a.ripper, end=a.end,
                    run_frames=a.run_frames, t_run=a.t_run,
                    air_forward=not a.no_air_forward, release_tail=a.release_tail,
-                   ninja=a.ninja,
+                   ninja=a.ninja, ninja_flight=not a.no_ninja_flight,
                    dur_attack=a.attack_duration or DUR_ATTACK,
                    attack_when_enemy=(json.loads(a.attack_when_enemy)
                                       if a.attack_when_enemy else None))
