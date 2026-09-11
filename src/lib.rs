@@ -25,7 +25,6 @@ use tas::db;
 use tas::hooks;
 #[cfg(debug_assertions)]
 use tas::replay;
-#[cfg(debug_assertions)]
 use tas::types;
 
 pub const DEFAULT_TITLE: &str = "METAL GEAR RISING REVENGEANCE.exe";

@@ -19,7 +19,9 @@ use crate::segment::{self, in_any_start_zone};
 use chrono::Local;
 #[cfg(debug_assertions)]
 use rusqlite::Connection;
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+#[cfg(debug_assertions)]
+use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, MutexGuard};
 #[cfg(debug_assertions)]
 use std::time::Instant;

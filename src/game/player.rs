@@ -11,10 +11,13 @@ use crate::tas::types;
 
 use super::is_readable_ptr;
 
-/// Враг (сущность Em*/Ba*/Pl001*) из EntitySystem для debug-панели: позиция,
-/// HP, анимация, дистанция до игрока, высота клинка (мировая, из матрицы части).
-#[cfg(debug_assertions)]
+/// Враг (сущность Em*/Ba*/Pl001*) из EntitySystem для debug-панели и условий
+/// `when_enemy`: позиция, HP, анимация, дистанция до игрока, высота клинка
+/// (мировая, из матрицы части).
 pub(crate) struct EnemyInfo {
+    /// Читает только debug-панель (в release её нет) — остальные поля нужны
+    /// условиям `when_enemy` у API-скриптов.
+    #[allow(dead_code)]
     pub name: String,
     pub pos: [f32; 3],
     pub hp: i32,
@@ -236,8 +239,8 @@ impl Player {
     /// HP +0x870, r_anim +0x618 — та же иерархия, что у игрока.
     /// Высота клинка врага: сущность Em0010_Blade → владелец (+0x518) Em0160Body →
     /// +0x360 → EmSetCorps; мировая Y клинка — из матрицы cParts (+0x10 → m[3].y = +0x44).
-    /// Возвращает (всего сущностей, враги). Только для debug-панели.
-    #[cfg(debug_assertions)]
+    /// Возвращает (всего сущностей, враги). Нужен и debug-панели, и условиям
+    /// `when_enemy` у API-скриптов (API есть и в release).
     pub(crate) fn read_enemies(&self) -> (usize, Vec<EnemyInfo>) {
         let mut out = Vec::new();
         let mut enemy_beh: Vec<(*mut u8, usize)> = Vec::new();
@@ -354,8 +357,9 @@ impl Player {
 
     /// Ближайший к игроку враг в формате `EnemyState` (для кадров Record/Replay).
     /// Переиспользует обход `read_enemies`; `found = 0`, если врагов нет
-    /// (не бой, loading) или позиция игрока неизвестна. Только для debug-записи.
-    #[cfg(debug_assertions)]
+    /// (не бой, loading) или позиция игрока неизвестна. Нужен не только
+    /// debug-записи: на этом же чтении работают условия `when_enemy` у
+    /// API-скриптов, а API есть и в release (гейт по геймплею — выше, в вызове).
     pub(crate) fn read_nearest_enemy(&self) -> types::EnemyState {
         let (_, enemies) = self.read_enemies();
         let nearest = enemies
