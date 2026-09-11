@@ -35,15 +35,29 @@ RUNUP = T_JUMP - T_FORWARD  # 5
 
 
 def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
-          dur_attack=DUR_ATTACK, runup=RUNUP, end=END, name=None):
-    """Собрать очищенный скрипт. Кадры — абсолютные, от старта скрипта."""
-    if jump < runup:
-        raise ValueError(f"jump={jump} меньше длины разгона {runup}")
+          dur_attack=DUR_ATTACK, runup=RUNUP, end=END, name=None,
+          run_frames=None, t_run=None, air_forward=True, attack_forward=True):
+    """Собрать очищенный скрипт. Кадры — абсолютные, от старта скрипта.
+
+    `run_frames` — длина разгона до прыжка (по умолчанию `runup` = 5 как в
+    записи). `air_forward=False` отпускает бег в прыжке/полёте: прыжок делает
+    «короткий бег» и не удлиняется, а игрок остаётся ближе к спавну (подброс
+    даёт парирование атаки врага, а не разбег). `t_run` задаёт абсолютный кадр
+    первого ввода (по умолчанию `jump - run_frames`) — сдвиг «самого первого
+    ввода» относительно прыжка.
+    """
+    run_up = run_frames if run_frames is not None else runup
+    if jump < run_up:
+        raise ValueError(f"jump={jump} меньше длины разгона {run_up}")
     if attack < jump + dur_jump:
         raise ValueError(
             f"attack={attack} перекрывает удержание прыжка ({jump}+{dur_jump})")
     if end < attack + dur_attack:
         raise ValueError(f"end={end} меньше конца атаки ({attack + dur_attack})")
+
+    start = t_run if t_run is not None else jump - run_up
+    if start < 0 or start > jump:
+        raise ValueError(f"t_run={start} вне диапазона [0, jump={jump}]")
 
     cmds = []
 
@@ -51,10 +65,10 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
         if dur > 0:
             cmds.append({"t": t, "duration": dur, "input": inp})
 
-    add(jump - runup, runup, forward=True)
-    add(jump, dur_jump, forward=True, jump=True)
-    add(jump + dur_jump, attack - jump - dur_jump, forward=True)
-    add(attack, dur_attack, forward=True, heavy_attack=True)
+    add(start, jump - start, forward=True)
+    add(jump, dur_jump, forward=air_forward, jump=True)
+    add(jump + dur_jump, attack - jump - dur_jump, forward=air_forward)
+    add(attack, dur_attack, forward=attack_forward, heavy_attack=True)
 
     after = attack + dur_attack
     if ripper is not None and after <= ripper < end:
@@ -66,7 +80,7 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
         add(after, end - after, forward=True)
 
     return {
-        "name": name or f"core117-j{jump}-a{attack}",
+        "name": name or f"core117-j{jump}-a{attack}-f{start}",
         "trigger": {"pos": list(SPAWN)},
         "commands": cmds,
     }
@@ -79,10 +93,18 @@ def main(argv=None):
     p.add_argument("--attack", type=int, default=T_ATTACK)
     p.add_argument("--ripper", type=int, default=T_RIPPER)
     p.add_argument("--end", type=int, default=END)
+    p.add_argument("--run-frames", type=int, default=None,
+                   help="длина разгона до прыжка (по умолчанию 5, как в записи)")
+    p.add_argument("--t-run", type=int, default=None,
+                   help="абсолютный кадр первого ввода (по умолчанию jump - разгон)")
+    p.add_argument("--no-air-forward", action="store_true",
+                   help="отпустить бег в прыжке/полёте (короткий прыжок)")
     p.add_argument("--pretty", action="store_true")
     a = p.parse_args(argv)
 
-    script = build(jump=a.jump, attack=a.attack, ripper=a.ripper, end=a.end)
+    script = build(jump=a.jump, attack=a.attack, ripper=a.ripper, end=a.end,
+                   run_frames=a.run_frames, t_run=a.t_run,
+                   air_forward=not a.no_air_forward)
     text = json.dumps(script, ensure_ascii=False, indent=2 if a.pretty else None)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
