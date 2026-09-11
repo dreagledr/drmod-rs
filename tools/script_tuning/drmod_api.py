@@ -16,6 +16,7 @@ import ctypes
 import json
 import select
 import socket
+import sys
 import time
 import urllib.parse
 from ctypes import wintypes
@@ -196,6 +197,9 @@ def menu_status_transitions(frames):
 LOADING_STATUSES = {"NONE", "Loading Into Mission", "Loading Into Boss Mission",
                     "LoadingIntoMission", "MainMenuLoad"}
 
+#: Статусы, из которых игра сама не выйдет: игрок убит, идёт fail-меню.
+FAIL_STATUSES = {"Mission Fail", "Mission Failed", "Game Over"}
+
 
 def _is_loading(menu_status):
     return menu_status in LOADING_STATUSES or "loading" in menu_status.lower()
@@ -277,13 +281,21 @@ def build_restart_script(ups=1, downs=0, hold=6, open_gap=20, gap=10,
 
 
 def ensure_gameplay(base=DEFAULT_URL, timeout=10.0, settle=3.0):
-    """Закрывает открытое меню (START = «назад») и ждёт выхода в геймплей.
+    """Приводит игру в геймплей: закрывает меню паузы, отрабатывает fail-меню.
 
     Переход идёт через ProcessOutOfPause, поэтому статус становится In Game не
-    сразу — ждём, а не проверяем один раз.
+    сразу — ждём, а не проверяем один раз. Fail-меню (игрок убит) само не
+    уходит: без отдельного шага серия прогонов упиралась в «игра не в
+    геймплее» и теряла прогон за прогоном (проверено 2026-09-11: после паузы
+    между сериями игрока убивают).
     """
-    if state(base).get("menu_status") == "In Game":
+    menu = state(base).get("menu_status")
+    if menu == "In Game":
         return True
+    if menu in FAIL_STATUSES:
+        # Выход из fail-меню быстрый (Mission Fail → In Game одним confirm,
+        # проверено живьём) — ждать дольше пары секунд не нужно.
+        return bool(recover_fail(base, timeout=12.0).get("ok"))
     script = {"name": "close-menu",
               "commands": [{"t": 0, "duration": 3, "input": {"pause": True}}]}
     sid = run_script(script, base)["script_id"]
@@ -294,6 +306,31 @@ def ensure_gameplay(base=DEFAULT_URL, timeout=10.0, settle=3.0):
             return True
         time.sleep(0.1)
     return False
+
+
+def recover_fail(base=DEFAULT_URL, timeout=12.0, settle=0.3):
+    """Выход из Mission Fail: `confirm` (в fail-меню выбран «Retry»).
+
+    Возвращает `{"ok", "before", "timeline"}`: траектория статусов нужна, чтобы
+    отличить «не сработал confirm» от «меню ведёт себя иначе» (например, ушло
+    в главное меню — тогда поднимать надо меню заголовка, а не этот путь).
+    """
+    before = state(base).get("menu_status")
+    script = {"name": "fail-retry",
+              "commands": [{"t": 0, "duration": 3, "input": {"confirm": True}}]}
+    sid = run_script(script, base)["script_id"]
+    wait_script(sid, base, 10.0, quiet=True)
+    timeline, prev = [], None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        ms = state(base).get("menu_status", "?")
+        if ms != prev:
+            timeline.append(ms)
+            prev = ms
+        if ms == "In Game":
+            return {"ok": True, "before": before, "timeline": timeline}
+        time.sleep(settle)
+    return {"ok": False, "before": before, "timeline": timeline}
 
 
 def restart_mission(base=DEFAULT_URL, focus=True, watch=15.0, **kwargs):
