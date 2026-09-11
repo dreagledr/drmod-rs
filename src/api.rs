@@ -271,6 +271,10 @@ struct EnemyCondition {
     player_y_min: f32,
     #[serde(default = "f32_max")]
     player_y_max: f32,
+    /// Вертикальная скорость игрока (м/с): 0 — **только на падении** (удар на
+    /// подъёме не годится — подброс нужен на спуске, когда враг уже наверху).
+    #[serde(default = "f32_max")]
+    player_vy_max: f32,
     /// Повторять команду, пока условие держится (атака «спамом»: окно
     /// парирования узкое, одна попытка попадает в него лишь в ~1/3 случаев).
     #[serde(default)]
@@ -294,6 +298,7 @@ fn enemy_condition_ok(
     cond: &EnemyCondition,
     enemy: &crate::tas::types::EnemyState,
     player_pos: [f32; 3],
+    player_vel_y: f32,
 ) -> bool {
     if enemy.found == 0 || (!cond.anim.is_empty() && !cond.anim.contains(&enemy.r_anim)) {
         return false;
@@ -306,6 +311,9 @@ fn enemy_condition_ok(
         return false;
     }
     if player_pos[1] < cond.player_y_min || player_pos[1] > cond.player_y_max {
+        return false;
+    }
+    if player_vel_y > cond.player_vy_max {
         return false;
     }
     if cond.dist_max < f32::MAX {
@@ -844,7 +852,7 @@ impl ApiServer {
                 // командам пользователя. Иначе триггер сработал бы по старой
                 // позиции игрока (он мог стоять в зоне спавна) и прогон был бы
                 // невалидным, а скрипт снялся бы авто-стопом на loading.
-                let ov = script_tick(s, base_addr, &enemy, state.pos);
+                let ov = script_tick(s, base_addr, &enemy, state.pos, state.velocity[1]);
                 replay::set_input_override(ov);
                 let loading = !ui_state.player_found;
                 let timeout = s.frame >= s.total_frames + RESTART_LOADING_WAIT;
@@ -877,7 +885,7 @@ impl ApiServer {
                 }
                 Some(s.id)
             } else if s.status == ScriptStatus::Running {
-                let ov = script_tick(s, base_addr, &enemy, state.pos);
+                let ov = script_tick(s, base_addr, &enemy, state.pos, state.velocity[1]);
                 replay::set_input_override(ov);
                 if s.status == ScriptStatus::Done {
                     replay::set_input_override(InputOverride::default());
@@ -1550,6 +1558,7 @@ fn script_tick(
     base_addr: usize,
     enemy: &crate::tas::types::EnemyState,
     player_pos: [f32; 3],
+    player_vel_y: f32,
 ) -> InputOverride {
     let k = script.frame;
     // Условные команды (`when_enemy`): спят, пока не выполнено условие по врагу.
@@ -1560,7 +1569,7 @@ fn script_tick(
             let cond_ok = script.commands[idx]
                 .when_enemy
                 .as_ref()
-                .is_some_and(|c| enemy_condition_ok(c, enemy, player_pos));
+                .is_some_and(|c| enemy_condition_ok(c, enemy, player_pos, player_vel_y));
             // Срабатывает один раз; с `repeat` — заново каждые `duration` кадров,
             // пока условие держится (несколько ударов в окне прыжка врага).
             let can_fire = match script.fired_at[idx] {

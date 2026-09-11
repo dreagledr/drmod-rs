@@ -130,26 +130,32 @@ def wait_script(script_id, base=DEFAULT_URL, timeout=30.0, quiet=False):
     return "timeout"
 
 
-def activate_window(title=GAME_TITLE):
+def activate_window(title=GAME_TITLE, tries=3):
     """Переводит окно игры в фокус (иначе игра не опрашивает клавиатуру).
 
     `SetForegroundWindow` работает только если вызывающий процесс уже в фокусе,
     поэтому используем приём с `AttachThreadInput` — подключение к потоку окна
-    игры снимает ограничение.
+    игры снимает ограничение. Фокус могут перехватывать другие окна (за машиной
+    работает человек), поэтому пробуем несколько раз.
     """
     hwnd = user32.FindWindowW(None, title)
     if not hwnd:
         return False
-    user32.ShowWindow(hwnd, SW_RESTORE)
-    if user32.GetForegroundWindow() == hwnd:
-        return True
-    target_thread = user32.GetWindowThreadProcessId(hwnd, None)
-    current_thread = kernel32.GetCurrentThreadId()
-    user32.AttachThreadInput(current_thread, target_thread, True)
-    try:
-        user32.SetForegroundWindow(hwnd)
-    finally:
-        user32.AttachThreadInput(current_thread, target_thread, False)
+    for attempt in range(tries):
+        user32.ShowWindow(hwnd, SW_RESTORE)
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        target_thread = user32.GetWindowThreadProcessId(hwnd, None)
+        current_thread = kernel32.GetCurrentThreadId()
+        user32.AttachThreadInput(current_thread, target_thread, True)
+        try:
+            user32.SetForegroundWindow(hwnd)
+            user32.BringWindowToTop(hwnd)
+        finally:
+            user32.AttachThreadInput(current_thread, target_thread, False)
+        if user32.GetForegroundWindow() == hwnd:
+            return True
+        time.sleep(0.3 * (attempt + 1))
     return user32.GetForegroundWindow() == hwnd
 
 

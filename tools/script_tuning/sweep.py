@@ -223,13 +223,17 @@ def main(argv=None):
             label = f"j{j} a{atk} #{rep} ({idx}/{len(variants)})"
             print(f"\n=== {label} ===")
             row = {"jump": j, "attack": atk, "run": rep, "status": "", "error": "",
-                   "attempts": 0, "parry": 0}
+                   "attempts": 0, "parry": 0, "focus": 1}
             for attempt in range(1, a.max_attempts + 1):
                 try:
                     # Фокус перед каждым прогоном: без него игра не обрабатывает
-                    # ввод (меню — точно, и override, похоже, тоже) — прогон пустой.
+                    # ввод (меню — точно, и override, похоже, тоже) — прогон
+                    # помечаем `focus=0`, но серию не прерываем.
                     if not api.focus_and_settle():
-                        raise RuntimeError("окно игры не удалось активировать")
+                        row["focus"] = 0
+                        print(f"  [{label}] ⚠ фокус окна не получен — прогон без фокуса")
+                    else:
+                        row["focus"] = 1
                     # Мод должен быть в геймплее: если игра в меню (после рестарта
                     # или падения), фаза restart начнёт с `pause` по открытому меню.
                     if not api.ensure_gameplay(a.url):
@@ -260,8 +264,9 @@ def main(argv=None):
                   f"{row['error'] or ''}", flush=True)
 
     csv_path = os.path.join(a.out, "sweep.csv")
-    cols = ["jump", "attack", "run", "status", "attempts", "parry", "max_y", "cleared",
-            "spawn_ok", "t_max", "launch", "y_end", "x_end", "z_end", "dz", "n", "error"]
+    cols = ["jump", "attack", "run", "status", "attempts", "parry", "focus", "max_y",
+            "cleared", "spawn_ok", "t_max", "launch", "y_end", "x_end", "z_end", "dz",
+            "n", "error"]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
