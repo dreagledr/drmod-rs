@@ -7,3 +7,4 @@
 test_inputs/logs_*.json
 # Python-тулы в tools/ (script_tuning, desync_analysis)
 __pycache__/
+"tools/script_tuning/out/"  
