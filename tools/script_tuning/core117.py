@@ -37,7 +37,7 @@ RUNUP = T_JUMP - T_FORWARD  # 5
 def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
           dur_attack=DUR_ATTACK, runup=RUNUP, end=END, name=None,
           run_frames=None, t_run=None, air_forward=True, release_tail=0,
-          attack_forward=True, attack_when_enemy=None):
+          attack_forward=True, ninja=False, attack_when_enemy=None):
     """Собрать очищенный скрипт. Кадры — абсолютные, от старта скрипта.
 
     `run_frames` — длина разгона до прыжка (по умолчанию `runup` = 5 как в
@@ -46,6 +46,10 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
     `air_forward=False` — отпустить бег сразу после прыжка (вертикальный прыжок).
     `release_tail=N` — отпустить бег за N кадров до атаки (прыжок и почти весь
     полёт летят вперёд, как в записи). Прыжок всегда начинается на бегу.
+    `ninja=True` — держать `ninja_run` (бит 0x4000 + keybind 8) на разгоне,
+    прыжке, полёте и в атаке: без него прыжок и удар в воздухе идут другими
+    анимациями (проверено на игре 2026-09-11), а отпускание в `release_tail`
+    глушит и ninja — «стоп в воздухе» перед атакой.
     `attack_when_enemy` — условие атаки по врагу (адаптивный удар): словарь
     `{"anim": [...], "frame_min": .., "frame_max": .., "dist_max": ..}`;
     команда атаки «спит» до выполнения условия — подброс даёт парирование
@@ -77,18 +81,18 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
                 cmd["when_enemy"] = when_enemy
             cmds.append(cmd)
 
-    add(start, run_up, forward=True)
+    add(start, run_up, forward=True, ninja_run=ninja)
     # Пауза между разгоном и прыжком (если t_run раньше jump-run_up): первый
     # ввод сдвигается независимо от прыжка — так враг «видит» движение раньше,
     # а прыжок остаётся коротким (старт с места, forward включается в прыжке).
     # Прыжок начинается на бегу (forward в прыжке), иначе это прыжок на месте.
-    add(jump, dur_jump, forward=True, jump=True)
+    add(jump, dur_jump, forward=True, jump=True, ninja_run=ninja)
     air_from = jump + dur_jump
     air_to = max(air_from, attack - release_tail)
     # Полёт: вперёд (по умолчанию) — отпускаем за `release_tail` кадров до атаки.
-    add(air_from, air_to - air_from, forward=air_forward)
+    add(air_from, air_to - air_from, forward=air_forward, ninja_run=ninja)
     add(attack, dur_attack, when_enemy=attack_when_enemy,
-        forward=attack_forward, heavy_attack=True)
+        forward=attack_forward, heavy_attack=True, ninja_run=ninja)
 
     after = attack + dur_attack
     if ripper is not None and ripper < after:
@@ -101,11 +105,11 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
             f"dur_attack")
     if ripper is not None and after <= ripper < end:
         # forward разрезается вокруг риппера — ровно как в выводе dbdump --script
-        add(after, ripper - after, forward=True)
-        add(ripper, 1, forward=True, ripper=True)
-        add(ripper + 1, end - ripper - 1, forward=True)
+        add(after, ripper - after, forward=True, ninja_run=ninja)
+        add(ripper, 1, forward=True, ripper=True, ninja_run=ninja)
+        add(ripper + 1, end - ripper - 1, forward=True, ninja_run=ninja)
     else:
-        add(after, end - after, forward=True)
+        add(after, end - after, forward=True, ninja_run=ninja)
 
     return {
         "name": name or f"core117-j{jump}-a{attack}-f{start}",
@@ -129,6 +133,9 @@ def main(argv=None):
                    help="отпустить бег сразу после прыжка (вертикальный прыжок)")
     p.add_argument("--release-tail", type=int, default=0,
                    help="отпустить бег за N кадров до атаки")
+    p.add_argument("--ninja", action="store_true",
+                   help="держать ninja_run (бит 0x4000 + keybind 8) на разгоне, "
+                        "прыжке, в полёте и в атаке")
     p.add_argument("--attack-when-enemy", default=None,
                    help='JSON-условие адаптивного удара, напр. '
                         '\'{"anim": [65545], "frame_max": 60, "dist_max": 2.5}\'')
@@ -141,6 +148,7 @@ def main(argv=None):
     script = build(jump=a.jump, attack=a.attack, ripper=a.ripper, end=a.end,
                    run_frames=a.run_frames, t_run=a.t_run,
                    air_forward=not a.no_air_forward, release_tail=a.release_tail,
+                   ninja=a.ninja,
                    dur_attack=a.attack_duration or DUR_ATTACK,
                    attack_when_enemy=(json.loads(a.attack_when_enemy)
                                       if a.attack_when_enemy else None))

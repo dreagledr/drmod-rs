@@ -272,6 +272,12 @@ def main(argv=None):
                         "и release_tail не работает)")
     p.add_argument("--attack-when-enemy", default=None,
                    help='JSON-условие удара (по умолчанию — рабочий рецепт)')
+    p.add_argument("--no-when-enemy", action="store_true",
+                   help="удар строго на своём кадре `--attack`, без условия "
+                        "(условие умеет только сдвигать команду раньше)")
+    p.add_argument("--ninja", action="store_true",
+                   help="держать ninja_run (бит 0x4000 + keybind 8) на разгоне, "
+                        "прыжке, в полёте и в атаке")
     p.add_argument("--out", default=r"out\parry_geometry.csv")
     p.add_argument("--out-window", default=r"out\parry_geometry_window.csv")
     p.add_argument("--analyse", action="store_true",
@@ -292,17 +298,19 @@ def main(argv=None):
         print_attack_table(rows)
         return 0
 
-    spec = (json.loads(a.attack_when_enemy) if a.attack_when_enemy else
-            {"anim": [65545], "player_y_min": 0.3, "player_y_max": 0.8,
-             "player_vy_max": 0.0})
+    spec = None if a.no_when_enemy else (
+        json.loads(a.attack_when_enemy) if a.attack_when_enemy else
+        {"anim": [65545], "player_y_min": 0.3, "player_y_max": 0.8,
+         "player_vy_max": 0.0})
     script = core117.build(
         jump=a.jump, attack=a.attack or core117.T_ATTACK, ripper=a.ripper,
         run_frames=a.run_frames, t_run=a.jump - a.run_frames,
         dur_attack=a.attack_duration, release_tail=a.release_tail,
-        attack_forward=not a.no_attack_forward, attack_when_enemy=spec)
+        attack_forward=not a.no_attack_forward, ninja=a.ninja,
+        attack_when_enemy=spec)
     print(f"связка: jump={a.jump} run_frames={a.run_frames} "
           f"attack_dur={a.attack_duration} ripper={a.ripper} "
-          f"release_tail={a.release_tail} "
+          f"release_tail={a.release_tail} ninja={a.ninja} "
           f"attack_forward={not a.no_attack_forward}\n"
           f"условие: {spec}\nпрогонов {a.runs}\n")
 
