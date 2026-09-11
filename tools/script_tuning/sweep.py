@@ -249,7 +249,10 @@ def main(argv=None):
                     row["status"] = wait_done(a.url, sid, a.arm_timeout, a.run_timeout, label)
                     frames = api.logs(a.url, script_id=sid, limit=1000)
                     row["attempts"] = attempt
-                    row["parry"] = int(parried(frames))
+                    # Парирование — если было ХОТЬ В ОДНОЙ из попыток: одиночный
+                    # удар попадает в окно в ~1/3 случаев, и повтор как раз для
+                    # этого (в отчёте важна не последняя попытка, а факт).
+                    row["parry"] = int(row["parry"] or parried(frames))
                     m = metrics(frames)
                     row.update(m or {"error": "нет кадров в логе"})
                     if m and (not a.require_parry or row["parry"]):
