@@ -62,7 +62,10 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
     cmds = []
 
     def add(t, dur, **inp):
-        if dur > 0:
+        # Команду без входов не добавляем: API отвергает пустой `input`
+        # (`input is empty`), а «отпущенный бег» — это как раз отсутствие
+        # активных команд (override снимается, игра видит реальный ввод = ничего).
+        if dur > 0 and inp:
             cmds.append({"t": t, "duration": dur, "input": inp})
 
     add(start, jump - start, forward=True)
