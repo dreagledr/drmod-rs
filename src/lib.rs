@@ -181,6 +181,18 @@ unsafe extern "system" fn veh_handler(
 
 impl HelloHud {
     fn new() -> Self {
+        // Панику логируем до аварийного завершения: паника, пересёкшая границу
+        // `extern "system"` (наши детуры), завершает процесс кодом 0xc0000409
+        // (fast-fail) без записи в лог — по WER видно только модуль и смещение.
+        // Хук даёт сообщение и место (file:line) в debug.log.
+        std::panic::set_hook(Box::new(|info| {
+            let location = info
+                .location()
+                .map(|l| format!("{}:{}", l.file(), l.line()))
+                .unwrap_or_else(|| "?".into());
+            logger::log_line(&format!("PANIC: {info} at {location}"));
+        }));
+
         // Логируем SEH-исключения (креши) в debug.log — диагностика.
         #[cfg(debug_assertions)]
         unsafe {

@@ -368,6 +368,9 @@ struct ScriptState {
     trigger: Option<segment::Vec3>,
     /// Следующая фаза (заполняется, когда скрипт стартует с рестарта).
     pending: Option<PendingScript>,
+    /// Игрок был найден за время скрипта: отличает реальный loading (надо
+    /// остановить) от меню, в котором скрипт и стартовал (меню-скрипты).
+    player_was_found: bool,
 }
 
 /// Один кадр кольцевого буфера (сырые данные, JSON-форма — `LogFrameJson`).
@@ -703,17 +706,26 @@ impl ApiServer {
             guard.fps = guard.frame_count as f32 / elapsed.as_secs_f32();
         }
 
-        // Авто-стоп при loading/меню: игрок не читаем — скрипт останавливается,
-        // иначе залипший override сломает пересоздающегося игрока.
+        // Авто-стоп при loading: игрок пропал ПОСЛЕ того, как был найден, —
+        // скрипт останавливается, иначе залипший override сломает
+        // пересоздающегося игрока. Если скрипт стартовал в меню (игрока и не
+        // было) — не останавливаем: так работают меню-скрипты (загрузка
+        // сохранения, навигация в титуле) через `dik_key`.
         if !ui_state.player_found
             && let Some(s) = guard.script.as_mut()
             && s.status == ScriptStatus::Running
+            && s.player_was_found
         {
             logger::log_line(&format!(
                 "api: script {} '{}' stopped (player not readable)",
                 s.id, s.name
             ));
             stop_script(s);
+        }
+        if ui_state.player_found
+            && let Some(s) = guard.script.as_mut()
+        {
+            s.player_was_found = true;
         }
 
         // Продвижение активного скрипта: вычисляем InputUnit кадра и подаём
@@ -922,6 +934,7 @@ impl ApiServer {
             total_frames,
             trigger: None,
             pending: None,
+            player_was_found: false,
         });
         logger::log_line(&format!(
             "api: builtin script {} '{}' started ({} frames)",
@@ -1220,6 +1233,7 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
         total_frames,
         trigger,
         pending,
+        player_was_found: false,
     });
     if phase_status == ScriptStatus::Restarting {
         logger::log_line(&format!(
