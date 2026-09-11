@@ -17,17 +17,22 @@ import core117
 import drmod_api as api
 
 ENEMY_LUNGE = {19, 65545, 1114113, 131078, 131072, 24, 655370, 131074, 131081}
+#: Анимация врага в момент парирования (запись 142 и прогоны с подбросом): именно
+#: в неё уходит враг, когда удар игрока попал в окно его прыжка → подброс.
+ENEMY_PARRY = 1114113
 
 
 def enemy_summary(frames, max_y):
     """Сжатая сводка по врагу: последовательность (anim, первый кадр анимации)."""
-    timeline, prev, lunge_frames = [], None, []
+    timeline, prev, lunge_frames, parried = [], None, [], False
     for i, fr in enumerate(frames):
         e = fr.get("enemy") or {}
         anim = e.get("r_anim")
         if anim != prev:
             timeline.append(f"i{i}:{anim}")
             prev = anim
+        if anim == ENEMY_PARRY:
+            parried = True
         if anim in ENEMY_LUNGE:
             lunge_frames.append(i)
     lunge_at_peak = None
@@ -36,7 +41,7 @@ def enemy_summary(frames, max_y):
         peak = ys.index(max(ys))
         near = [i for i in lunge_frames if abs(i - peak) <= 25]
         lunge_at_peak = near[-1] if near else (lunge_frames[-1] if lunge_frames else None)
-    return " ".join(timeline[:14]), lunge_at_peak
+    return " ".join(timeline[:14]), lunge_at_peak, parried
 
 
 def main(argv=None):
@@ -88,10 +93,11 @@ def main(argv=None):
             continue
         ys = [f["pos"][1] for f in frames]
         max_y = max(ys)
-        line, lunge = enemy_summary(frames, max_y)
+        line, lunge, parried = enemy_summary(frames, max_y)
         mark = "ЛАУНЧ" if max_y >= 20 else "  --  "
+        parry_mark = "парирование ✓" if parried else "парирования нет"
         print(f"#{n} {mark} max_y={max_y:6.2f} (кадр {ys.index(max_y):>3}) "
-              f"| атака врага у пика: i={lunge}\n     враг: {line}")
+              f"{parry_mark} | атака врага у пика: i={lunge}\n     враг: {line}")
     return 0
 
 
