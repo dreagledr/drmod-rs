@@ -144,6 +144,10 @@ pub(crate) const KEY_DIGIT3: u8 = 0x2C;
 /// вызывает каждый тик для заполнения глобального InputUnit из DirectInput.
 /// Хук перехватывает её и перезаписывает unit[0] после вызова оригинала.
 pub(super) const UPDATE_INPUT_UNIT: usize = 0x9DAFE0;
+/// `cTime::getTicks` — сырые тики QueryPerformanceCounter с момента старта игры
+/// (`(QPC − start)`, edx:eax). По его вызывающим ищется планировщик шагов
+/// симуляции: см. `tools/disasm/README.md` («Модуль времени движка»).
+pub(super) const TIME_GET_TICKS: usize = 0x9F8230;
 /// Pl0000::m_CurrentInput — копия `g_InputUnit0` (смещение от объекта Pl0000).
 pub(crate) const CURRENT_INPUT_OFFSET: usize = 0xCF8;
 /// `GameMenuStatus` (enum 0–18, см. `game::GameMenuStatus`): 1 = InGame,

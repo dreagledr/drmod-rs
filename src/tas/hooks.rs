@@ -3,7 +3,7 @@
 //! чтение сырого ввода (клавиатура/мышь).
 
 use hudhook::mh::{MH_ApplyQueued, MhHook};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use super::addresses;
@@ -28,6 +28,69 @@ static UPDATE_KEYBOARD_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// Trampoline оригинальной `cInput::updateInputUnit` (устанавливается в `create_input_hook`).
 static ORIG_UPDATE_INPUT_UNIT: OnceLock<unsafe extern "C" fn(*mut types::InputUnit, i32)> =
     OnceLock::new();
+
+/// Сколько разных вызывающих геттера времени запоминаем. Планировщик шагов
+/// симуляции читает время каждый кадр — его адрес и ищем среди них.
+const TIME_CALLERS_MAX: usize = 24;
+/// Адреса возврата вызовов `cTime::getTicks` (0 — свободный слот).
+static TIME_CALLERS: [AtomicUsize; TIME_CALLERS_MAX] =
+    [const { AtomicUsize::new(0) }; TIME_CALLERS_MAX];
+/// Счётчики вызовов по слотам `TIME_CALLERS`.
+static TIME_CALLER_HITS: [AtomicU64; TIME_CALLERS_MAX] =
+    [const { AtomicU64::new(0) }; TIME_CALLERS_MAX];
+/// Трамплин оригинального `getTicks`: naked-детур уходит в него хвостом.
+static ORIG_TIME_TICKS: AtomicUsize = AtomicUsize::new(0);
+
+/// Запоминает, откуда позвали геттер времени. Ни аллокаций, ни логов — функцию
+/// игра дёргает каждый кадр из своего потока.
+extern "C" fn time_caller_record(addr: usize) {
+    for i in 0..TIME_CALLERS_MAX {
+        let slot = TIME_CALLERS[i].load(Ordering::Relaxed);
+        if slot == addr {
+            TIME_CALLER_HITS[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+        if slot == 0
+            && TIME_CALLERS[i]
+                .compare_exchange(0, addr, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+        {
+            TIME_CALLER_HITS[i].fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+    }
+}
+
+/// Детур геттера сырых тиков времени (`base + 0x9F8230`). Naked — адрес возврата
+/// надо взять из стека до того, как компилятор построит свой кадр; дальше
+/// хвостовой `jmp` в оригинал, поэтому edx:eax (результат) уходит вызывающему
+/// без изменений.
+#[unsafe(naked)]
+unsafe extern "C" fn time_ticks_detour() -> u64 {
+    core::arch::naked_asm!(
+        "mov edx, [esp]",           // адрес возврата в вызывающего
+        "push edx",                 // аргумент для регистратора (cdecl)
+        "push edx",                 // выравнивание стека под SSE в регистраторе
+        "call {record}",
+        "add esp, 8",
+        "jmp dword ptr [{orig}]",   // хвостом в оригинал
+        record = sym time_caller_record,
+        orig = sym ORIG_TIME_TICKS,
+    )
+}
+
+/// Снимок вызывающих геттер времени: (адрес возврата, счётчик), по убыванию.
+pub(crate) fn time_callers() -> Vec<(usize, u64)> {
+    let mut v = Vec::new();
+    for i in 0..TIME_CALLERS_MAX {
+        let addr = TIME_CALLERS[i].load(Ordering::Relaxed);
+        if addr != 0 {
+            v.push((addr, TIME_CALLER_HITS[i].load(Ordering::Relaxed)));
+        }
+    }
+    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v
+}
 /// Trampoline оригинальной `cInput::isKeybindPressed`.
 static ORIG_IS_KEYBIND_PRESSED: OnceLock<unsafe extern "C" fn(i32) -> i32> = OnceLock::new();
 /// Trampoline оригинальной `cInput::isKeybindDown`.
@@ -596,6 +659,9 @@ pub struct InputHooks {
     key_down: Option<MhHook>,
     key_pressed: Option<MhHook>,
     keyboard_poll: Option<MhHook>,
+    /// Диагностический хук геттера времени (только debug): собирает вызывающих,
+    /// по ним ищется планировщик шагов симуляции.
+    time_ticks: Option<MhHook>,
 }
 
 impl InputHooks {
@@ -634,6 +700,11 @@ impl InputHooks {
         let key_down = Self::create_key_down_hook(base_addr);
         let key_pressed = Self::create_key_pressed_hook(base_addr);
         let keyboard_poll = Self::create_keyboard_poll_hook(base_addr);
+        // Хук времени — диагностика (сбор вызывающих геттера), в release не нужен.
+        #[cfg(debug_assertions)]
+        let time_ticks = Self::create_time_hook(base_addr);
+        #[cfg(not(debug_assertions))]
+        let time_ticks = None;
 
         logger::log_line(&format!(
             "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={}",
@@ -653,7 +724,43 @@ impl InputHooks {
             key_down,
             key_pressed,
             keyboard_poll,
+            time_ticks,
         }
+    }
+
+    /// Ставит MinHook на геттер времени `cTime::getTicks` (0x9F8230): детур
+    /// запоминает адреса возврата вызывающих, по ним ищется планировщик шагов
+    /// симуляции (см. `tools/disasm/README.md`, «Модуль времени движка»).
+    fn create_time_hook(base_addr: usize) -> Option<MhHook> {
+        use core::ffi::c_void;
+
+        if base_addr == 0 {
+            logger::log_line("create_time_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + addresses::TIME_GET_TICKS) as *mut c_void;
+        let detour = time_ticks_detour as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, detour) } {
+            Ok(h) => h,
+            Err(e) => {
+                logger::log_line(&format!(
+                    "create_time_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        ORIG_TIME_TICKS.store(hook.trampoline() as usize, Ordering::Relaxed);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            logger::log_line(&format!("create_time_hook: queue_enable FAIL {e:?}"));
+            return None;
+        }
+        logger::log_line(&format!(
+            "time_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
     }
 
     /// Устанавливает MinHook на `cInput::updateInputUnit` (0x9DAFE0):

@@ -639,8 +639,22 @@ struct StateResponse {
     /// шагов игра делает за секунду при разной дельте кадра — подброс от
     /// риппера считается по числу тиков за «медленную секунду».
     sim_ticks: u64,
+    /// Откуда вызывают геттер времени (только debug): по этим адресам ищется
+    /// планировщик шагов симуляции — тот, кто читает время каждый кадр.
+    time_callers: Vec<TimeCaller>,
     /// Шаг времени движка (см. `POST /dt`).
     dt: DtSnapshot,
+}
+
+/// Один вызывающий геттера времени: адрес возврата и число вызовов.
+#[derive(Serialize)]
+struct TimeCaller {
+    /// Абсолютный адрес в памяти процесса (с релокацией).
+    addr: String,
+    /// Тот же адрес минус база модуля — по нему искать в exe на диске.
+    rva: String,
+    /// Сколько раз с этого адреса позвали геттер (монотонно).
+    calls: u64,
 }
 
 /// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
@@ -1455,6 +1469,14 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
         script,
         fps: guard.fps,
         sim_ticks: sim_ticks(),
+        time_callers: hooks::time_callers()
+            .into_iter()
+            .map(|(addr, calls)| TimeCaller {
+                addr: format!("0x{addr:08X}"),
+                rva: format!("0x{:08X}", addr.saturating_sub(guard.base_addr)),
+                calls,
+            })
+            .collect(),
         dt: DtSnapshot {
             fixed: FIXED_DT.load(Ordering::Relaxed),
             fixed_ms: f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed)),
