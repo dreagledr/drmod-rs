@@ -190,7 +190,12 @@ impl HelloHud {
                 .location()
                 .map(|l| format!("{}:{}", l.file(), l.line()))
                 .unwrap_or_else(|| "?".into());
-            logger::log_line(&format!("PANIC: {info} at {location}"));
+            // Бэктрейс (force_capture, независимо от RUST_BACKTRACE): без него по
+            // панике в чужом крейте (напр. windows-core) не видно, чей это вызов.
+            let backtrace = std::backtrace::Backtrace::force_capture();
+            logger::log_line(&format!(
+                "PANIC: {info} at {location}\nbacktrace:\n{backtrace}"
+            ));
         }));
 
         // Логируем SEH-исключения (креши) в debug.log — диагностика.

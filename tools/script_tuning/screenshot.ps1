@@ -42,7 +42,7 @@ $gfx = [System.Drawing.Graphics]::FromImage($bmp)
 $gfx.CopyFromScreen($rect.Left, $rect.Top, 0, 0, (New-Object System.Drawing.Size $w, $h))
 $gfx.Dispose()
 
-$full = Join-Path (Get-Location) $Out
+$full = [System.IO.Path]::GetFullPath($Out)
 $dir = Split-Path $full -Parent
 if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
 $bmp.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)

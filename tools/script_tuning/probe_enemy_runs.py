@@ -9,6 +9,7 @@
     py -3 tools\\script_tuning\\probe_enemy_runs.py --runs 6 --jump 45 --attack 75
 """
 import argparse
+import json
 import sys
 import time
 
@@ -45,15 +46,21 @@ def main(argv=None):
     p.add_argument("--attack", type=int, default=None)
     p.add_argument("--run-frames", type=int, default=2)
     p.add_argument("--t-run", type=int, default=36)
+    p.add_argument("--attack-when-enemy", default=None,
+                   help='JSON-условие адаптивного удара, напр. '
+                        '\'{"anim": [65545, 19], "frame_max": 60, "dist_max": 2.5}\'')
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
     sys.stdout.reconfigure(line_buffering=True)
 
     script = core117.build(
         jump=a.jump or core117.T_JUMP, attack=a.attack or core117.T_ATTACK,
-        run_frames=a.run_frames, t_run=a.t_run)
+        run_frames=a.run_frames, t_run=a.t_run,
+        attack_when_enemy=(json.loads(a.attack_when_enemy)
+                           if a.attack_when_enemy else None))
     print(f"вариант: jump={a.jump or core117.T_JUMP} attack={a.attack or core117.T_ATTACK} "
-          f"run_frames={a.run_frames} t_run={a.t_run}; прогонов {a.runs}\n")
+          f"run_frames={a.run_frames} t_run={a.t_run} "
+          f"when_enemy={a.attack_when_enemy or '—'}; прогонов {a.runs}\n")
 
     for n in range(1, a.runs + 1):
         if not api.ensure_gameplay(a.url):

@@ -26,7 +26,11 @@ import drmod_api as api
 
 GAME_EXE = (r"C:\Program Files (x86)\Steam\steamapps\common"
             r"\METAL GEAR RISING REVENGEANCE\METAL GEAR RISING REVENGEANCE.exe")
-INJECTOR = os.path.join("target", "i686-pc-windows-msvc", "debug", "drmod.exe")
+# Пути считаем от корня репозитория, а не от текущего каталога: скрипт можно
+# запускать откуда угодно (например `cd tools\script_tuning`).
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+INJECTOR = os.path.join(REPO_ROOT, "target", "i686-pc-windows-msvc", "debug",
+                        "drmod.exe")
 PROCESS_NAME = "METAL GEAR RISING REVENGEANCE"
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
