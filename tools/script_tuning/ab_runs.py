@@ -58,9 +58,22 @@ def main(argv=None):
     p.add_argument("--out", default=r"out\ab_runs.csv")
     p.add_argument("--out-window", default=r"out\ab_runs_window.csv")
     p.add_argument("--timeout", type=float, default=12.0)
+    p.add_argument("--fixed-dt", dest="fixed_dt", action="store_true",
+                   default=None,
+                   help="включить фиксированный шаг времени движка (POST /dt)")
+    p.add_argument("--no-fixed-dt", dest="fixed_dt", action="store_false",
+                   help="выключить фиксированный шаг времени движка")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
     api.setup_stdout()
+
+    if a.fixed_dt is not None:
+        res = api.fixed_dt(a.fixed_dt, a.url)
+        print(f"фиксированный dt: {'вкл' if res.get('fixed') else 'выкл'} "
+              f"({res.get('addr')})")
+    dt_now = api.state(a.url).get("dt") or {}
+    print(f"шаг времени движка: fixed={dt_now.get('fixed')} "
+          f"frame_ms={dt_now.get('frame_ms')} rate={dt_now.get('rate')}")
 
     arms = []
     for i, spec in enumerate(a.arm, 1):

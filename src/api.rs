@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -576,6 +576,11 @@ struct StateSnapshot {
     camera_look_at: [f32; 3],
     /// Крен камеры (+0x1F0).
     camera_roll: f32,
+    /// Живая длительность кадра из `cSlowRateManager::m_fTickDifference` (мс,
+    /// номинал 16.667) — видно, переживает ли нашу запись движок.
+    dt_frame_ms: f32,
+    /// Коэффициент кадра (`m_fTickRate`, номинал 1.0).
+    dt_rate: f32,
 }
 
 /// `GET /health` — живость, версия, base_addr, uptime.
@@ -630,6 +635,27 @@ struct StateResponse {
     camera: CameraSnapshot,
     script: Option<ScriptStatusJson>,
     fps: f32,
+    /// Шаг времени движка (см. `POST /dt`).
+    dt: DtSnapshot,
+}
+
+/// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
+#[derive(Serialize)]
+struct DtSnapshot {
+    /// Включён ли фиксированный тик (`POST /dt`).
+    fixed: bool,
+    /// Измеренная движком длительность кадра, мс (номинал 16.667).
+    frame_ms: f32,
+    /// Коэффициент кадра = `frame_ms / 16.667` (номинал 1.0).
+    rate: f32,
+}
+
+/// `POST /dt` — ответ.
+#[derive(Serialize)]
+struct DtResponse {
+    fixed: bool,
+    /// Абсолютный адрес `cSlowRateManager` (для сверки с зондом).
+    addr: String,
 }
 
 /// `POST /script/run` — ответ.
@@ -682,6 +708,7 @@ enum Response {
     ScriptStatus(ScriptStatusJson),
     Logs(LogsResponse),
     Eject(EjectResponse),
+    Dt(DtResponse),
     Error(ErrorResponse),
 }
 
@@ -723,6 +750,42 @@ impl RingBuffer {
     }
 }
 
+/// `cSlowRateManager` (движковый менеджер шага времени) — singleton по
+/// `base + 0x17E93B0` (ref/mgr-plugin-sdk, смещения сверены с дизассемблером
+/// `startup`/`setTickDelay`). Здесь игра держит измеренную длительность кадра:
+/// `m_fTickDifference` (+0x8C) в миллисекундах — живой разброс 16.25–19.25 при
+/// номинале 16.667 (то есть 52–61 FPS) — и коэффициент `m_fTickRate` (+0x7C),
+/// равный `diff / 16.667`, который читают анимация и кинематика. Разброс этой
+/// дельты и есть дрейф, из-за которого одинаковые прогоны расходились.
+const SLOW_RATE_MANAGER: usize = 0x17E93B0;
+const SRM_TICK_RATE: usize = 0x7C;
+const SRM_TICK_DIFF: usize = 0x8C;
+const SRM_UNIT0_DELTA: usize = 0x48;
+/// Номинал движка: 1/60 с в миллисекундах и коэффициент 1.0.
+const NOMINAL_FRAME_MS: f32 = 16.666_668;
+const NOMINAL_RATE: f32 = 1.0;
+
+/// «Кормить движку фиксированный тик» (`POST /dt`, по умолчанию выключено):
+/// в детуре `updateInputUnit` перезаписываем измеренную дельту кадра номиналом.
+static FIXED_DT: AtomicBool = AtomicBool::new(false);
+/// Абсолютный адрес `cSlowRateManager` (base + 0x17E93B0); 0 — не включено.
+static SRM_ADDR: AtomicUsize = AtomicUsize::new(0);
+
+/// Пишет номинал дельты кадра (см. `FIXED_DT`). Только записи по готовому
+/// адресу: ни аллокаций, ни логов — это путь детура.
+fn apply_fixed_dt() {
+    let srm = SRM_ADDR.load(Ordering::Relaxed);
+    if srm == 0 {
+        return;
+    }
+    let p = srm as *mut u8;
+    unsafe {
+        *(p.add(SRM_TICK_DIFF) as *mut f32) = NOMINAL_FRAME_MS;
+        *(p.add(SRM_TICK_RATE) as *mut f32) = NOMINAL_RATE;
+        *(p.add(SRM_UNIT0_DELTA) as *mut f32) = NOMINAL_RATE;
+    }
+}
+
 /// Очередь ввода активного скрипта для подачи из детура `updateInputUnit`, то
 /// есть **по тикам симуляции** (как `PLAYBACK_FEED` у replay). Раньше кадр
 /// скрипта считался в render-цикле: при 43–57 FPS кадров и 60 тиках физики один
@@ -745,6 +808,9 @@ const MAX_STEPS_PER_FRAME: usize = 4;
 /// access violation (см. `docs/REPLAY_FINDINGS.md`).
 pub(crate) fn feed_tick(unit: *mut InputUnit) -> bool {
     SIM_TICKS.fetch_add(1, Ordering::Relaxed);
+    if FIXED_DT.load(Ordering::Relaxed) {
+        apply_fixed_dt();
+    }
     let ov = match SCRIPT_QUEUE.lock() {
         Ok(mut q) => q.pop_front(),
         Err(_) => None,
@@ -1002,6 +1068,17 @@ impl ApiServer {
             None
         };
 
+        // Дельта кадра из cSlowRateManager: если включён фиксированный тик, тут
+        // видно, осталась ли наша запись (номинал 16.667 / 1.0) или движок
+        // перезаписал её своей измеренной после нас.
+        let srm = base_addr + SLOW_RATE_MANAGER;
+        let (dt_frame_ms, dt_rate) = unsafe {
+            (
+                *((srm + SRM_TICK_DIFF) as *const f32),
+                *((srm + SRM_TICK_RATE) as *const f32),
+            )
+        };
+
         guard.snapshot = StateSnapshot {
             t_ms: elapsed_ms,
             mission_id: ui_state.mission_id,
@@ -1018,6 +1095,8 @@ impl ApiServer {
             camera_pos: camera.pos,
             camera_look_at: camera.look_at,
             camera_roll: camera.roll,
+            dt_frame_ms,
+            dt_rate,
         };
 
         if ui_state.player_found {
@@ -1299,6 +1378,7 @@ fn route(
         ("POST", "/script/run") => handle_script_run(body, state),
         ("POST", "/script/stop") => handle_script_stop(state),
         ("POST", "/eject") => handle_eject(state),
+        ("POST", "/dt") => handle_dt(body, state),
         ("GET", path) if path.starts_with("/script/") => handle_script_get(path, state),
         ("GET", "/logs") => handle_logs(query, state),
         _ => (
@@ -1354,7 +1434,55 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
         },
         script,
         fps: guard.fps,
+        dt: DtSnapshot {
+            fixed: FIXED_DT.load(Ordering::Relaxed),
+            frame_ms: s.dt_frame_ms,
+            rate: s.dt_rate,
+        },
     }
+}
+
+/// `POST /dt` — включить/выключить фиксированный шаг времени движка.
+/// Тело: `{"fixed": true}`. Адрес менеджера считаем от `base_addr` состояния;
+/// при выключении движок сам вернётся к измеренной дельте (мы её не трогаем).
+fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    #[derive(Deserialize)]
+    struct Req {
+        fixed: bool,
+    }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!("bad body: {e} (ожидается {{\"fixed\": true}})"),
+                }),
+            )
+        }
+    };
+    let addr = {
+        let guard = state.lock().unwrap();
+        guard.base_addr + SLOW_RATE_MANAGER
+    };
+    if req.fixed {
+        SRM_ADDR.store(addr, Ordering::Relaxed);
+        FIXED_DT.store(true, Ordering::Relaxed);
+    } else {
+        FIXED_DT.store(false, Ordering::Relaxed);
+        SRM_ADDR.store(0, Ordering::Relaxed);
+    }
+    logger::log_line(&format!(
+        "api: fixed dt {} (cSlowRateManager=0x{addr:08X})",
+        if req.fixed { "on" } else { "off" }
+    ));
+    (
+        200,
+        Response::Dt(DtResponse {
+            fixed: req.fixed,
+            addr: format!("0x{addr:08X}"),
+        }),
+    )
 }
 
 /// `POST /script/run` — запуск скрипта из JSON-тела.
