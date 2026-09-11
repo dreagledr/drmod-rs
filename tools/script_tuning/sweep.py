@@ -92,6 +92,16 @@ def flight_frames(frames):
     return flight or frames
 
 
+def parried(frames):
+    """Было ли парирование (враг ушёл в анимацию 1114113 → подброс).
+
+    Одиночный удар попадает в узкое окно парирования лишь в ~3-4 прогонах из 10
+    (джиттер симуляции ±2 кадра), поэтому для перебора таймингов имеет смысл
+    best-of-N: перезапускать вариант, пока парирование не случится.
+    """
+    return any((f.get("enemy") or {}).get("r_anim") == 1114113 for f in frames)
+
+
 def metrics(frames):
     frames = flight_frames(frames)
     if not frames:
@@ -142,6 +152,11 @@ def main(argv=None):
     p.add_argument("--out", default=r"out\tuning", help="каталог для вариантов и sweep.csv")
     p.add_argument("--run", action="store_true", help="гнать через API, а не только генерировать")
     p.add_argument("--repeat", type=int, default=1, help="прогонов на вариант (проверка надёжности)")
+    p.add_argument("--max-attempts", type=int, default=1,
+                   help="best-of-N: до N перезапусков варианта, пока не случится "
+                        "парирование (окно узкое, одиночный удар попадает в ~3-4/10)")
+    p.add_argument("--require-parry", action="store_true",
+                   help="считать прогон валидным только при парировании (враг 1114113)")
     p.add_argument("--run-frames", type=int, default=None,
                    help="длина разгона до прыжка (по умолчанию 5, как в записи; "
                         "для «короткого бега» 1-2)")
@@ -203,37 +218,46 @@ def main(argv=None):
         for rep in range(1, a.repeat + 1):
             label = f"j{j} a{atk} #{rep} ({idx}/{len(variants)})"
             print(f"\n=== {label} ===")
-            row = {"jump": j, "attack": atk, "run": rep, "status": "", "error": ""}
-            try:
-                # Фокус перед каждым прогоном: без него игра не обрабатывает ввод
-                # (меню — точно, и override, похоже, тоже) — прогон пустой.
-                if not api.focus_and_settle():
-                    raise RuntimeError("окно игры не удалось активировать")
-                # Мод должен быть в геймплее: если игра в меню (после рестарта или
-                # падения), фаза restart начнёт с `pause` по открытому меню.
-                if not api.ensure_gameplay(a.url):
-                    raise RuntimeError("игра не в геймплее (меню/загрузка)")
-                # Рестарт и полёт — одним запросом (поле `restart`): мод сначала
-                # отыгрывает меню паузы, дожидается loading, взводится по спавну
-                # и стартует там же — то есть с начала миссии.
-                script["restart"] = {"ups": 1}
-                res = api.run_script(script, a.url)
-                sid = res["script_id"]
-                print(f"  [{label}] script {sid}: restart+trigger, статус {res['status']}")
-                row["status"] = wait_done(a.url, sid, a.arm_timeout, a.run_timeout, label)
-                m = metrics(api.logs(a.url, script_id=sid, limit=1000))
-                row.update(m or {"error": "нет кадров в логе"})
-            except Exception as e:  # noqa: BLE001
-                row["error"] = str(e)
+            row = {"jump": j, "attack": atk, "run": rep, "status": "", "error": "",
+                   "attempts": 0, "parry": 0}
+            for attempt in range(1, a.max_attempts + 1):
+                try:
+                    # Фокус перед каждым прогоном: без него игра не обрабатывает
+                    # ввод (меню — точно, и override, похоже, тоже) — прогон пустой.
+                    if not api.focus_and_settle():
+                        raise RuntimeError("окно игры не удалось активировать")
+                    # Мод должен быть в геймплее: если игра в меню (после рестарта
+                    # или падения), фаза restart начнёт с `pause` по открытому меню.
+                    if not api.ensure_gameplay(a.url):
+                        raise RuntimeError("игра не в геймплее (меню/загрузка)")
+                    # Рестарт и полёт — одним запросом (поле `restart`): мод сначала
+                    # отыгрывает меню паузы, дожидается loading, взводится по спавну
+                    # и стартует там же — то есть с начала миссии.
+                    script["restart"] = {"ups": 1}
+                    res = api.run_script(script, a.url)
+                    sid = res["script_id"]
+                    print(f"  [{label}] попытка {attempt}: script {sid}, "
+                          f"статус {res['status']}")
+                    row["status"] = wait_done(a.url, sid, a.arm_timeout, a.run_timeout, label)
+                    frames = api.logs(a.url, script_id=sid, limit=1000)
+                    row["attempts"] = attempt
+                    row["parry"] = int(parried(frames))
+                    m = metrics(frames)
+                    row.update(m or {"error": "нет кадров в логе"})
+                    if m and (not a.require_parry or row["parry"]):
+                        break
+                except Exception as e:  # noqa: BLE001
+                    row["error"] = str(e)
             row["cleared"] = row.get("cleared", 0)
             rows.append(row)
             print(f"  → max_y={row.get('max_y')} cleared={row['cleared']} "
                   f"spawn_ok={row.get('spawn_ok')} launch={row.get('launch')} "
+                  f"парирование={row['parry']} попыток={row['attempts']} "
                   f"{row['error'] or ''}", flush=True)
 
     csv_path = os.path.join(a.out, "sweep.csv")
-    cols = ["jump", "attack", "run", "status", "max_y", "cleared", "spawn_ok", "t_max",
-            "launch", "y_end", "x_end", "z_end", "dz", "n", "error"]
+    cols = ["jump", "attack", "run", "status", "attempts", "parry", "max_y", "cleared",
+            "spawn_ok", "t_max", "launch", "y_end", "x_end", "z_end", "dz", "n", "error"]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
