@@ -666,9 +666,6 @@ struct DtSnapshot {
     fixed_ms: f32,
     /// Идут ли синтетические часы (шаг = ровно 16.667 мс символьного времени).
     steps: bool,
-    /// Идёт ли ровная сетка кадров и её целевой темп (0 — выключена).
-    limit: bool,
-    limit_fps: f32,
     /// Сколько раз синтетическая ветка сработала (монотонно) и последнее
     /// отданное значение — видно, используется ли она вообще.
     steps_returns: u64,
@@ -687,9 +684,6 @@ struct DtResponse {
     ms: f32,
     /// Синтетические часы (шаг = 16.667 мс).
     steps: bool,
-    /// Идёт ли ровная сетка кадров и её темп (0 — не задана).
-    limit: bool,
-    limit_fps: f32,
     /// Абсолютный адрес `cSlowRateManager` (для сверки с зондом).
     addr: String,
 }
@@ -1498,8 +1492,6 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
             fixed: FIXED_DT.load(Ordering::Relaxed),
             fixed_ms: f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed)),
             steps: hooks::synthetic_clock_on(),
-            limit: hooks::frame_limit_on(),
-            limit_fps: hooks::frame_limit_fps(),
             steps_returns: hooks::synthetic_clock_stats().0,
             steps_last_ms: hooks::synthetic_clock_stats().1 as f32 / 1000.0,
             frame_ms: s.dt_frame_ms,
@@ -1523,9 +1515,6 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
         /// время ровно на 16.667 мс — абсолютно стабильный шаг, при нехватке
         /// FPS игра замедляется. Пацер кадров при этом видит реальное время.
         steps: Option<bool>,
-        /// Ровная сетка кадров (`fps`, 0 — выключить): пацерам игры `Sleep`
-        /// выдаётся по дедлайну сетки, значит число кадров в секунду постоянно.
-        fps: Option<f32>,
     }
     let req: Req = match serde_json::from_str(body) {
         Ok(r) => r,
@@ -1547,11 +1536,6 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             if on { "вкл" } else { "выкл" },
             if was { "вкл" } else { "выкл" }
         ));
-    }
-    if let Some(fps) = req.fps {
-        // Без log_line: файловый ввод-вывод в HTTP-потоке при ровной сетке
-        // кадров однажды подвесил обработчик; результат отдаём в ответе.
-        hooks::set_frame_limit(fps);
     }
     if let Some(ms) = req.ms {
         if !(1.0..=1000.0).contains(&ms) {
@@ -1586,8 +1570,6 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             fixed: req.fixed,
             ms,
             steps: hooks::synthetic_clock_on(),
-            limit: hooks::frame_limit_on(),
-            limit_fps: hooks::frame_limit_fps(),
             addr: format!("0x{addr:08X}"),
         }),
     )

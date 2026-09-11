@@ -55,29 +55,6 @@ static SYNTH_HI: AtomicUsize = AtomicUsize::new(0);
 /// Включены ли синтетические часы (`POST /dt {"steps": true}`): каждый шаг
 /// двигает символьное время ровно на 16.667 мс, независимо от реального FPS.
 static SYNTH_ENABLED: AtomicU32 = AtomicU32::new(0);
-
-/// Хук `Sleep` (kernel32) для ровной сетки кадров: пацерам игры (их адреса
-/// возврата известны) выдаём задержку до ближайшего дедлайна сетки — тогда
-/// число кадров в секунду постоянно, а значит и подброс (он считается по
-/// кадрам × дельта окна замедления риппера) перестаёт плавать.
-static ORIG_SLEEP: AtomicUsize = AtomicUsize::new(0);
-static SLEEP_LIMIT_ON: AtomicU32 = AtomicU32::new(0);
-/// Период сетки кадров в тиках QPC (0 — не задан).
-static FRAME_PERIOD_TICKS: AtomicU64 = AtomicU64::new(0);
-/// Целевой темп сетки, fps (f32 в битах) — для `/state`.
-static FRAME_LIMIT_FPS_BITS: AtomicU32 = AtomicU32::new(0);
-/// Дедлайн следующего кадра (тики QPC).
-static FRAME_DEADLINE: AtomicU64 = AtomicU64::new(0);
-/// Вызовы `Sleep` из пацеров кадров (RVA возврата): `0xB980B2` — спин первого
-/// пацера (`Sleep(остаток/3)`), `0x9F2A8E` — второй пацер (`Sleep(вычисленное)`).
-const PACER_SLEEP_CALLERS: [usize; 2] = [0xB980B2, 0x9F2A8E];
-/// RVA слота IAT для `Sleep` в exe (из дизассемблера: `mov ebx, [0x01B2D1BC]`
-/// при base 0x930000 → RVA 0x11FD1BC). По нему берём адрес самой функции.
-const SLEEP_IAT_RVA: usize = 0x11FD1BC;
-/// Адрес функции считаем системным, если он выше этого порога: адреса модулей
-/// игры лежат около 0x00930000, системные DLL — в 0x7xxxxxxx. Защита от
-/// неверного слота IAT (однажды хукнули не ту функцию — игра повисла).
-const SYSTEM_ADDR_MIN: usize = 0x60000000;
 /// Срабатываний синтетической ветки и последнее отданное значение — для
 /// проверки, что она действительно используется (`/state` → `dt`).
 static SYNTH_RETURNS: AtomicU64 = AtomicU64::new(0);
@@ -221,104 +198,6 @@ pub(crate) fn note_step() {
 /// Идут ли сейчас синтетические часы (для `/state`).
 pub(crate) fn synthetic_clock_on() -> bool {
     SYNTH_ENABLED.load(Ordering::Relaxed) != 0
-}
-
-/// Тики игрового таймера (через оригинальный геттер) и частота QPC.
-fn game_ticks() -> u64 {
-    let orig = ORIG_TIME_TICKS.load(Ordering::Relaxed);
-    if orig == 0 {
-        return 0;
-    }
-    let f: unsafe extern "C" fn() -> u64 = unsafe { std::mem::transmute(orig) };
-    unsafe { f() }
-}
-
-fn qpc_freq() -> u64 {
-    let base = BASE_ADDR.load(Ordering::Relaxed);
-    if base == 0 {
-        return 0;
-    }
-    unsafe { *((base + TIME_QPF_RVA) as *const u64) }
-}
-
-/// Включает/выключает ровную сетку кадров (`fps` = целевой темп, 0 — выключить).
-/// Период считается в тиках QPC по частоте движка.
-pub(crate) fn set_frame_limit(fps: f32) -> bool {
-    let freq = qpc_freq();
-    if fps <= 0.0 || freq == 0 {
-        SLEEP_LIMIT_ON.store(0, Ordering::Relaxed);
-        FRAME_PERIOD_TICKS.store(0, Ordering::Relaxed);
-        FRAME_LIMIT_FPS_BITS.store(0, Ordering::Relaxed);
-        return false;
-    }
-    let period = (freq as f64 / fps as f64).round() as u64;
-    FRAME_PERIOD_TICKS.store(period.max(1), Ordering::Relaxed);
-    FRAME_LIMIT_FPS_BITS.store(fps.to_bits(), Ordering::Relaxed);
-    FRAME_DEADLINE.store(0, Ordering::Relaxed);
-    SLEEP_LIMIT_ON.store(1, Ordering::Relaxed);
-    true
-}
-
-/// Идёт ли сейчас ровная сетка кадров.
-pub(crate) fn frame_limit_on() -> bool {
-    SLEEP_LIMIT_ON.load(Ordering::Relaxed) != 0
-}
-
-/// Целевой темп сетки кадров (0 — выключена).
-pub(crate) fn frame_limit_fps() -> f32 {
-    f32::from_bits(FRAME_LIMIT_FPS_BITS.load(Ordering::Relaxed))
-}
-
-/// Решает, сколько спать вызывающему `Sleep`: пацерам кадров выдаём задержку до
-/// ближайшего дедлайна сетки, остальным — сколько просили.
-extern "C" fn pacer_sleep_ms(caller: usize, ms: u32) -> u32 {
-    if SLEEP_LIMIT_ON.load(Ordering::Relaxed) == 0 {
-        return ms;
-    }
-    let period = FRAME_PERIOD_TICKS.load(Ordering::Relaxed);
-    if period == 0 {
-        return ms;
-    }
-    let rva = caller.wrapping_sub(BASE_ADDR.load(Ordering::Relaxed));
-    if !PACER_SLEEP_CALLERS.contains(&rva) {
-        return ms;
-    }
-    let now = game_ticks();
-    if now == 0 {
-        return ms;
-    }
-    let deadline = FRAME_DEADLINE.load(Ordering::Relaxed);
-    if deadline == 0 || deadline <= now {
-        // Старт сетки или отстали: следующий дедлайн от текущего кадра.
-        FRAME_DEADLINE.store(now + period, Ordering::Relaxed);
-        return 0;
-    }
-    FRAME_DEADLINE.store(deadline + period, Ordering::Relaxed);
-    let freq = qpc_freq();
-    if freq == 0 {
-        return ms;
-    }
-    let wait_ms = ((deadline - now) as f64 * 1000.0 / freq as f64).ceil() as u32;
-    wait_ms.min(200)
-}
-
-/// Детур `Sleep` (stdcall). Naked: берём адрес возврата и аргумент до кадра
-/// компилятора, спрашиваем у решателя фактическую задержку и зовём оригинал.
-#[unsafe(naked)]
-unsafe extern "system" fn sleep_detour(_ms: u32) {
-    core::arch::naked_asm!(
-        "mov eax, [esp]",           // адрес возврата в вызывающего
-        "mov edx, [esp+4]",         // запрошенные миллисекунды (stdcall)
-        "push eax",
-        "push edx",
-        "call {helper}",            // -> eax: сколько спать на самом деле
-        "add esp, 8",
-        "push eax",
-        "call dword ptr [{orig}]",  // оригинальный Sleep (сам снимет аргумент)
-        "ret",
-        helper = sym pacer_sleep_ms,
-        orig = sym ORIG_SLEEP,
-    )
 }
 
 /// Диагностика синтетических часов: (срабатываний, последнее значение).
@@ -912,8 +791,6 @@ pub struct InputHooks {
     /// Диагностический хук геттера времени (только debug): собирает вызывающих,
     /// по ним ищется планировщик шагов симуляции.
     time_ticks: Option<MhHook>,
-    /// Хук `Sleep`: ровная сетка кадров (пацеры получают задержку до дедлайна).
-    sleep: Option<MhHook>,
 }
 
 impl InputHooks {
@@ -957,8 +834,6 @@ impl InputHooks {
         let time_ticks = Self::create_time_hook(base_addr);
         #[cfg(not(debug_assertions))]
         let time_ticks = None;
-        // Хук Sleep нужен и в release: им включается ровная сетка кадров.
-        let sleep = Self::create_sleep_hook(base_addr);
 
         logger::log_line(&format!(
             "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={}",
@@ -979,51 +854,7 @@ impl InputHooks {
             key_pressed,
             keyboard_poll,
             time_ticks,
-            sleep,
         }
-    }
-
-    /// Ставит MinHook на `Sleep` (адрес из слота IAT игры): пацерам кадров
-    /// выдаём задержку до дедлайна ровной сетки (см. `set_frame_limit`).
-    fn create_sleep_hook(base_addr: usize) -> Option<MhHook> {
-        use core::ffi::c_void;
-
-        if base_addr == 0 {
-            logger::log_line("create_sleep_hook: base_addr=0");
-            return None;
-        }
-        let slot = (base_addr + SLEEP_IAT_RVA) as *const usize;
-        let target = unsafe { *slot } as *mut c_void;
-        if (target as usize) < SYSTEM_ADDR_MIN {
-            logger::log_line(&format!(
-                "create_sleep_hook: по слоту 0x{:08X} лежит 0x{:08X} — это не системная \
-                 функция, хук не ставим",
-                base_addr + SLEEP_IAT_RVA, target as usize
-            ));
-            return None;
-        }
-        let detour = sleep_detour as *mut c_void;
-        let hook = match unsafe { MhHook::new(target, detour) } {
-            Ok(h) => h,
-            Err(e) => {
-                logger::log_line(&format!(
-                    "create_sleep_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
-                    target as usize, e
-                ));
-                return None;
-            }
-        };
-        ORIG_SLEEP.store(hook.trampoline() as usize, Ordering::Relaxed);
-        if let Err(e) = unsafe { hook.queue_enable() } {
-            logger::log_line(&format!("create_sleep_hook: queue_enable FAIL {e:?}"));
-            return None;
-        }
-        logger::log_line(&format!(
-            "sleep_hook: OK target=0x{:08X} trampoline=0x{:08X}",
-            target as usize,
-            hook.trampoline() as usize
-        ));
-        Some(hook)
     }
 
     /// Ставит MinHook на геттер времени `cTime::getTicks` (0x9F8230): детур
