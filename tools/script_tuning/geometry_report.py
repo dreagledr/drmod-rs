@@ -48,7 +48,8 @@ def main(argv=None):
         print("нет файлов")
         return 1
     print(f"{'файл':<28} {'n':>3} {'пар':>7} {'>=бар':>7} "
-          f"{'post_gain':<28} {'угол в контакте':<24} дист(удар)")
+          f"{'post_gain':<28} {'угол в контакте':<24} {'дист(удар)':<14} "
+          f"высота игрока в удар (парир/промах)")
     for path in files:
         try:
             rows = load(path)
@@ -57,8 +58,13 @@ def main(argv=None):
             continue
         gains = [r["post_gain"] for r in rows if r.get("post_gain") is not None]
         cleared = [r for r in rows if (r.get("max_y") or 0) >= a.barrier]
-        angles = [r["p_angle_deg"] for r in rows
+        parried = [r for r in rows if r.get("post_gain") is not None]
+        angles = [r["p_angle_deg"] for r in parried
                   if r.get("p_angle_deg") is not None]
+        #: высота игрока в кадре подачи удара — у парирований и у промахов
+        hit_y = [r["a_player_y"] for r in parried if r.get("a_player_y") is not None]
+        miss_y = [r["a_player_y"] for r in rows
+                  if r.get("post_gain") is None and r.get("a_player_y") is not None]
         adists = [r["a_dist_h"] for r in rows if r.get("a_dist_h") is not None]
         name = path.replace("\\", "/").split("/")[-1]
         gains_s = (f"{min(gains):.1f}..{max(gains):.1f} "
@@ -66,8 +72,12 @@ def main(argv=None):
         ang_s = (f"{min(angles):.0f}..{max(angles):.0f}° "
                  f"(медиана {st.median(angles):.0f}°)") if angles else "—"
         dist_s = (f"{min(adists):.2f}..{max(adists):.2f}") if adists else "—"
+        y_s = (f"парир {min(hit_y):.2f}..{max(hit_y):.2f} / "
+               f"промах {min(miss_y):.2f}..{max(miss_y):.2f}"
+               if hit_y and miss_y else "—")
         print(f"{name:<28} {len(rows):>3} {len(gains):>3}/{len(rows):<3} "
-              f"{len(cleared):>3}/{len(rows):<3} {gains_s:<28} {ang_s:<24} {dist_s}")
+              f"{len(cleared):>3}/{len(rows):<3} {gains_s:<28} {ang_s:<24} "
+              f"{dist_s:<14} {y_s}")
     return 0
 
 
