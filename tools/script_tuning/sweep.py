@@ -151,6 +151,9 @@ def main(argv=None):
                    help="отпустить бег сразу после прыжка (вертикальный прыжок)")
     p.add_argument("--release-tail", type=int, default=0,
                    help="отпустить бег за N кадров до атаки")
+    p.add_argument("--attack-when-enemy", default=None,
+                   help='JSON-условие адаптивного удара (по врагу), напр. '
+                        '\'{"anim": [65545], "dist_max": 2.5}\'')
     p.add_argument("--url", default="http://127.0.0.1:5223")
     p.add_argument("--arm-timeout", type=float, default=300.0)
     p.add_argument("--run-timeout", type=float, default=20.0)
@@ -168,7 +171,9 @@ def main(argv=None):
             s = build(jump=j, attack=atk, ripper=a.ripper, end=a.end,
                       run_frames=a.run_frames, t_run=a.t_run,
                       air_forward=not a.no_air_forward,
-                      release_tail=a.release_tail)
+                      release_tail=a.release_tail,
+                      attack_when_enemy=(json.loads(a.attack_when_enemy)
+                                         if a.attack_when_enemy else None))
         except ValueError as e:
             print(f"пропуск j{j} a{atk}: {e}")
             continue

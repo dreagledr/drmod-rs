@@ -225,11 +225,68 @@ impl ScriptInput {
 }
 
 /// Одна команда скрипта: входы активны с кадра `t` на `duration` кадров.
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Deserialize)]
 struct ScriptCommand {
     t: u32,
     duration: u32,
     input: ScriptInput,
+    /// Условие по состоянию врага: команда ждёт его выполнения, затем «стреляет»
+    /// (её `t` заменяется кадром срабатывания). Обычные команды — без условия.
+    #[serde(default)]
+    when_enemy: Option<EnemyCondition>,
+}
+
+/// Условие команды по состоянию врага (адаптивный ввод).
+///
+/// Фиксированные кадры дают подброс лишь в 5–20% прогонов (бимодально: 23–35 м
+/// или 2–3 м) — решает состояние врага: подброс даёт парирование его «прыжка на
+/// игрока». Такая команда «спит», пока условие не выполнено, затем срабатывает
+/// на `duration` кадров от кадра срабатывания (фронт — на первом).
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnemyCondition {
+    /// Анимации врага (+0x618), в одной из которых команда разрешена.
+    /// Известные: 19 «выпад», 65545 «прыжок», 24 — попадание по врагу.
+    anim: Vec<i32>,
+    /// Минимальный кадр анимации врага (+0x8B4).
+    #[serde(default)]
+    frame_min: i32,
+    #[serde(default = "i32_max")]
+    frame_max: i32,
+    /// Максимальная дистанция от игрока до врага (м) — удар должен доставать.
+    #[serde(default = "f32_max")]
+    dist_max: f32,
+}
+
+fn i32_max() -> i32 {
+    i32::MAX
+}
+
+fn f32_max() -> f32 {
+    f32::MAX
+}
+
+/// Выполнено ли условие по врагу.
+fn enemy_condition_ok(
+    cond: &EnemyCondition,
+    enemy: &crate::tas::types::EnemyState,
+    player_pos: [f32; 3],
+) -> bool {
+    if enemy.found == 0 || !cond.anim.contains(&enemy.r_anim) {
+        return false;
+    }
+    if enemy.frame < cond.frame_min || enemy.frame > cond.frame_max {
+        return false;
+    }
+    if cond.dist_max < f32::MAX {
+        let dx = enemy.pos[0] - player_pos[0];
+        let dy = enemy.pos[1] - player_pos[1];
+        let dz = enemy.pos[2] - player_pos[2];
+        if (dx * dx + dy * dy + dz * dz).sqrt() > cond.dist_max {
+            return false;
+        }
+    }
+    true
 }
 
 /// Триггер старта скрипта: скрипт взводится (`Armed`) и стартует, когда
@@ -309,16 +366,19 @@ impl RestartSpec {
             t,
             duration: self.hold,
             input: ScriptInput { dik_key: Some(dik), ..Default::default() },
+            when_enemy: None,
         };
         let confirm = |t: u32| ScriptCommand {
             t,
             duration: 3,
             input: ScriptInput { confirm: true, ..Default::default() },
+            when_enemy: None,
         };
         let pause = ScriptCommand {
             t: 0,
             duration: 3,
             input: ScriptInput { pause: true, ..Default::default() },
+            when_enemy: None,
         };
         let mut cmds = vec![pause];
         let mut t = 3 + self.open_gap;
@@ -371,6 +431,16 @@ struct ScriptState {
     /// Игрок был найден за время скрипта: отличает реальный loading (надо
     /// остановить) от меню, в котором скрипт и стартовал (меню-скрипты).
     player_was_found: bool,
+    /// Кадры срабатывания условных команд (`when_enemy`) — по индексу команды:
+    /// условная команда срабатывает один раз.
+    fired_at: Vec<Option<u32>>,
+}
+
+impl ScriptState {
+    /// Список «условные команды ещё не сработали».
+    fn new_fired(commands: &[ScriptCommand]) -> Vec<Option<u32>> {
+        vec![None; commands.len()]
+    }
 }
 
 /// Один кадр кольцевого буфера (сырые данные, JSON-форма — `LogFrameJson`).
@@ -745,7 +815,7 @@ impl ApiServer {
                 // командам пользователя. Иначе триггер сработал бы по старой
                 // позиции игрока (он мог стоять в зоне спавна) и прогон был бы
                 // невалидным, а скрипт снялся бы авто-стопом на loading.
-                let ov = script_tick(s, base_addr);
+                let ov = script_tick(s, base_addr, &enemy, state.pos);
                 replay::set_input_override(ov);
                 let loading = !ui_state.player_found;
                 let timeout = s.frame >= s.total_frames + RESTART_LOADING_WAIT;
@@ -753,6 +823,7 @@ impl ApiServer {
                     replay::set_input_override(InputOverride::default());
                     hooks::clear_keybind_emulation();
                     if let Some(next) = s.pending.take() {
+                        s.fired_at = ScriptState::new_fired(&next.commands);
                         s.commands = next.commands;
                         s.total_frames = next.total_frames;
                         s.frame = 0;
@@ -777,7 +848,7 @@ impl ApiServer {
                 }
                 Some(s.id)
             } else if s.status == ScriptStatus::Running {
-                let ov = script_tick(s, base_addr);
+                let ov = script_tick(s, base_addr, &enemy, state.pos);
                 replay::set_input_override(ov);
                 if s.status == ScriptStatus::Done {
                     replay::set_input_override(InputOverride::default());
@@ -928,6 +999,7 @@ impl ApiServer {
         guard.script = Some(ScriptState {
             id,
             name: req.name.clone(),
+            fired_at: ScriptState::new_fired(&req.commands),
             commands: req.commands,
             frame: 0,
             status: ScriptStatus::Running,
@@ -1227,6 +1299,7 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     guard.script = Some(ScriptState {
         id,
         name: req.name.clone(),
+        fired_at: ScriptState::new_fired(&phase_commands),
         commands: phase_commands,
         frame: 0,
         status,
@@ -1443,8 +1516,41 @@ fn parse_script(body: &str) -> Result<ScriptRequest, String> {
 /// (фронт, 1 кадр) / `isKeybindDown` (удержание на время команды); меню-клавиши
 /// (стрелки/Enter) — записью в кэш `ms_KeyInput` (меню читает их через
 /// `isKeyDown`/`isKeyPressed`, а не через keybind'ы).
-fn script_tick(script: &mut ScriptState, base_addr: usize) -> InputOverride {
+fn script_tick(
+    script: &mut ScriptState,
+    base_addr: usize,
+    enemy: &crate::tas::types::EnemyState,
+    player_pos: [f32; 3],
+) -> InputOverride {
     let k = script.frame;
+    // Условные команды (`when_enemy`): спят, пока не выполнено условие по врагу.
+    // При срабатывании подменяем `t` на текущий кадр — дальше работает обычная
+    // логика (активное окно, фронт `pressed` на первом кадре).
+    for idx in 0..script.commands.len() {
+        if script.commands[idx].when_enemy.is_some() && script.fired_at[idx].is_none() {
+            let ok = script.commands[idx]
+                .when_enemy
+                .as_ref()
+                .is_some_and(|c| enemy_condition_ok(c, enemy, player_pos));
+            if ok {
+                script.commands[idx].t = k;
+                script.fired_at[idx] = Some(k);
+                logger::log_line(&format!(
+                    "api: script '{}' команда {} сработала по врагу: anim={} frame={} \
+                     дистанция={:.2} (кадр {})",
+                    script.name,
+                    idx,
+                    enemy.r_anim,
+                    enemy.frame,
+                    ((enemy.pos[0] - player_pos[0]).powi(2)
+                        + (enemy.pos[1] - player_pos[1]).powi(2)
+                        + (enemy.pos[2] - player_pos[2]).powi(2))
+                    .sqrt(),
+                    k
+                ));
+            }
+        }
+    }
     let mut unit = InputUnit {
         valid_input: 1,
         ..Default::default()
