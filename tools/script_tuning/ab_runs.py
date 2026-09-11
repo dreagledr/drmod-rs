@@ -95,6 +95,9 @@ def main(argv=None):
                    help="включить фиксированный шаг времени движка (POST /dt)")
     p.add_argument("--no-fixed-dt", dest="fixed_dt", action="store_false",
                    help="выключить фиксированный шаг времени движка")
+    p.add_argument("--dt-ms", type=float, default=None,
+                   help="значение фиксированного шага, мс (номинал 16.667; "
+                        "17.5 — реальная средняя при 57 FPS)")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
     api.setup_stdout()
@@ -113,10 +116,11 @@ def main(argv=None):
                   f"{json.dumps({k: v for k, v in arm.items() if k != 'name'}, ensure_ascii=False)}")
         return 0
 
-    if a.fixed_dt is not None:
-        res = api.fixed_dt(a.fixed_dt, a.url)
+    if a.fixed_dt is not None or a.dt_ms is not None:
+        res = api.fixed_dt(True if a.fixed_dt is None else a.fixed_dt,
+                           ms=a.dt_ms, base=a.url)
         print(f"фиксированный dt: {'вкл' if res.get('fixed') else 'выкл'} "
-              f"({res.get('addr')})")
+              f"{res.get('ms')} мс ({res.get('addr')})")
     dt_now = api.state(a.url).get("dt") or {}
     print(f"шаг времени движка: fixed={dt_now.get('fixed')} "
           f"frame_ms={dt_now.get('frame_ms')} rate={dt_now.get('rate')}")
