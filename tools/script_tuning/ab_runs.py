@@ -18,6 +18,7 @@ CSV — как у `parry_geometry.py` плюс колонка `arm`; в конц
 по вариантам (парирования, перелёты, разброс `post_gain`, угол в контакте).
 """
 import argparse
+import itertools
 import json
 import sys
 import time
@@ -49,11 +50,42 @@ def run_once(script, url, timeout):
             if f.get("script_phase") == "running"]
 
 
+def parse_axis(spec):
+    """Ось карты: `ключ=lo:hi[:шаг]` → (ключ, [значения])."""
+    key, _, rng = spec.partition("=")
+    lo_s, _, rest = rng.partition(":")
+    hi_s, _, step_s = rest.partition(":")
+    if not key.strip() or not lo_s:
+        raise ValueError(f"ось карты непонятна: {spec!r} (ждём ключ=lo:hi[:шаг])")
+    lo, hi = int(lo_s), int(hi_s or lo_s)
+    return key.strip(), list(range(lo, hi + 1, int(step_s or 1)))
+
+
+def grid_arms(grid, base_json):
+    """Варианты карты: произведение осей `--grid` поверх общей связки `--base`."""
+    axes = [parse_axis(spec) for spec in grid]
+    base = json.loads(base_json) if base_json else {}
+    arms = []
+    for combo in itertools.product(*[vals for _, vals in axes]):
+        arm = dict(base)
+        arm.update({key: v for (key, _), v in zip(axes, combo)})
+        arm.setdefault("name", "-".join(f"{k}{v}" for (k, _), v in zip(axes, combo)))
+        arms.append(arm)
+    return arms
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--arm", action="append", required=True,
+    p.add_argument("--arm", action="append", default=[],
                    help='JSON варианта, напр. \'{"name":"j45-n","jump":45,'
                         '"release_tail":6,"ninja":true}\'')
+    p.add_argument("--grid", action="append", default=[],
+                   help='ось карты "ключ=lo:hi[:шаг]", можно несколько — берётся '
+                        'произведение (напр. --grid jump=36:40 --grid attack=66:76)')
+    p.add_argument("--base", default=None,
+                   help='JSON общей связки для --grid (общие параметры карты)')
+    p.add_argument("--dry", action="store_true",
+                   help="только показать варианты, не гонять")
     p.add_argument("--runs", type=int, default=8, help="прогонов на вариант")
     p.add_argument("--out", default=r"out\ab_runs.csv")
     p.add_argument("--out-window", default=r"out\ab_runs_window.csv")
@@ -67,6 +99,20 @@ def main(argv=None):
     a = p.parse_args(argv)
     api.setup_stdout()
 
+    if bool(a.grid) == bool(a.arm):
+        print("нужен ровно один источник вариантов: --arm или --grid")
+        print(__doc__.splitlines()[0])
+        return 2
+
+    arm_specs = grid_arms(a.grid, a.base) if a.grid else [json.loads(s) for s in a.arm]
+    if a.dry:
+        print(f"вариантов: {len(arm_specs)}")
+        for arm in arm_specs:
+            name = arm.get("name", "?")
+            print(f"  {name:<14} "
+                  f"{json.dumps({k: v for k, v in arm.items() if k != 'name'}, ensure_ascii=False)}")
+        return 0
+
     if a.fixed_dt is not None:
         res = api.fixed_dt(a.fixed_dt, a.url)
         print(f"фиксированный dt: {'вкл' if res.get('fixed') else 'выкл'} "
@@ -76,8 +122,8 @@ def main(argv=None):
           f"frame_ms={dt_now.get('frame_ms')} rate={dt_now.get('rate')}")
 
     arms = []
-    for i, spec in enumerate(a.arm, 1):
-        arm = json.loads(spec)
+    for i, spec in enumerate(arm_specs, 1):
+        arm = dict(spec)
         arm.setdefault("name", f"arm{i}")
         arms.append((arm["name"], arm, build_script(arm)))
     print("варианты (чередуются через прогон):")
