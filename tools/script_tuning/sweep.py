@@ -157,6 +157,9 @@ def main(argv=None):
                         "парирование (окно узкое, одиночный удар попадает в ~3-4/10)")
     p.add_argument("--require-parry", action="store_true",
                    help="считать прогон валидным только при парировании (враг 1114113)")
+    p.add_argument("--attack-duration", type=int, default=None,
+                   help="кадров удержания атаки (по умолчанию 6; для позы, "
+                        "доживающей до контакта с врагом — 20-30)")
     p.add_argument("--run-frames", type=int, default=None,
                    help="длина разгона до прыжка (по умолчанию 5, как в записи; "
                         "для «короткого бега» 1-2)")
@@ -188,6 +191,7 @@ def main(argv=None):
                       run_frames=a.run_frames, t_run=a.t_run,
                       air_forward=not a.no_air_forward,
                       release_tail=a.release_tail,
+                      dur_attack=a.attack_duration or 6,
                       attack_when_enemy=(json.loads(a.attack_when_enemy)
                                          if a.attack_when_enemy else None))
         except ValueError as e:
