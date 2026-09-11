@@ -957,12 +957,8 @@ impl InputHooks {
         let time_ticks = Self::create_time_hook(base_addr);
         #[cfg(not(debug_assertions))]
         let time_ticks = None;
-        // Хук Sleep ОТКЛЮЧЁН (2026-09-11): хук на системную функцию, которую
-        // дёргают все потоки процесса, крашил игру (патч кода из-под других
-        // потоков + риск в ABI naked-детура). Правильная точка — не `Sleep`, а
-        // функции самих пацеров игры (0xB98070 и 0x9F2A40): их зовёт только
-        // игровой поток, поэтому патч безопасен. См. tools/disasm/README.md.
-        let sleep: Option<MhHook> = None;
+        // Хук Sleep нужен и в release: им включается ровная сетка кадров.
+        let sleep = Self::create_sleep_hook(base_addr);
 
         logger::log_line(&format!(
             "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={}",
@@ -989,12 +985,6 @@ impl InputHooks {
 
     /// Ставит MinHook на `Sleep` (адрес из слота IAT игры): пацерам кадров
     /// выдаём задержку до дедлайна ровной сетки (см. `set_frame_limit`).
-    ///
-    /// ⚠️ НЕ ИСПОЛЬЗУЕТСЯ (2026-09-11): хук на системный `Sleep` крашил игру.
-    /// Патчить функцию, которую дёргают все потоки процесса, небезопасно.
-    /// Ровную сетку надо ставить хуком на сами пацеры игры (`0xB98070`,
-    /// `0x9F2A40`) — их вызывает только игровой поток.
-    #[allow(dead_code)]
     fn create_sleep_hook(base_addr: usize) -> Option<MhHook> {
         use core::ffi::c_void;
 
