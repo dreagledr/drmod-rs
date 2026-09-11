@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -635,6 +635,10 @@ struct StateResponse {
     camera: CameraSnapshot,
     script: Option<ScriptStatusJson>,
     fps: f32,
+    /// Счётчик тиков симуляции (детур `updateInputUnit`): по нему видно, сколько
+    /// шагов игра делает за секунду при разной дельте кадра — подброс от
+    /// риппера считается по числу тиков за «медленную секунду».
+    sim_ticks: u64,
     /// Шаг времени движка (см. `POST /dt`).
     dt: DtSnapshot,
 }
@@ -644,6 +648,8 @@ struct StateResponse {
 struct DtSnapshot {
     /// Включён ли фиксированный тик (`POST /dt`).
     fixed: bool,
+    /// Значение, которым подменяем дельту, мс (по умолчанию номинал 16.667).
+    fixed_ms: f32,
     /// Измеренная движком длительность кадра, мс (номинал 16.667).
     frame_ms: f32,
     /// Коэффициент кадра = `frame_ms / 16.667` (номинал 1.0).
@@ -654,6 +660,8 @@ struct DtSnapshot {
 #[derive(Serialize)]
 struct DtResponse {
     fixed: bool,
+    /// Чем подменяем дельту, мс.
+    ms: f32,
     /// Абсолютный адрес `cSlowRateManager` (для сверки с зондом).
     addr: String,
 }
@@ -768,21 +776,33 @@ const NOMINAL_RATE: f32 = 1.0;
 /// «Кормить движку фиксированный тик» (`POST /dt`, по умолчанию выключено):
 /// в детуре `updateInputUnit` перезаписываем измеренную дельту кадра номиналом.
 static FIXED_DT: AtomicBool = AtomicBool::new(false);
+/// Значение фиксированной дельты, мс (f32 в битах — `AtomicF32` в std нет).
+/// Номинал движка 16.667, но при 57 FPS реальная средняя ~17.5: физика шла по
+/// ней, и фиксация другого значения возвращает прежние дуги уже без разброса.
+static FIXED_DT_MS_BITS: AtomicU32 = AtomicU32::new(f32::to_bits(NOMINAL_FRAME_MS));
 /// Абсолютный адрес `cSlowRateManager` (base + 0x17E93B0); 0 — не включено.
 static SRM_ADDR: AtomicUsize = AtomicUsize::new(0);
 
-/// Пишет номинал дельты кадра (см. `FIXED_DT`). Только записи по готовому
+/// Пишет выбранную дельту кадра (см. `FIXED_DT`). Только записи по готовому
 /// адресу: ни аллокаций, ни логов — это путь детура.
 fn apply_fixed_dt() {
     let srm = SRM_ADDR.load(Ordering::Relaxed);
     if srm == 0 {
         return;
     }
+    let ms = f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed));
+    // Коэффициент держим согласованным с дельтой: движок считает его как
+    // diff / номинал, и читать его может как анимация, так и кинематика.
+    let rate = if NOMINAL_FRAME_MS > 0.0 {
+        ms / NOMINAL_FRAME_MS
+    } else {
+        NOMINAL_RATE
+    };
     let p = srm as *mut u8;
     unsafe {
-        *(p.add(SRM_TICK_DIFF) as *mut f32) = NOMINAL_FRAME_MS;
-        *(p.add(SRM_TICK_RATE) as *mut f32) = NOMINAL_RATE;
-        *(p.add(SRM_UNIT0_DELTA) as *mut f32) = NOMINAL_RATE;
+        *(p.add(SRM_TICK_DIFF) as *mut f32) = ms;
+        *(p.add(SRM_TICK_RATE) as *mut f32) = rate;
+        *(p.add(SRM_UNIT0_DELTA) as *mut f32) = rate;
     }
 }
 
@@ -1434,8 +1454,10 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
         },
         script,
         fps: guard.fps,
+        sim_ticks: sim_ticks(),
         dt: DtSnapshot {
             fixed: FIXED_DT.load(Ordering::Relaxed),
+            fixed_ms: f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed)),
             frame_ms: s.dt_frame_ms,
             rate: s.dt_rate,
         },
@@ -1443,12 +1465,16 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
 }
 
 /// `POST /dt` — включить/выключить фиксированный шаг времени движка.
-/// Тело: `{"fixed": true}`. Адрес менеджера считаем от `base_addr` состояния;
-/// при выключении движок сам вернётся к измеренной дельте (мы её не трогаем).
+/// Тело: `{"fixed": true}` или `{"fixed": true, "ms": 17.5}`. Адрес менеджера
+/// считаем от `base_addr` состояния; при выключении движок сам вернётся к
+/// измеренной дельте (мы её не трогаем).
 fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     #[derive(Deserialize)]
     struct Req {
         fixed: bool,
+        /// Дельта кадра в мс: номинал движка 16.667, при 57 FPS реальная
+        /// средняя ~17.5 (по ней физика и шла до фиксации).
+        ms: Option<f32>,
     }
     let req: Req = match serde_json::from_str(body) {
         Ok(r) => r,
@@ -1456,11 +1482,24 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             return (
                 400,
                 Response::Error(ErrorResponse {
-                    error: format!("bad body: {e} (ожидается {{\"fixed\": true}})"),
+                    error: format!(
+                        "bad body: {e} (ожидается {{\"fixed\": true, \"ms\": 17.5}})"
+                    ),
                 }),
             )
         }
     };
+    if let Some(ms) = req.ms {
+        if !(1.0..=1000.0).contains(&ms) {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!("ms={ms} вне разумного диапазона 1..1000"),
+                }),
+            );
+        }
+        FIXED_DT_MS_BITS.store(ms.to_bits(), Ordering::Relaxed);
+    }
     let addr = {
         let guard = state.lock().unwrap();
         guard.base_addr + SLOW_RATE_MANAGER
@@ -1472,14 +1511,16 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
         FIXED_DT.store(false, Ordering::Relaxed);
         SRM_ADDR.store(0, Ordering::Relaxed);
     }
+    let ms = f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed));
     logger::log_line(&format!(
-        "api: fixed dt {} (cSlowRateManager=0x{addr:08X})",
+        "api: fixed dt {} ({ms} мс, cSlowRateManager=0x{addr:08X})",
         if req.fixed { "on" } else { "off" }
     ));
     (
         200,
         Response::Dt(DtResponse {
             fixed: req.fixed,
+            ms,
             addr: format!("0x{addr:08X}"),
         }),
     )
