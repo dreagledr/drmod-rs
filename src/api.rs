@@ -269,6 +269,10 @@ struct EnemyCondition {
     player_y_min: f32,
     #[serde(default = "f32_max")]
     player_y_max: f32,
+    /// Повторять команду, пока условие держится (атака «спамом»: окно
+    /// парирования узкое, одна попытка попадает в него лишь в ~1/3 случаев).
+    #[serde(default)]
+    repeat: bool,
 }
 
 fn f32_min() -> f32 {
@@ -1550,12 +1554,24 @@ fn script_tick(
     // При срабатывании подменяем `t` на текущий кадр — дальше работает обычная
     // логика (активное окно, фронт `pressed` на первом кадре).
     for idx in 0..script.commands.len() {
-        if script.commands[idx].when_enemy.is_some() && script.fired_at[idx].is_none() {
-            let ok = script.commands[idx]
+        if script.commands[idx].when_enemy.is_some() {
+            let cond_ok = script.commands[idx]
                 .when_enemy
                 .as_ref()
                 .is_some_and(|c| enemy_condition_ok(c, enemy, player_pos));
-            if ok {
+            // Срабатывает один раз; с `repeat` — заново каждые `duration` кадров,
+            // пока условие держится (несколько ударов в окне прыжка врага).
+            let can_fire = match script.fired_at[idx] {
+                None => true,
+                Some(at) => {
+                    script.commands[idx]
+                        .when_enemy
+                        .as_ref()
+                        .is_some_and(|c| c.repeat)
+                        && k >= at + script.commands[idx].duration
+                }
+            };
+            if can_fire && cond_ok {
                 script.commands[idx].t = k;
                 script.fired_at[idx] = Some(k);
                 logger::log_line(&format!(
