@@ -85,7 +85,15 @@ def wait_done(base, sid, arm_timeout, run_timeout, label):
 
 # --- метрики ----------------------------------------------------------------
 
+def flight_frames(frames):
+    """Кадры фазы `running` (полёт). В /logs попадают и кадры фазы рестарта
+    (меню, loading) — по ним метрики полёта считать нельзя."""
+    flight = [f for f in frames if f.get("script_phase") == "running"]
+    return flight or frames
+
+
 def metrics(frames):
+    frames = flight_frames(frames)
     if not frames:
         return None
     ys = [f["pos"][1] for f in frames]

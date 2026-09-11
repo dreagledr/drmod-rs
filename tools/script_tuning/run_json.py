@@ -22,12 +22,17 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=60.0, help="с — ждать завершения")
     p.add_argument("--focus", action="store_true",
                    help="активировать окно игры (нужно для фазы restart)")
+    p.add_argument("--restart", action="store_true",
+                   help="добавить в скрипт поле restart ({} — дефолты): мод сам "
+                        "перезапустит миссию и взведёт скрипт после loading")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
     sys.stdout.reconfigure(line_buffering=True)
 
     with open(a.path, encoding="utf-8") as f:
         script = json.load(f)
+    if a.restart and script.get("restart") is None:
+        script["restart"] = {}
     print(f"скрипт: {a.path} (name={script.get('name')}, "
           f"restart={'да' if script.get('restart') is not None else 'нет'}, "
           f"trigger={'да' if script.get('trigger') else 'нет'}, "
@@ -38,6 +43,9 @@ def main(argv=None):
 
     if a.focus:
         print(f"фокус окна игры: {'OK' if api.focus_and_settle() else 'НЕ ПОЛУЧИЛСЯ'}")
+    if a.restart and not api.ensure_gameplay(a.url):
+        print("не удалось выйти из меню в геймплей — фаза рестарта не сработает")
+        return 2
 
     res = api.run_script(script, a.url)
     sid = res["script_id"]
@@ -61,6 +69,14 @@ def main(argv=None):
     time.sleep(0.5)
     frames = api.logs(a.url, script_id=sid)
     print(f"кадров в /logs: {len(frames)}")
+    flight = [f for f in frames if f.get("script_phase") == "running"]
+    if flight and len(flight) != len(frames):
+        print(f"  из них в фазе running (полёт): {len(flight)}")
+    if flight:
+        ys = [fr["pos"][1] for fr in flight]
+        print(f"  полёт: старт {[round(v, 2) for v in flight[0]['pos']]} "
+              f"→ финиш {[round(v, 2) for v in flight[-1]['pos']]}, "
+              f"max_y={max(ys):.2f} (кадр {ys.index(max(ys))})")
     if frames:
         ys = [fr["pos"][1] for fr in frames]
         print(f"  старт: {[round(v, 2) for v in frames[0]['pos']]} "

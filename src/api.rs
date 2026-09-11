@@ -85,6 +85,17 @@ impl ScriptStatus {
     }
 }
 
+/// Имя фазы скрипта для `/logs` (совпадает с JSON-статусом в `/script/{id}`).
+fn script_phase_name(status: ScriptStatus) -> &'static str {
+    match status {
+        ScriptStatus::Restarting => "restarting",
+        ScriptStatus::Armed => "armed",
+        ScriptStatus::Running => "running",
+        ScriptStatus::Done => "done",
+        ScriptStatus::Stopped => "stopped",
+    }
+}
+
 /// Вход одной команды скрипта (JSON-объект `input`). Все поля опциональны;
 /// неизвестные ключи — ошибка (защита от опечаток LLM).
 ///
@@ -368,6 +379,13 @@ struct LogFrame {
     /// Статус меню на кадре — без него нельзя проверить сценарии меню
     /// (пауза/рестарт): переходы InGame→PauseMenu→NONE видны только здесь.
     menu_status: &'static str,
+    /// Фаза скрипта на кадре (`restarting`/`armed`/`running`/`done`): кадры
+    /// до загрузки принадлежат фазе рестарта, и метрики полёта надо считать
+    /// только по `running`.
+    script_phase: Option<&'static str>,
+    /// Ближайший враг: подброс даёт его атака (анимация 19 «прыжок на игрока»),
+    /// поэтому sweep'у нужно видеть окно анимации врага в кадре.
+    enemy: crate::tas::types::EnemyState,
     /// Что мы подали через override на этом кадре. В паузе `input` (cur_in)
     /// залипает на бите паузы и поданных битов не показывает — навигацию
     /// в меню видно только здесь.
@@ -394,6 +412,8 @@ struct LogFrameJson {
     frame: u32,
     script_id: Option<u32>,
     menu_status: &'static str,
+    script_phase: Option<&'static str>,
+    enemy: crate::tas::types::EnemyState,
     fed_down_bits: u32,
     fed_pressed_bits: u32,
     fed_left_stick: [f32; 2],
@@ -668,6 +688,7 @@ impl ApiServer {
         input: InputUnit,
         state: PlayerState,
         camera: crate::tas::types::CameraState,
+        enemy: crate::tas::types::EnemyState,
     ) {
         // Общий сброс фронта ripper каждый render-кадр: флаг isKeybindPressed(11)
         // живёт ровно один игровой тик (ставится script_tick/playback/NumPad7,
@@ -701,6 +722,10 @@ impl ApiServer {
         // триггера — первый тик выполняется со следующего кадра (как при
         // запуске через HTTP).
         let base_addr = guard.base_addr;
+        let script_phase = guard
+            .script
+            .as_ref()
+            .map(|s| script_phase_name(s.status));
         let script_id = if let Some(s) = guard.script.as_mut() {
             if s.status == ScriptStatus::Restarting {
                 // Фаза рестарта: подаём меню-ввод, пока не начался loading
@@ -798,6 +823,8 @@ impl ApiServer {
                 t_ms: elapsed_ms,
                 frame: frame_count,
                 script_id,
+                script_phase,
+                enemy,
                 menu_status: ui_state.menu_status.name(),
                 fed_down_bits: fed_down,
                 fed_pressed_bits: fed_pressed,
@@ -830,6 +857,17 @@ impl ApiServer {
             .script
             .as_ref()
             .is_some_and(|s| s.status.is_active())
+    }
+
+    /// Выполняется ли скрипт прямо сейчас (фаза `running`, а не `restarting`/
+    /// `armed`): по этому гейту читаются тяжёлые/опасные данные (враг).
+    pub fn is_script_running(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap()
+            .script
+            .as_ref()
+            .is_some_and(|s| s.status == ScriptStatus::Running)
     }
 
     /// Запрошен ли eject через `POST /eject`. Проверяется в render-цикле
@@ -1676,6 +1714,8 @@ impl LogFrame {
             frame: self.frame,
             script_id: self.script_id,
             menu_status: self.menu_status,
+            script_phase: self.script_phase,
+            enemy: self.enemy,
             fed_down_bits: self.fed_down_bits,
             fed_pressed_bits: self.fed_pressed_bits,
             fed_left_stick: self.fed_left_stick,

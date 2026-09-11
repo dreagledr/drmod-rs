@@ -217,6 +217,20 @@ def watch_state(base=DEFAULT_URL, duration=15.0, baseline=None, interval=0.15):
     return {"timeline": timeline, "last": last or {}, "restarted": restarted}
 
 
+def open_menu(base=DEFAULT_URL):
+    """Открывает меню паузы (бит START) — игра встаёт на паузу.
+
+    Нужно в паузах между экспериментами: пока разбираешь логи, враг в игре
+    живой и может убить игрока (Mission Fail ломает следующий прогон).
+    """
+    if state(base).get("menu_status") == "In Game":
+        script = {"name": "pause",
+                  "commands": [{"t": 0, "duration": 3, "input": {"pause": True}}]}
+        sid = run_script(script, base)["script_id"]
+        wait_script(sid, base, 10.0, quiet=True)
+    return state(base).get("menu_status")
+
+
 def build_restart_script(ups=1, downs=0, hold=6, open_gap=20, gap=10,
                          confirms=2, confirm_gap=25, tail=60):
     """Скрипт рестарта миссии: pause → стрелки → confirm ×N.

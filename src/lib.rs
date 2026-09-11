@@ -741,8 +741,29 @@ impl ImguiRenderLoop for HelloHud {
         let input = self.player.read_current_input();
         let state = self.player.read_player_state().unwrap_or_default();
         let camera = self.camera.read_camera_state().unwrap_or_default();
+        // Ближайший враг нужен и API-логам (подброс даёт атака врага), и
+        // записи/воспроизведению. Обход EntitySystem недёшев и опасен, пока
+        // сцена пересоздаётся, поэтому для скрипта читаем только в геймплее
+        // (`In Game`): фазы рестарта/меню/loading сюда не попадают. У записи
+        // гейт прежний — активная запись и не loading.
+        #[cfg(debug_assertions)]
+        let replay_wants = self.replay.is_active() && !ui_state.menu_status.is_loading();
+        #[cfg(not(debug_assertions))]
+        let replay_wants = false;
+        let script_wants = self.api.is_script_running()
+            && ui_state.menu_status_valid
+            && ui_state.menu_status.is_in_game();
+        let enemy = if (replay_wants || script_wants)
+            && ui_state.menu_status_valid
+            && !ui_state.menu_status.is_loading()
+        {
+            self.player.read_nearest_enemy()
+        } else {
+            types::EnemyState::default()
+        };
 
-        self.api.frame_update(&ui_state, input, state, camera);
+        self.api
+            .frame_update(&ui_state, input, state, camera, enemy);
 
         // --- RECORD/REPLAY: единый покадровый апдейт (debug) ---
         // Инжекция → отложенный старт (arm → триггер позиции) → захват кадра
@@ -752,17 +773,6 @@ impl ImguiRenderLoop for HelloHud {
         // эксклюзивно владеет override ввода.
         #[cfg(debug_assertions)]
         if !self.api.is_script_active() {
-            // Ближайший враг — только пока активны запись/воспроизведение и
-            // не loading (EntitySystem может быть невалиден). Гейт по is_active
-            // экономит обход EntitySystem вне записи.
-            let enemy = if self.replay.is_active()
-                && ui_state.menu_status_valid
-                && !ui_state.menu_status.is_loading()
-            {
-                self.player.read_nearest_enemy()
-            } else {
-                types::EnemyState::default()
-            };
             self.replay.update(
                 self.db_conn.as_ref(),
                 ui_state.position,
