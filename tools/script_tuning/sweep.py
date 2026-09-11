@@ -156,7 +156,8 @@ def main(argv=None):
                         '\'{"anim": [65545], "dist_max": 2.5}\'')
     p.add_argument("--url", default="http://127.0.0.1:5223")
     p.add_argument("--arm-timeout", type=float, default=300.0)
-    p.add_argument("--run-timeout", type=float, default=20.0)
+    p.add_argument("--run-timeout", type=float, default=10.0,
+                   help="с — сколько ждать прогон после старта (10 с хватает)")
     a = p.parse_args(argv)
 
     j_lo, j_hi = parse_range(a.jump)
@@ -204,6 +205,10 @@ def main(argv=None):
             print(f"\n=== {label} ===")
             row = {"jump": j, "attack": atk, "run": rep, "status": "", "error": ""}
             try:
+                # Фокус перед каждым прогоном: без него игра не обрабатывает ввод
+                # (меню — точно, и override, похоже, тоже) — прогон пустой.
+                if not api.focus_and_settle():
+                    raise RuntimeError("окно игры не удалось активировать")
                 # Мод должен быть в геймплее: если игра в меню (после рестарта или
                 # падения), фаза restart начнёт с `pause` по открытому меню.
                 if not api.ensure_gameplay(a.url):

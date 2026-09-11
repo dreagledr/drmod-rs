@@ -124,12 +124,16 @@ def main(argv=None):
     p.add_argument("--attack-when-enemy", default=None,
                    help='JSON-условие адаптивного удара, напр. '
                         '\'{"anim": [65545], "frame_max": 60, "dist_max": 2.5}\'')
+    p.add_argument("--attack-duration", type=int, default=None,
+                   help="кадров удержания атаки (по умолчанию 6; в записи поза "
+                        "держится ~30 кадров до контакта с врагом)")
     p.add_argument("--pretty", action="store_true")
     a = p.parse_args(argv)
 
     script = build(jump=a.jump, attack=a.attack, ripper=a.ripper, end=a.end,
                    run_frames=a.run_frames, t_run=a.t_run,
                    air_forward=not a.no_air_forward, release_tail=a.release_tail,
+                   dur_attack=a.attack_duration or DUR_ATTACK,
                    attack_when_enemy=(json.loads(a.attack_when_enemy)
                                       if a.attack_when_enemy else None))
     text = json.dumps(script, ensure_ascii=False, indent=2 if a.pretty else None)

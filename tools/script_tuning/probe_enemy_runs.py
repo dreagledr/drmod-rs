@@ -48,7 +48,11 @@ def main(argv=None):
     p.add_argument("--t-run", type=int, default=36)
     p.add_argument("--attack-when-enemy", default=None,
                    help='JSON-условие адаптивного удара, напр. '
-                        '\'{"anim": [65545, 19], "frame_max": 60, "dist_max": 2.5}\'')
+                        '\'{"anim": [65545], "frame_max": 60, "dist_max": 2.5}\'')
+    p.add_argument("--attack-duration", type=int, default=None,
+                   help="кадров удержания атаки (по умолчанию 6)")
+    p.add_argument("--timeout", type=float, default=12.0,
+                   help="с — сколько ждать прогон (10 с хватает)")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
     sys.stdout.reconfigure(line_buffering=True)
@@ -56,6 +60,7 @@ def main(argv=None):
     script = core117.build(
         jump=a.jump or core117.T_JUMP, attack=a.attack or core117.T_ATTACK,
         run_frames=a.run_frames, t_run=a.t_run,
+        dur_attack=a.attack_duration or core117.DUR_ATTACK,
         attack_when_enemy=(json.loads(a.attack_when_enemy)
                            if a.attack_when_enemy else None))
     print(f"вариант: jump={a.jump or core117.T_JUMP} attack={a.attack or core117.T_ATTACK} "
@@ -63,12 +68,18 @@ def main(argv=None):
           f"when_enemy={a.attack_when_enemy or '—'}; прогонов {a.runs}\n")
 
     for n in range(1, a.runs + 1):
+        # Фокус перед КАЖДЫМ прогоном: без него игра не обрабатывает ввод
+        # (меню/DirectInput — точно, и, похоже, override тоже) — прогон «пустой»,
+        # и это выглядит как отсутствие лаунча (max_y 2-3 м).
+        focused = api.focus_and_settle()
+        if not focused:
+            print(f"#{n}: окно игры не удалось активировать — прогон невалиден")
         if not api.ensure_gameplay(a.url):
             print(f"#{n}: игра не в геймплее")
             continue
         script["restart"] = {"ups": 1}
         sid = api.run_script(script, a.url)["script_id"]
-        api.wait_script(sid, a.url, 40.0, quiet=True)
+        api.wait_script(sid, a.url, a.timeout, quiet=True)
         time.sleep(0.5)
         frames = [f for f in api.logs(a.url, script_id=sid, limit=1000)
                   if f.get("script_phase") == "running"]
