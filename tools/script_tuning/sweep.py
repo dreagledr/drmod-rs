@@ -148,7 +148,9 @@ def main(argv=None):
     p.add_argument("--t-run", type=int, default=None,
                    help="абсолютный кадр первого ввода (по умолчанию jump - разгон)")
     p.add_argument("--no-air-forward", action="store_true",
-                   help="отпустить бег в прыжке/полёте (короткий прыжок)")
+                   help="отпустить бег сразу после прыжка (вертикальный прыжок)")
+    p.add_argument("--release-tail", type=int, default=0,
+                   help="отпустить бег за N кадров до атаки")
     p.add_argument("--url", default="http://127.0.0.1:5223")
     p.add_argument("--arm-timeout", type=float, default=300.0)
     p.add_argument("--run-timeout", type=float, default=20.0)
@@ -165,7 +167,8 @@ def main(argv=None):
         try:
             s = build(jump=j, attack=atk, ripper=a.ripper, end=a.end,
                       run_frames=a.run_frames, t_run=a.t_run,
-                      air_forward=not a.no_air_forward)
+                      air_forward=not a.no_air_forward,
+                      release_tail=a.release_tail)
         except ValueError as e:
             print(f"пропуск j{j} a{atk}: {e}")
             continue

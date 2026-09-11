@@ -36,15 +36,16 @@ RUNUP = T_JUMP - T_FORWARD  # 5
 
 def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
           dur_attack=DUR_ATTACK, runup=RUNUP, end=END, name=None,
-          run_frames=None, t_run=None, air_forward=True, attack_forward=True):
+          run_frames=None, t_run=None, air_forward=True, release_tail=0,
+          attack_forward=True):
     """Собрать очищенный скрипт. Кадры — абсолютные, от старта скрипта.
 
     `run_frames` — длина разгона до прыжка (по умолчанию `runup` = 5 как в
-    записи). `air_forward=False` отпускает бег в прыжке/полёте: прыжок делает
-    «короткий бег» и не удлиняется, а игрок остаётся ближе к спавну (подброс
-    даёт парирование атаки врага, а не разбег). `t_run` задаёт абсолютный кадр
-    первого ввода (по умолчанию `jump - run_frames`) — сдвиг «самого первого
-    ввода» относительно прыжка.
+    записи; для «короткого бега» 1-2: прыжок не удлиняется).
+    `t_run` — абсолютный кадр первого ввода (по умолчанию `jump - run_frames`).
+    `air_forward=False` — отпустить бег сразу после прыжка (вертикальный прыжок).
+    `release_tail=N` — отпустить бег за N кадров до атаки (прыжок и почти весь
+    полёт летят вперёд, как в записи). Прыжок всегда начинается на бегу.
     """
     run_up = run_frames if run_frames is not None else runup
     if jump < run_up:
@@ -62,15 +63,23 @@ def build(jump=T_JUMP, attack=T_ATTACK, ripper=T_RIPPER, dur_jump=DUR_JUMP,
     cmds = []
 
     def add(t, dur, **inp):
-        # Команду без входов не добавляем: API отвергает пустой `input`
-        # (`input is empty`), а «отпущенный бег» — это как раз отсутствие
-        # активных команд (override снимается, игра видит реальный ввод = ничего).
-        if dur > 0 and inp:
+        # Команду без РЕАЛЬНЫХ входов не добавляем: API отвергает и пустой
+        # `input`, и набор из одних `false` (`input is empty`). «Отпущенный бег» —
+        # это как раз отсутствие активных команд: override снимается, и игра
+        # видит реальный ввод (ничего).
+        if dur > 0 and any(inp.values()):
             cmds.append({"t": t, "duration": dur, "input": inp})
 
-    add(start, jump - start, forward=True)
-    add(jump, dur_jump, forward=air_forward, jump=True)
-    add(jump + dur_jump, attack - jump - dur_jump, forward=air_forward)
+    add(start, run_up, forward=True)
+    # Пауза между разгоном и прыжком (если t_run раньше jump-run_up): первый
+    # ввод сдвигается независимо от прыжка — так враг «видит» движение раньше,
+    # а прыжок остаётся коротким (старт с места, forward включается в прыжке).
+    # Прыжок начинается на бегу (forward в прыжке), иначе это прыжок на месте.
+    add(jump, dur_jump, forward=True, jump=True)
+    air_from = jump + dur_jump
+    air_to = max(air_from, attack - release_tail)
+    # Полёт: вперёд (по умолчанию) — отпускаем за `release_tail` кадров до атаки.
+    add(air_from, air_to - air_from, forward=air_forward)
     add(attack, dur_attack, forward=attack_forward, heavy_attack=True)
 
     after = attack + dur_attack
@@ -101,13 +110,15 @@ def main(argv=None):
     p.add_argument("--t-run", type=int, default=None,
                    help="абсолютный кадр первого ввода (по умолчанию jump - разгон)")
     p.add_argument("--no-air-forward", action="store_true",
-                   help="отпустить бег в прыжке/полёте (короткий прыжок)")
+                   help="отпустить бег сразу после прыжка (вертикальный прыжок)")
+    p.add_argument("--release-tail", type=int, default=0,
+                   help="отпустить бег за N кадров до атаки")
     p.add_argument("--pretty", action="store_true")
     a = p.parse_args(argv)
 
     script = build(jump=a.jump, attack=a.attack, ripper=a.ripper, end=a.end,
                    run_frames=a.run_frames, t_run=a.t_run,
-                   air_forward=not a.no_air_forward)
+                   air_forward=not a.no_air_forward, release_tail=a.release_tail)
     text = json.dumps(script, ensure_ascii=False, indent=2 if a.pretty else None)
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
