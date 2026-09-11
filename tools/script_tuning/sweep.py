@@ -177,6 +177,7 @@ def main(argv=None):
     p.add_argument("--run-timeout", type=float, default=10.0,
                    help="с — сколько ждать прогон после старта (10 с хватает)")
     a = p.parse_args(argv)
+    api.setup_stdout()
 
     j_lo, j_hi = parse_range(a.jump)
     atk_lo, atk_hi = parse_range(a.attack)

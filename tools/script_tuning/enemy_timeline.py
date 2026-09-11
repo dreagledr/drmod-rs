@@ -28,7 +28,7 @@ def main(argv=None):
                    help="не фильтровать по фазе running")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
-    sys.stdout.reconfigure(line_buffering=True)
+    api.setup_stdout()
 
     sid = a.script_id
     if sid is None:

@@ -60,7 +60,7 @@ def main(argv=None):
                    help="с — сколько ждать прогон (10 с хватает)")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
-    sys.stdout.reconfigure(line_buffering=True)
+    api.setup_stdout()
 
     script = core117.build(
         jump=a.jump or core117.T_JUMP, attack=a.attack or core117.T_ATTACK,

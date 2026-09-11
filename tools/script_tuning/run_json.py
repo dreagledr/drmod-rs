@@ -27,7 +27,7 @@ def main(argv=None):
                         "перезапустит миссию и взведёт скрипт после loading")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
-    sys.stdout.reconfigure(line_buffering=True)
+    api.setup_stdout()
 
     with open(a.path, encoding="utf-8") as f:
         script = json.load(f)

@@ -103,7 +103,7 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=120.0, help="с — ждать окно игры")
     p.add_argument("--no-inject", action="store_true")
     a = p.parse_args(argv)
-    sys.stdout.reconfigure(line_buffering=True)
+    api.setup_stdout()
 
     if a.build:
         print("сборка мода (cargo build)...")

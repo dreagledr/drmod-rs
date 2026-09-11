@@ -145,7 +145,7 @@ def main(argv=None):
     p.add_argument("--no-focus", action="store_true",
                    help="не активировать окно игры (без фокуса игра ввод в меню не видит)")
     a = p.parse_args(argv)
-    sys.stdout.reconfigure(line_buffering=True)
+    api.setup_stdout()
 
     if not a.no_focus:
         print(f"фокус окна игры: {'OK' if api.focus_and_settle() else 'НЕ ПОЛУЧИЛСЯ'}")

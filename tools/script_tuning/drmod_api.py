@@ -23,6 +23,17 @@ from ctypes import wintypes
 DEFAULT_URL = "http://127.0.0.1:5223"
 GAME_TITLE = "METAL GEAR RISING: REVENGEANCE"
 
+
+def setup_stdout():
+    """UTF-8 + построчная буферизация для stdout инструментов.
+
+    Иначе вывод идёт в локальной кодировке (cp1251 при перенаправлении в файл,
+    cp866 в консоли) и русский текст в логах читается кракозябрами, а символы
+    вне cp1251 (`→`, `≥`, `✓`) вообще роняют печать уже после записи CSV.
+    """
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace",
+                           line_buffering=True)
+
 # Коды клавиш DirectInput (DIK): их мод подмешивает в `ms_InputKeys` после
 # опроса устройства. Стрелки/Enter/Esc — то, что читает меню.
 DIK_ESCAPE = 0x01
@@ -82,6 +93,10 @@ def _http_once(base, path, method, body, wait):
     finally:
         s.close()
     head, _, payload = raw.partition(b"\r\n\r\n")
+    if not raw:
+        # Сервер мода живёт в render-цикле игры и под нагрузкой (загрузка миссии)
+        # иногда закрывает соединение, не ответив — это retry-кейс, а не ошибка.
+        raise ConnectionError(f"{method} {path}: пустой ответ")
     status = int(head.split(b" ")[1]) if head.startswith(b"HTTP/") else 0
     if status != 200:
         raise RuntimeError(f"{method} {path} → HTTP {status}: "

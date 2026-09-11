@@ -41,7 +41,7 @@ def main(argv=None):
     p.add_argument("--no-focus", action="store_true", help="не активировать окно игры")
     p.add_argument("--url", default=api.DEFAULT_URL)
     a = p.parse_args(argv)
-    sys.stdout.reconfigure(line_buffering=True)
+    api.setup_stdout()
 
     before = api.state(a.url)
     print(f"до: menu={before.get('menu_status')} mission={before.get('mission_name')} "

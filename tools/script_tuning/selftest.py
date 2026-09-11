@@ -1,17 +1,18 @@
 # -*- coding: utf-8 -*-
-"""Оффлайн-проверка sweep.py: зеркало in_zone, метрики и логика взвода.
+"""Оффлайн-проверка sweep.py: зеркало in_zone и метрики перелёта.
 
 Прогоняется без игры: `py -3 tools\\script_tuning\\selftest.py`.
-Проверяет только то, что не зависит от живого API, — допуски триггера
-(должны совпадать с `segment::in_zone`), метрики перелёта и порядок взвода
-(взводим вне зоны, при попадании в зону — промпт, а не старт).
+Проверяет только то, что не зависит от живого API: допуски триггера
+(должны совпадать с `segment::in_zone`) и метрики перелёта.
 """
-import builtins
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import sweep  # noqa: E402
+
+# cp1251-консоль не кодирует «→»/«≥» из сводок — иначе проверка падает на печати.
+sys.stdout.reconfigure(errors="replace")
 
 SPAWN = sweep.SPAWN
 fail = []
@@ -45,60 +46,9 @@ m2 = sweep.metrics([{"pos": [0.0, 0.0, 0.0]}, {"pos": [0.0, 1.0, 0.0]}])
 check("metrics: чужой старт → spawn_ok=0", m2["spawn_ok"] == 0)
 check("metrics: пустой лог → None", sweep.metrics([]) is None)
 
-# --- arm_when_outside: промпт при игроке в зоне и ретрай ----------------------
-real_http = sweep.http
-real_input = builtins.input
-state = {"n": 0}
-asked = []
-
-
-def fake_http_in_zone(base, path, method="GET", body=None, timeout=5.0):
-    if path == "/script/run":
-        return {"script_id": 7, "name": "core117-j45-a76", "total_frames": 240, "status": "armed"}
-    if path == "/script/stop":
-        return {"stopped": True}
-    if path == "/state":
-        state["n"] += 1
-        if state["n"] == 1:  # первая попытка — игрок ещё в зоне спавна
-            return {"player": {"found": True, "pos": [2.86, 0.0, 70.91]}, "script": None}
-        return {"player": {"found": True, "pos": [-5.9, 39.0, 39.0]},
-                "script": {"id": 7, "status": "armed"}}
-    raise AssertionError(path)
-
-
-builtins.input = lambda prompt="": asked.append(prompt) or ""
-sweep.http = fake_http_in_zone
-try:
-    sid = sweep.arm_when_outside("http://x", {"commands": []}, "test")
-finally:
-    builtins.input = real_input
-    sweep.http = real_http
-
-check(f"arm: вернул sid={sid}", sid == 7)
-check(f"arm: спросили про уход из зоны ({len(asked)} промпт)", len(asked) == 1)
-
-# --- arm_when_outside: игрок не найден (меню) → взводим без промпта -----------
-asked.clear()
-
-
-def fake_http_menu(base, path, method="GET", body=None, timeout=5.0):
-    if path == "/script/run":
-        return {"script_id": 8, "name": "n", "total_frames": 240, "status": "armed"}
-    if path == "/state":
-        # позиция есть, но found=false — как в меню/на загрузке: верить нельзя
-        return {"player": {"found": False, "pos": [2.86, 0.0, 70.91]},
-                "script": {"id": 8, "status": "armed"}}
-    raise AssertionError(path)
-
-
-builtins.input = lambda prompt="": asked.append(prompt) or ""
-sweep.http = fake_http_menu
-try:
-    sid = sweep.arm_when_outside("http://x", {"commands": []}, "test")
-finally:
-    builtins.input = real_input
-    sweep.http = real_http
-check(f"menu: взведено sid={sid} без промпта ({len(asked)})", sid == 8 and not asked)
+# Проверки порядка взвода (arm_when_outside) убраны вместе с самой функцией:
+# взвод теперь делает мод (поле `restart` в скрипте + `segment::in_zone`),
+# а зеркалом допусков остаётся `in_zone` выше.
 
 print(f"\nпровалено: {len(fail)}" + (" → " + ", ".join(fail) if fail else ""))
 sys.exit(1 if fail else 0)

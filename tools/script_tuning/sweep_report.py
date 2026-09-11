@@ -14,7 +14,7 @@ def main(argv=None):
     p.add_argument("csv", nargs="?", default=r"out\tuning3\sweep.csv")
     p.add_argument("--barrier", type=float, default=20.0)
     a = p.parse_args(argv)
-    sys.stdout.reconfigure(line_buffering=True)
+    api.setup_stdout()
 
     with open(a.csv, encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
