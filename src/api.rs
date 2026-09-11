@@ -262,6 +262,13 @@ struct EnemyCondition {
     /// ниже; по телу врага условие не сработало бы никогда.
     #[serde(default = "f32_min")]
     blade_dy_min: f32,
+    /// Высота игрока (м) для срабатывания: удар обязан быть **в прыжке** — только
+    /// он даёт подброс, — но невысоко: при высоком ударе лаунч уходит
+    /// горизонтально, при низком (y≈0.5–0.7, как в записи 142) — вверх.
+    #[serde(default = "f32_min")]
+    player_y_min: f32,
+    #[serde(default = "f32_max")]
+    player_y_max: f32,
 }
 
 fn f32_min() -> f32 {
@@ -290,6 +297,9 @@ fn enemy_condition_ok(
     }
     let dy = enemy.pos[1] - player_pos[1];
     if enemy.blade_y - player_pos[1] < cond.blade_dy_min {
+        return false;
+    }
+    if player_pos[1] < cond.player_y_min || player_pos[1] > cond.player_y_max {
         return false;
     }
     if cond.dist_max < f32::MAX {
@@ -1550,7 +1560,7 @@ fn script_tick(
                 script.fired_at[idx] = Some(k);
                 logger::log_line(&format!(
                     "api: script '{}' команда {} сработала по врагу: anim={} frame={} \
-                     дистанция={:.2} клинок_выше_игрока={:.2} (кадр {})",
+                     дистанция={:.2} клинок_выше_игрока={:.2} игрок_y={:.2} (кадр {})",
                     script.name,
                     idx,
                     enemy.r_anim,
@@ -1559,7 +1569,8 @@ fn script_tick(
                         + (enemy.pos[1] - player_pos[1]).powi(2)
                         + (enemy.pos[2] - player_pos[2]).powi(2))
                     .sqrt(),
-                    enemy.pos[1] - player_pos[1],
+                    enemy.blade_y - player_pos[1],
+                    player_pos[1],
                     k
                 ));
             }
