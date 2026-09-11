@@ -27,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -723,6 +723,68 @@ impl RingBuffer {
     }
 }
 
+/// Очередь ввода активного скрипта для подачи из детура `updateInputUnit`, то
+/// есть **по тикам симуляции** (как `PLAYBACK_FEED` у replay). Раньше кадр
+/// скрипта считался в render-цикле: при 43–57 FPS кадров и 60 тиках физики один
+/// и тот же кадр скрипта (прыжок 45, удар 76) попадал в разные моменты физики —
+/// отсюда «то в воздухе, то на земле» и невоспроизводимость серий.
+static SCRIPT_QUEUE: Mutex<VecDeque<InputOverride>> = Mutex::new(VecDeque::new());
+/// Счётчик тиков симуляции: инкрементирует детур `updateInputUnit`, render по
+/// нему досчитывает, сколько кадров скрипта подать.
+static SIM_TICKS: AtomicU64 = AtomicU64::new(0);
+/// Предел очереди кадров: страховка от накопления, если тики обгонят render.
+const SCRIPT_QUEUE_MAX: usize = 8;
+/// Предел кадров скрипта за один render-кадр: при 60 тиках и 40-60 FPS это
+/// 1-2, больше бывает только при сбое (тогда лучше отстать, чем «промотать»).
+const MAX_STEPS_PER_FRAME: usize = 4;
+
+/// Подача ввода скрипта на текущий тик симуляции — вызывается из детура
+/// `updateInputUnit`. `false` — очередь пуста (подавать нечего, вызывающий
+/// применит обычный override и тем самым удержит последний ввод). Ни
+/// логирования, ни работы с файлами здесь нет: в детуре это даёт рекурсию
+/// access violation (см. `docs/REPLAY_FINDINGS.md`).
+pub(crate) fn feed_tick(unit: *mut InputUnit) -> bool {
+    SIM_TICKS.fetch_add(1, Ordering::Relaxed);
+    let ov = match SCRIPT_QUEUE.lock() {
+        Ok(mut q) => q.pop_front(),
+        Err(_) => None,
+    };
+    match ov {
+        Some(ov) => {
+            if ov.active {
+                unsafe { *unit = ov.input };
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// Сколько тиков симуляции прошло (детур `updateInputUnit`).
+pub(crate) fn sim_ticks() -> u64 {
+    SIM_TICKS.load(Ordering::Relaxed)
+}
+
+/// Кладёт ввод очередного кадра скрипта в очередь тиков. Тот же ввод остаётся
+/// в активном override: его видит debug-панель, лог кадров, и он же служит
+/// «удержанием» последнего кадра, если тиков оказалось больше, чем кадров.
+fn push_script_frame(ov: InputOverride) {
+    replay::set_input_override(ov);
+    if let Ok(mut q) = SCRIPT_QUEUE.lock() {
+        while q.len() >= SCRIPT_QUEUE_MAX {
+            q.pop_front();
+        }
+        q.push_back(ov);
+    }
+}
+
+/// Сбрасывает очередь кадров (старт нового скрипта, остановка, eject).
+pub(crate) fn clear_script_queue() {
+    if let Ok(mut q) = SCRIPT_QUEUE.lock() {
+        q.clear();
+    }
+}
+
 /// Общее состояние, разделяемое между render-потоком (пишет) и HTTP (читает).
 struct SharedState {
     ring: RingBuffer,
@@ -732,6 +794,9 @@ struct SharedState {
     frame_count: u32,
     fps: f32,
     base_addr: usize,
+    /// Последний виденный счётчик тиков симуляции: по нему render считает,
+    /// сколько кадров скрипта подать за прошедший кадр отрисовки.
+    last_sim_tick: u64,
     next_script_id: u32,
     /// Запрос eject через `POST /eject`: HTTP-поток ставит флаг и успевает
     /// ответить, render-цикл проверяет его каждый кадр и выполняет
@@ -760,6 +825,7 @@ impl ApiServer {
             frame_count: 0,
             fps: 0.0,
             base_addr,
+            last_sim_tick: 0,
             next_script_id: 1,
             eject_requested: false,
         }));
@@ -841,6 +907,19 @@ impl ApiServer {
         // триггера — первый тик выполняется со следующего кадра (как при
         // запуске через HTTP).
         let base_addr = guard.base_addr;
+        // Сколько кадров скрипта подать за этот render-кадр. В геймплее — по
+        // числу прошедших тиков симуляции (детур `updateInputUnit`): только так
+        // кадр скрипта совпадает с тиком физики и тайминги не зависят от FPS.
+        // В меню/загрузке тиков нет (детур там не вызывается) — по одному кадру
+        // за кадр отрисовки, как было, иначе скрипт меню/рестарта встал бы.
+        let steps = if ui_state.menu_status.is_in_game() {
+            let now = sim_ticks();
+            let elapsed = now.saturating_sub(guard.last_sim_tick);
+            guard.last_sim_tick = now;
+            (elapsed as usize).min(MAX_STEPS_PER_FRAME)
+        } else {
+            1
+        };
         let script_phase = guard
             .script
             .as_ref()
@@ -885,10 +964,21 @@ impl ApiServer {
                 }
                 Some(s.id)
             } else if s.status == ScriptStatus::Running {
-                let ov = script_tick(s, base_addr, &enemy, state.pos, state.velocity[1]);
-                replay::set_input_override(ov);
+                // Кадры скрипта кладём в очередь тиков: детур `updateInputUnit`
+                // заберёт по одному за тик симуляции (`api::feed_tick`), поэтому
+                // кадр скрипта = тик физики.
+                for _ in 0..steps {
+                    let ov = script_tick(s, base_addr, &enemy, state.pos, state.velocity[1]);
+                    push_script_frame(ov);
+                    if s.status != ScriptStatus::Running {
+                        break;
+                    }
+                }
                 if s.status == ScriptStatus::Done {
+                    // Последние кадры уже не нужны: снимаем override, чистим
+                    // очередь и keybind-эмуляцию.
                     replay::set_input_override(InputOverride::default());
+                    clear_script_queue();
                     hooks::clear_keybind_emulation();
                     logger::log_line(&format!("api: script {} '{}' done", s.id, s.name));
                 }
@@ -1033,6 +1123,7 @@ impl ApiServer {
             .max()
             .unwrap_or(0);
         hooks::clear_keybind_emulation();
+        clear_script_queue();
         guard.script = Some(ScriptState {
             id,
             name: req.name.clone(),
@@ -1333,6 +1424,7 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     });
     let status = phase_status;
     let next_status = pending.as_ref().map(|p| p.status);
+    clear_script_queue();
     guard.script = Some(ScriptState {
         id,
         name: req.name.clone(),
@@ -1860,10 +1952,12 @@ fn script_tick(
     }
 }
 
-/// Останавливает скрипт: снимает override и keybind-эмуляцию.
+/// Останавливает скрипт: снимает override, чистит очередь кадров и
+/// keybind-эмуляцию.
 fn stop_script(script: &mut ScriptState) {
     script.status = ScriptStatus::Stopped;
     replay::set_input_override(InputOverride::default());
+    clear_script_queue();
     hooks::clear_keybind_emulation();
 }
 
