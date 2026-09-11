@@ -41,8 +41,87 @@ static TIME_CALLER_HITS: [AtomicU64; TIME_CALLERS_MAX] =
 /// Трамплин оригинального `getTicks`: naked-детур уходит в него хвостом.
 static ORIG_TIME_TICKS: AtomicUsize = AtomicUsize::new(0);
 
-/// Запоминает, откуда позвали геттер времени. Ни аллокаций, ни логов — функцию
-/// игра дёргает каждый кадр из своего потока.
+/// Счётчик шагов для синтетических часов: инкрементится в детуре
+/// `updateInputUnit` (наш шаг = один вызов ввода), то есть один шаг на кадр.
+static SYNTH_STEPS: AtomicU64 = AtomicU64::new(0);
+/// Шагов на момент включения синтетики и значение часов в тот момент: чтобы
+/// синтетические часы продолжали реальные без скачка (потребители считают
+/// разности от старта игры).
+static SYNTH_BASE_STEPS: AtomicU64 = AtomicU64::new(0);
+static SYNTH_BASE_TICKS: AtomicU64 = AtomicU64::new(0);
+/// Ближайшее значение синтетических часов (edx:eax) для naked-детура.
+static SYNTH_LO: AtomicUsize = AtomicUsize::new(0);
+static SYNTH_HI: AtomicUsize = AtomicUsize::new(0);
+/// Включены ли синтетические часы (`POST /dt {"steps": true}`): каждый шаг
+/// двигает символьное время ровно на 16.667 мс, независимо от реального FPS.
+static SYNTH_ENABLED: AtomicU32 = AtomicU32::new(0);
+/// Срабатываний синтетической ветки и последнее отданное значение — для
+/// проверки, что она действительно используется (`/state` → `dt`).
+static SYNTH_RETURNS: AtomicU64 = AtomicU64::new(0);
+static SYNTH_LAST: AtomicU64 = AtomicU64::new(0);
+
+/// Вызовы времени из пацеров кадров (RVA возврата): им нужны РЕАЛЬНЫЕ часы,
+/// иначе они зациклятся/заснут на «замёрзшем» времени. Первый пацер —
+/// `0xB980B7` (спин в цикле `Sleep`) и `0xB98008` (замер кадра внутри
+/// `getTimeMs`); второй — `0x9F2A57`/`0x9F2A6A` (меряет кадр и зовёт
+/// `Sleep(вычисленное)`).
+///
+/// ⚠️ Все зарегистрированные вызывающие сырого геттера — это пацеры (проверено
+/// 2026-09-11), поэтому синтетические часы через него до симуляции не доходят:
+/// время симуляции идёт через `cSlowRateManager::m_fTickDifference` (его мы
+/// фиксируем в `POST /dt`) и реальное накопление. Точечная точка вставки —
+/// писатель `m_fTickDifference`, а не геттер.
+const PACER_CALLERS: [usize; 4] = [0xB980B7, 0xB98008, 0x9F2A57, 0x9F2A6A];
+/// RVA глобалов модуля времени (см. `tools/disasm/README.md`): частота QPC и
+/// «секунд на тик». Считаем по ним длину шага в тиках.
+const TIME_QPF_RVA: usize = 0x19D4F20;
+const TIME_SEC_PER_TICK_RVA: usize = 0x19D4F14;
+/// Номинал движка: 60 шагов в символьной секунде.
+const STEP_HZ: f64 = 60.0;
+
+/// Решает, отдавать ли вызывающему синтетические часы вместо реальных.
+/// `true` — в `SYNTH_LO/HI` лежит значение для edx:eax; `false` — пусть идёт в
+/// оригинал (пацер кадров).
+extern "C" fn synth_time(caller: usize) -> u32 {
+    if SYNTH_ENABLED.load(Ordering::Relaxed) == 0 {
+        return 0;
+    }
+    let base = BASE_ADDR.load(Ordering::Relaxed);
+    let rva = caller.wrapping_sub(base);
+    if PACER_CALLERS.contains(&rva) {
+        return 0;
+    }
+    if base == 0 {
+        return 0;
+    }
+    // Тиков QPC на шаг: частота / 60 (если частота ещё не прочитана — по
+    // «секунд на тик»).
+    let mut ticks_per_step = 0.0f64;
+    let freq = unsafe { *((base + TIME_QPF_RVA) as *const u64) };
+    if freq != 0 {
+        ticks_per_step = freq as f64 / STEP_HZ;
+    } else {
+        let spt = unsafe { *((base + TIME_SEC_PER_TICK_RVA) as *const f32) };
+        if spt > 0.0 {
+            ticks_per_step = (1.0 / 60.0 / spt as f64).round();
+        }
+    }
+    if ticks_per_step < 1.0 {
+        return 0;
+    }
+    let steps = SYNTH_STEPS.load(Ordering::Relaxed);
+    let base_steps = SYNTH_BASE_STEPS.load(Ordering::Relaxed);
+    let base_ticks = SYNTH_BASE_TICKS.load(Ordering::Relaxed);
+    let now = base_ticks
+        .saturating_add(((steps.saturating_sub(base_steps)) as f64 * ticks_per_step) as u64);
+    SYNTH_LO.store(now as u32 as usize, Ordering::Relaxed);
+    SYNTH_HI.store((now >> 32) as u32 as usize, Ordering::Relaxed);
+    SYNTH_RETURNS.fetch_add(1, Ordering::Relaxed);
+    SYNTH_LAST.store(now, Ordering::Relaxed);
+    1
+}
+
+/// Регистрирует адрес возврата и синтетические часы (вызывается из детура).
 extern "C" fn time_caller_record(addr: usize) {
     for i in 0..TIME_CALLERS_MAX {
         let slot = TIME_CALLERS[i].load(Ordering::Relaxed);
@@ -69,13 +148,63 @@ extern "C" fn time_caller_record(addr: usize) {
 unsafe extern "C" fn time_ticks_detour() -> u64 {
     core::arch::naked_asm!(
         "mov edx, [esp]",           // адрес возврата в вызывающего
-        "push edx",                 // аргумент для регистратора (cdecl)
-        "push edx",                 // выравнивание стека под SSE в регистраторе
+        "push edx",                 // аргумент для регистратора/решателя (cdecl)
+        "push edx",                 // выравнивание стека под SSE
         "call {record}",
+        "call {synth}",             // eax != 0 → отдаём синтетические часы
         "add esp, 8",
-        "jmp dword ptr [{orig}]",   // хвостом в оригинал
+        "test eax, eax",
+        "jz 2f",
+        "mov eax, [{lo}]",          // синтетика: edx:eax = база + шаг × 16.667 мс
+        "mov edx, [{hi}]",
+        "ret",
+        "2:",
+        "jmp dword ptr [{orig}]",   // иначе хвостом в оригинал (пацер кадров)
         record = sym time_caller_record,
+        synth = sym synth_time,
+        lo = sym SYNTH_LO,
+        hi = sym SYNTH_HI,
         orig = sym ORIG_TIME_TICKS,
+    )
+}
+
+/// Включает/выключает синтетические часы («шаг = 16.667 мс»). Возвращает
+/// предыдущее состояние. `real_ticks` — текущее значение реальных часов (по
+/// нему синтетика продолжается без скачка).
+pub(crate) fn set_synthetic_clock(on: bool) -> bool {
+    let was = SYNTH_ENABLED.swap(if on { 1 } else { 0 }, Ordering::Relaxed) != 0;
+    if on && !was {
+        // Стартуем от реальных часов: читаем их оригинальным геттером.
+        let orig = ORIG_TIME_TICKS.load(Ordering::Relaxed);
+        let base_ticks = if orig != 0 {
+            let f: unsafe extern "C" fn() -> u64 = unsafe { std::mem::transmute(orig) };
+            unsafe { f() }
+        } else {
+            0
+        };
+        SYNTH_BASE_TICKS.store(base_ticks, Ordering::Relaxed);
+        SYNTH_BASE_STEPS.store(SYNTH_STEPS.load(Ordering::Relaxed), Ordering::Relaxed);
+        SYNTH_LO.store(base_ticks as u32 as usize, Ordering::Relaxed);
+        SYNTH_HI.store((base_ticks >> 32) as u32 as usize, Ordering::Relaxed);
+    }
+    was
+}
+
+/// Шаг симуляции для синтетических часов (вызывается из детура ввода).
+pub(crate) fn note_step() {
+    SYNTH_STEPS.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Идут ли сейчас синтетические часы (для `/state`).
+pub(crate) fn synthetic_clock_on() -> bool {
+    SYNTH_ENABLED.load(Ordering::Relaxed) != 0
+}
+
+/// Диагностика синтетических часов: (срабатываний, последнее значение).
+pub(crate) fn synthetic_clock_stats() -> (u64, u64) {
+    (
+        SYNTH_RETURNS.load(Ordering::Relaxed),
+        SYNTH_LAST.load(Ordering::Relaxed),
     )
 }
 

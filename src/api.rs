@@ -664,6 +664,12 @@ struct DtSnapshot {
     fixed: bool,
     /// Значение, которым подменяем дельту, мс (по умолчанию номинал 16.667).
     fixed_ms: f32,
+    /// Идут ли синтетические часы (шаг = ровно 16.667 мс символьного времени).
+    steps: bool,
+    /// Сколько раз синтетическая ветка сработала (монотонно) и последнее
+    /// отданное значение — видно, используется ли она вообще.
+    steps_returns: u64,
+    steps_last_ms: f32,
     /// Измеренная движком длительность кадра, мс (номинал 16.667).
     frame_ms: f32,
     /// Коэффициент кадра = `frame_ms / 16.667` (номинал 1.0).
@@ -676,6 +682,8 @@ struct DtResponse {
     fixed: bool,
     /// Чем подменяем дельту, мс.
     ms: f32,
+    /// Синтетические часы (шаг = 16.667 мс).
+    steps: bool,
     /// Абсолютный адрес `cSlowRateManager` (для сверки с зондом).
     addr: String,
 }
@@ -842,6 +850,9 @@ const MAX_STEPS_PER_FRAME: usize = 4;
 /// access violation (см. `docs/REPLAY_FINDINGS.md`).
 pub(crate) fn feed_tick(unit: *mut InputUnit) -> bool {
     SIM_TICKS.fetch_add(1, Ordering::Relaxed);
+    // Шаг для синтетических часов: один вызов ввода = один шаг символьного
+    // времени (16.667 мс), если синтетика включена.
+    hooks::note_step();
     if FIXED_DT.load(Ordering::Relaxed) {
         apply_fixed_dt();
     }
@@ -1480,6 +1491,9 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
         dt: DtSnapshot {
             fixed: FIXED_DT.load(Ordering::Relaxed),
             fixed_ms: f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed)),
+            steps: hooks::synthetic_clock_on(),
+            steps_returns: hooks::synthetic_clock_stats().0,
+            steps_last_ms: hooks::synthetic_clock_stats().1 as f32 / 1000.0,
             frame_ms: s.dt_frame_ms,
             rate: s.dt_rate,
         },
@@ -1497,6 +1511,10 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
         /// Дельта кадра в мс: номинал движка 16.667, при 57 FPS реальная
         /// средняя ~17.5 (по ней физика и шла до фиксации).
         ms: Option<f32>,
+        /// Синтетические часы: каждый шаг (вызов ввода) двигает символьное
+        /// время ровно на 16.667 мс — абсолютно стабильный шаг, при нехватке
+        /// FPS игра замедляется. Пацер кадров при этом видит реальное время.
+        steps: Option<bool>,
     }
     let req: Req = match serde_json::from_str(body) {
         Ok(r) => r,
@@ -1511,6 +1529,14 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             )
         }
     };
+    if let Some(on) = req.steps {
+        let was = hooks::set_synthetic_clock(on);
+        logger::log_line(&format!(
+            "api: синтетические часы {} (было {})",
+            if on { "вкл" } else { "выкл" },
+            if was { "вкл" } else { "выкл" }
+        ));
+    }
     if let Some(ms) = req.ms {
         if !(1.0..=1000.0).contains(&ms) {
             return (
@@ -1543,6 +1569,7 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
         Response::Dt(DtResponse {
             fixed: req.fixed,
             ms,
+            steps: hooks::synthetic_clock_on(),
             addr: format!("0x{addr:08X}"),
         }),
     )
