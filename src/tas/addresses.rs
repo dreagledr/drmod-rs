@@ -144,6 +144,19 @@ pub(crate) const KEY_DIGIT3: u8 = 0x2C;
 /// вызывает каждый тик для заполнения глобального InputUnit из DirectInput.
 /// Хук перехватывает её и перезаписывает unit[0] после вызова оригинала.
 pub(super) const UPDATE_INPUT_UNIT: usize = 0x9DAFE0;
+/// `cSlowRateManager::updateFrameTime` (thiscall, 0xA03970; аргументы
+/// `flag: i32`, `rate: f32`) — обновитель времени кадра из главного цикла
+/// (0x65254A/0x6526ED и обёртка 0x64B246/0x64B25D). Считает
+/// `m_fTickDifference = t - m_fTicks` от реальных часов 0x9F8C10 (мс) и пишет
+/// `m_fTicks`/`m_fTickRate`/`m_fTickDifference`. После оригинала можно
+/// подменить эти поля — тогда физика, анимация (читает `m_fTicks`) и
+/// кинематика видят один фиксированный шаг, а нехватка FPS уходит в
+/// замедление игры, а не в пропуск/дробление тика.
+pub(super) const FRAME_TIME_UPDATE: usize = 0xA03970;
+/// Обёртка главного цикла, вызывающая `FRAME_TIME_UPDATE` (0xA4B220).
+#[allow(dead_code)]
+pub(super) const FRAME_TIME_WRAPPER: usize = 0xA4B220;
+
 /// Pl0000::m_CurrentInput — копия `g_InputUnit0` (смещение от объекта Pl0000).
 pub(crate) const CURRENT_INPUT_OFFSET: usize = 0xCF8;
 /// `GameMenuStatus` (enum 0–18, см. `game::GameMenuStatus`): 1 = InGame,

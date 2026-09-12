@@ -39,6 +39,12 @@ static ORIG_IS_KEY_DOWN: OnceLock<unsafe extern "thiscall" fn(*const u8, i32) ->
 /// Trampoline оригинальной `KeyInput::isKeyPressed` (thiscall, 0x9D9400).
 static ORIG_IS_KEY_PRESSED: OnceLock<unsafe extern "thiscall" fn(*const u8, i32) -> i32> =
     OnceLock::new();
+/// Trampoline оригинального `cSlowRateManager::updateFrameTime`
+/// (thiscall, 0xA03970): `(this, flag, rate)` — обновитель времени кадра из
+/// главного цикла. Детур после оригинала подаёт фиксированный шаг (см.
+/// `api::after_frame_time`).
+static ORIG_FRAME_TIME: OnceLock<unsafe extern "thiscall" fn(*mut u8, i32, f32)> =
+    OnceLock::new();
 /// Эмуляция удержания keybind'ов (`isKeybindDown`): `[keybind] != 0` — детур
 /// возвращает 1 для этого keybind. Индексы — `addresses::KEYBIND_*`.
 static KEYBIND_HOLD: [AtomicU32; addresses::KEYBIND_TOTAL] =
@@ -554,11 +560,28 @@ unsafe extern "thiscall" fn is_key_pressed_detour(this: *const u8, vkey: i32) ->
     result
 }
 
+/// Детур `cSlowRateManager::updateFrameTime` (thiscall, 0xA03970). Вызывает
+/// оригинал (движок считает `m_fTickDifference`/`m_fTicks`/`m_fTickRate` от
+/// реальных часов) и, если включён фиксированный шаг (`POST /dt`), подаёт
+/// поверх линейный тик 1/60 — см. `api::after_frame_time`. Детур должен быть
+/// лёгким: только записи по готовому указателю, без логов и аллокаций.
+unsafe extern "thiscall" fn frame_time_detour(this: *mut u8, flag: i32, rate: f32) {
+    if let Some(&orig) = ORIG_FRAME_TIME.get() {
+        unsafe { orig(this, flag, rate) };
+    }
+    crate::api::after_frame_time(this as usize, flag);
+}
+
 /// Сохраняет trampoline (адрес оригинальной функции) после создания хука.
 fn set_original_update_input_unit(
     orig: unsafe extern "C" fn(*mut types::InputUnit, i32),
 ) -> Result<(), ()> {
     ORIG_UPDATE_INPUT_UNIT.set(orig).map_err(|_| ())
+}
+
+/// Сохраняет trampoline оригинального `updateFrameTime` после создания хука.
+fn set_original_frame_time(orig: unsafe extern "thiscall" fn(*mut u8, i32, f32)) -> Result<(), ()> {
+    ORIG_FRAME_TIME.set(orig).map_err(|_| ())
 }
 
 /// Сохраняет trampoline оригинальной `isKeybindPressed` после создания хука.
@@ -596,6 +619,8 @@ pub struct InputHooks {
     key_down: Option<MhHook>,
     key_pressed: Option<MhHook>,
     keyboard_poll: Option<MhHook>,
+    /// Хук обновителя времени кадра (`FRAME_TIME_UPDATE`) — фиксированный шаг.
+    frame_time: Option<MhHook>,
 }
 
 impl InputHooks {
@@ -634,16 +659,18 @@ impl InputHooks {
         let key_down = Self::create_key_down_hook(base_addr);
         let key_pressed = Self::create_key_pressed_hook(base_addr);
         let keyboard_poll = Self::create_keyboard_poll_hook(base_addr);
+        let frame_time = Self::create_frame_time_hook(base_addr);
 
         logger::log_line(&format!(
-            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={}",
+            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={} frame_time_hook={}",
             base_addr,
             if input.is_some() { "OK" } else { "FAIL" },
             if keybind.is_some() { "OK" } else { "FAIL" },
             if keybind_down.is_some() { "OK" } else { "FAIL" },
             if key_down.is_some() { "OK" } else { "FAIL" },
             if key_pressed.is_some() { "OK" } else { "FAIL" },
-            if keyboard_poll.is_some() { "OK" } else { "FAIL" }
+            if keyboard_poll.is_some() { "OK" } else { "FAIL" },
+            if frame_time.is_some() { "OK" } else { "FAIL" }
         ));
 
         Self {
@@ -653,6 +680,7 @@ impl InputHooks {
             key_down,
             key_pressed,
             keyboard_poll,
+            frame_time,
         }
     }
 
@@ -880,6 +908,46 @@ impl InputHooks {
         logger::log_line(&format!(
             "create_key_pressed_hook: OK target=0x{:08X} trampoline=0x{:08X}",
             target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// Устанавливает MinHook на `cSlowRateManager::updateFrameTime` (0xA03970):
+    /// после оригинала детур подаёт фиксированный шаг кадра (`POST /dt`).
+    fn create_frame_time_hook(base_addr: usize) -> Option<MhHook> {
+        use core::ffi::c_void;
+
+        if base_addr == 0 {
+            logger::log_line("create_frame_time_hook: base_addr=0");
+            return None;
+        }
+        let target = (base_addr + addresses::FRAME_TIME_UPDATE) as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, frame_time_detour as *mut c_void) } {
+            Ok(h) => h,
+            Err(e) => {
+                logger::log_line(&format!(
+                    "create_frame_time_hook: MH_CreateHook FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "thiscall" fn(*mut u8, i32, f32) =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = set_original_frame_time(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            logger::log_line(&format!(
+                "create_frame_time_hook: queue_enable FAIL err={:?}",
+                e
+            ));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        logger::log_line(&format!(
+            "create_frame_time_hook: OK target=0x{:08X} detour=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            frame_time_detour as *const () as usize,
             hook.trampoline() as usize
         ));
         Some(hook)

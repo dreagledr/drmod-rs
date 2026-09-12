@@ -654,6 +654,17 @@ struct DtSnapshot {
     frame_ms: f32,
     /// Коэффициент кадра = `frame_ms / 16.667` (номинал 1.0).
     rate: f32,
+    /// Кадров движка с момента включения фиксированного шага (счётчик
+    /// синтетических часов `m_fTicks`).
+    frames: u64,
+    /// Последнее поданное значение `m_fTicks` (мс) — растёт ровно на `fixed_ms`
+    /// за кадр; по нему видно, идут ли часы анимации линейно.
+    synth_ticks_ms: f32,
+    /// База синтетических часов (мс).
+    synth_base_ms: f32,
+    /// Ведутся ли синтетические часы `m_fTicks` (A/B: выключение оставляет
+    /// фиксированную дельту, но анимация идёт по реальному времени).
+    ticks: bool,
 }
 
 /// `POST /dt` — ответ.
@@ -662,6 +673,8 @@ struct DtResponse {
     fixed: bool,
     /// Чем подменяем дельту, мс.
     ms: f32,
+    /// Ведутся ли синтетические часы `m_fTicks`.
+    ticks: bool,
     /// Абсолютный адрес `cSlowRateManager` (для сверки с зондом).
     addr: String,
 }
@@ -767,6 +780,7 @@ impl RingBuffer {
 /// дельты и есть дрейф, из-за которого одинаковые прогоны расходились.
 const SLOW_RATE_MANAGER: usize = 0x17E93B0;
 const SRM_TICK_RATE: usize = 0x7C;
+const SRM_TICKS: usize = 0x80;
 const SRM_TICK_DIFF: usize = 0x8C;
 const SRM_UNIT0_DELTA: usize = 0x48;
 /// Номинал движка: 1/60 с в миллисекундах и коэффициент 1.0.
@@ -782,6 +796,10 @@ static FIXED_DT: AtomicBool = AtomicBool::new(false);
 static FIXED_DT_MS_BITS: AtomicU32 = AtomicU32::new(f32::to_bits(NOMINAL_FRAME_MS));
 /// Абсолютный адрес `cSlowRateManager` (base + 0x17E93B0); 0 — не включено.
 static SRM_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// Вести ли синтетические часы `m_fTicks` (по умолчанию — да). Выключатель для
+/// A/B: с ним анимация идёт по линейным 1/60-часам, без него — по реальному
+/// времени движка (при фиксированной дельте физика стабильна, а анимация нет).
+static SYNTH_TICKS: AtomicBool = AtomicBool::new(true);
 
 /// Пишет выбранную дельту кадра (см. `FIXED_DT`). Только записи по готовому
 /// адресу: ни аллокаций, ни логов — это путь детура.
@@ -804,6 +822,71 @@ fn apply_fixed_dt() {
         *(p.add(SRM_TICK_RATE) as *mut f32) = rate;
         *(p.add(SRM_UNIT0_DELTA) as *mut f32) = rate;
     }
+}
+
+/// Сколько раз обновитель времени кадра (`FRAME_TIME_UPDATE`) отработал с
+/// момента включения фиксированного шага. Каждый его вызов — один кадр
+/// движка; на этом счётчике строится синтетический `m_fTicks`.
+static SYNTH_FRAMES: AtomicU64 = AtomicU64::new(0);
+/// База синтетических часов (мс, f32 в битах): значение `m_fTicks` в момент
+/// включения, чтобы часы продолжались без скачка.
+static SYNTH_BASE_TICKS_BITS: AtomicU32 = AtomicU32::new(0);
+/// Последнее отданное значение синтетического `m_fTicks` (мс) — для `/state`.
+static SYNTH_LAST_TICKS_BITS: AtomicU32 = AtomicU32::new(0);
+
+/// Детур `cSlowRateManager::updateFrameTime` (см. `hooks::frame_time_detour`):
+/// вызывается после оригинала из главного цикла. При включённом фиксированном
+/// шаге перезаписывает его поля — движок сам только что положил туда
+/// `m_fTickDifference = t - m_fTicks` от реальных часов и `m_fTicks = t`;
+/// мы заменяем всё на линейные 1/60-часы, поэтому и физика, и анимация, и
+/// кинематика получают один и тот же шаг. Лишние кадры уходят в замедление
+/// игры (часы `m_fTicks` идут медленнее реального времени), а не в разную
+/// величину шага. При `flag == 0` движок делает сброс (обнуляет `m_fTicks`) —
+/// не мешаем ему и лишь фиксируем дельту/коэффициент.
+pub(crate) fn after_frame_time(srm: usize, flag: i32) {
+    if !FIXED_DT.load(Ordering::Relaxed) || srm == 0 {
+        return;
+    }
+    let ms = f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed));
+    let rate = if NOMINAL_FRAME_MS > 0.0 {
+        ms / NOMINAL_FRAME_MS
+    } else {
+        NOMINAL_RATE
+    };
+    let p = srm as *mut u8;
+    let ticks = if flag == 0 {
+        // Сброс: часы продолжат от нового нуля движка, у нас — от базы.
+        SYNTH_FRAMES.store(0, Ordering::Relaxed);
+        f32::from_bits(SYNTH_BASE_TICKS_BITS.load(Ordering::Relaxed))
+    } else {
+        let n = SYNTH_FRAMES.fetch_add(1, Ordering::Relaxed);
+        let base = f32::from_bits(SYNTH_BASE_TICKS_BITS.load(Ordering::Relaxed));
+        base + (n as f32 + 1.0) * ms
+    };
+    SYNTH_LAST_TICKS_BITS.store(ticks.to_bits(), Ordering::Relaxed);
+    unsafe {
+        *(p.add(SRM_TICK_DIFF) as *mut f32) = ms;
+        *(p.add(SRM_TICK_RATE) as *mut f32) = rate;
+        *(p.add(SRM_UNIT0_DELTA) as *mut f32) = rate;
+        // Часы анимации — только в режиме синтетических часов (A/B-выключатель).
+        if SYNTH_TICKS.load(Ordering::Relaxed) {
+            *(p.add(SRM_TICKS) as *mut f32) = ticks;
+        }
+    }
+}
+
+/// Продолжает синтетические часы от текущего `m_fTicks` движка (вызывается при
+/// включении фиксированного шага). Без этого после включения `m_fTicks` скакнул
+/// бы к старой базе.
+fn capture_synth_base(srm: usize) {
+    SYNTH_FRAMES.store(0, Ordering::Relaxed);
+    if srm == 0 {
+        SYNTH_BASE_TICKS_BITS.store(0, Ordering::Relaxed);
+        return;
+    }
+    let cur = unsafe { *((srm + SRM_TICKS) as *const f32) };
+    SYNTH_BASE_TICKS_BITS.store(cur.to_bits(), Ordering::Relaxed);
+    SYNTH_LAST_TICKS_BITS.store(cur.to_bits(), Ordering::Relaxed);
 }
 
 /// Очередь ввода активного скрипта для подачи из детура `updateInputUnit`, то
@@ -1460,6 +1543,10 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
             fixed_ms: f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed)),
             frame_ms: s.dt_frame_ms,
             rate: s.dt_rate,
+            frames: SYNTH_FRAMES.load(Ordering::Relaxed),
+            synth_ticks_ms: f32::from_bits(SYNTH_LAST_TICKS_BITS.load(Ordering::Relaxed)),
+            synth_base_ms: f32::from_bits(SYNTH_BASE_TICKS_BITS.load(Ordering::Relaxed)),
+            ticks: SYNTH_TICKS.load(Ordering::Relaxed),
         },
     }
 }
@@ -1467,7 +1554,9 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
 /// `POST /dt` — включить/выключить фиксированный шаг времени движка.
 /// Тело: `{"fixed": true}` или `{"fixed": true, "ms": 17.5}`. Адрес менеджера
 /// считаем от `base_addr` состояния; при выключении движок сам вернётся к
-/// измеренной дельте (мы её не трогаем).
+/// измеренной дельте (перестаём трогать его поля). Шаг подаётся после
+/// `cSlowRateManager::updateFrameTime` (хук `FRAME_TIME_UPDATE`): и
+/// `m_fTickDifference`, и часы `m_fTicks` становятся линейными 1/60.
 fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     #[derive(Deserialize)]
     struct Req {
@@ -1475,6 +1564,10 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
         /// Дельта кадра в мс: номинал движка 16.667, при 57 FPS реальная
         /// средняя ~17.5 (по ней физика и шла до фиксации).
         ms: Option<f32>,
+        /// Вести синтетические часы `m_fTicks` (по умолчанию да) — A/B-ручка:
+        /// `false` оставляет фиксированную дельту (стабильная физика), но
+        /// анимация снова идёт по реальному времени движка.
+        ticks: Option<bool>,
     }
     let req: Req = match serde_json::from_str(body) {
         Ok(r) => r,
@@ -1504,23 +1597,32 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
         let guard = state.lock().unwrap();
         guard.base_addr + SLOW_RATE_MANAGER
     };
+    if let Some(ticks) = req.ticks {
+        SYNTH_TICKS.store(ticks, Ordering::Relaxed);
+    }
     if req.fixed {
         SRM_ADDR.store(addr, Ordering::Relaxed);
         FIXED_DT.store(true, Ordering::Relaxed);
+        if SYNTH_TICKS.load(Ordering::Relaxed) {
+            capture_synth_base(addr);
+        }
     } else {
         FIXED_DT.store(false, Ordering::Relaxed);
         SRM_ADDR.store(0, Ordering::Relaxed);
     }
     let ms = f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed));
+    let ticks = SYNTH_TICKS.load(Ordering::Relaxed);
     logger::log_line(&format!(
-        "api: fixed dt {} ({ms} мс, cSlowRateManager=0x{addr:08X})",
-        if req.fixed { "on" } else { "off" }
+        "api: fixed dt {} ({ms} мс, синтетические часы {}, cSlowRateManager=0x{addr:08X})",
+        if req.fixed { "on" } else { "off" },
+        if ticks { "вкл" } else { "выкл" }
     ));
     (
         200,
         Response::Dt(DtResponse {
             fixed: req.fixed,
             ms,
+            ticks,
             addr: format!("0x{addr:08X}"),
         }),
     )

@@ -256,16 +256,21 @@ def open_menu(base=DEFAULT_URL):
     return state(base).get("menu_status")
 
 
-def fixed_dt(on=True, base=DEFAULT_URL):
+def fixed_dt(on=True, base=DEFAULT_URL, ticks=None):
     """Включает/выключает фиксированный шаг времени движка (`POST /dt`).
 
     `cSlowRateManager` (base + 0x17E93B0) держит измеренную длительность кадра
     (`m_fTickDifference`, мс, живой разброс 16.25–19.25 при номинале 16.667) —
     это и есть дрейф, из-за которого одинаковые прогоны расходились. С флагом
-    мод в детуре перезаписывает её номиналом: анимация и кинематика получают
-    стабильный 1/60.
+    мод после обновителя кадра (0xA03970) подменяет дельту номиналом и ведёт
+    линейные часы `m_fTicks`: и физика, и анимация получают стабильный 1/60,
+    а нехватка FPS уходит в замедление игры. `ticks=False` отключает только
+    синтетические часы (A/B: физика стабильна, анимация — по реальному dt).
     """
-    return http(base, "/dt", "POST", {"fixed": bool(on)})
+    body = {"fixed": bool(on)}
+    if ticks is not None:
+        body["ticks"] = bool(ticks)
+    return http(base, "/dt", "POST", body)
 
 
 def build_restart_script(ups=1, downs=0, hold=6, open_gap=20, gap=10,
