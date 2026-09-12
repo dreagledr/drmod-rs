@@ -34,5 +34,10 @@ cc = "1"
 
 [profile.release]
 strip = true
-opt-level = "s"
-lto = true
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+# Детур хука всё равно не может разворачивать стек через границу extern "system"
+# (Rust аварийно завершает процесс) — unwind-таблицы не нужны, экономия размера.
+# `cargo test` идёт по dev-профилю и не затронут.
+panic = "abort"

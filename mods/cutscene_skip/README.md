@@ -39,9 +39,27 @@ cd mods/cutscene_skip
 cargo build --release
 ```
 
-На выходе `target/i686-pc-windows-msvc/release/cutscene_skip.exe` (+ DLL рядом).
-Крейт собирается под `i686-pc-windows-msvc` (игра 32-битная) — это задано в
+На выходе `target/i686-pc-windows-msvc/release/cutscene_skip.exe` (+ DLL рядом) —
+DLL встроена в лаунчер, так что отдавать достаточно одного exe. Крейт собирается
+под `i686-pc-windows-msvc` (игра 32-битная) — это задано в
 `.cargo/config.toml`; нужны MSVC C++ build tools (собирается C-код MinHook).
+
+Профиль release заточен под размер: `opt-level = "z"`, `lto = "fat"`,
+`codegen-units = 1`, `panic = "abort"`, `strip = true` (DLL ~223 КБ).
+`panic = "abort"` безопасен — детур хука всё равно не разворачивает стек через
+границу `extern "system"`, а `cargo test` идёт по dev-профилю и не затронут.
+
+Ужать ещё сильнее можно UPX — для этого есть `build.ps1`:
+
+```powershell
+pwsh mods/cutscene_skip/build.ps1           # cargo build --release + upx --best --lzma exe
+pwsh mods/cutscene_skip/build.ps1 -NoUpx
+```
+
+⚠️ UPX пакует **только лаунчер** (exe ~523 КБ → ~219 КБ; DLL внутри). DLL в
+`target/` паковать нельзя: это пейлоад, встраиваемый в exe при компиляции и
+распаковываемый в `%LOCALAPPDATA%\cutscene_skip\` при запуске. И UPX — всегда
+последний шаг: следующий `cargo build` перезапишет exe несжатым.
 
 Тесты:
 
