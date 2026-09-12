@@ -945,6 +945,16 @@ pub(crate) fn rng_pin_signed(real: i32, lo: i32, hi: i32) -> i32 {
     }
 }
 
+/// Подмена значения `randFloat(lo, hi)` (доля в [lo, hi)) по режиму пина.
+pub(crate) fn rng_pin_float(real: f32, lo: f32, hi: f32) -> f32 {
+    match RNG_PIN.load(Ordering::Relaxed) {
+        1 => lo,
+        2 => lo + (hi - lo) * 0.5,
+        3 => hi,
+        _ => real,
+    }
+}
+
 /// Режим пина RNG строкой (для `/state`).
 fn rng_pin_name() -> &'static str {
     match RNG_PIN.load(Ordering::Relaxed) {

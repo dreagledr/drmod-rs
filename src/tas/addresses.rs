@@ -159,6 +159,9 @@ pub(super) const FRAME_TIME_UPDATE: usize = 0xA03970;
 pub(super) const RAND_RANGE: usize = 0x9DE2A0;
 /// Знаковый вариант `randRange` (thiscall `ret 8`).
 pub(super) const RAND_RANGE_SIGNED: usize = 0x9DE2D0;
+/// `randFloat()` — тот же LCG, но возвращает float (thiscall, без аргументов,
+/// результат в st0). Похоже, им задают случайные задержки ИИ.
+pub(super) const RAND_FLOAT: usize = 0x9DE300;
 /// Обёртка главного цикла, вызывающая `FRAME_TIME_UPDATE` (0xA4B220).
 #[allow(dead_code)]
 pub(super) const FRAME_TIME_WRAPPER: usize = 0xA4B220;
