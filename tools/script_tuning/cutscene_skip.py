@@ -33,10 +33,15 @@ MENU = 0x17E9F9C
 STA = 0x17EA060
 SUB_HASH = 0x14B9178        # текущая подфаза: хэш (объект состояния +0x38)
 INPUT_UNIT = 0x177B850      # cInput::g_InputUnit0
+INPUT_KEYS = 0x19D06F8      # cInput::ms_InputKeys (DIK-буфер клавиатуры)
+DIK_ESCAPE = 0x01
+DIK_RETURN = 0x1C
 BUTTONS_DOWN = 0x00         # m_nButtonsDown
 BUTTONS_PRESSED = 0x04      # m_nButtonsPressed
 CONFIRM_BIT = 0x10          # confirm == JUMP (бит BUTTON_A)
+PAUSE_BIT = 0x100           # pause/START в нормализованном вводе игры
 MENU_CUTSCENE = 6           # GameMenuStatus::CutscenePause
+MENU_IN_GAME = 1            # GameMenuStatus::InGame
 SOFT_EVENT = 0x08000000     # код 4
 SKIP_OK = 0x04000000        # код 37, но во ВТОРОМ dword staFlags
 
@@ -95,7 +100,8 @@ def main(argv=None):
     p.add_argument("--watch", default="P370_IN", help="подфаза сцены (монолог)")
     p.add_argument("--next", default="P370_EVENT", help="куда переводить по скипу")
     p.add_argument("--timeout", type=float, default=1800.0)
-    p.add_argument("--hz", type=float, default=10.0)
+    p.add_argument("--hz", type=float, default=50.0,
+                   help="частота опроса (клавиатурный Esc держится недолго)")
     a = p.parse_args(argv)
     api.setup_stdout()
     h, mod = open_game()
@@ -107,17 +113,30 @@ def main(argv=None):
     flags_set = False
     prev = None
     prev_confirm = False
+    prev_esc = False
+    last_pause = 0.0
     while time.perf_counter() - t0 < a.timeout:
         cur = u32v(h, mod + SUB_HASH)
         menu = u32v(h, mod + MENU)
         down = u32v(h, mod + INPUT_UNIT + BUTTONS_DOWN)
         pressed = u32v(h, mod + INPUT_UNIT + BUTTONS_PRESSED)
+        keys = rd(h, mod + INPUT_KEYS, 256) or b""
         if cur is None or menu is None or down is None or pressed is None:
             time.sleep(0.5)
             continue
-        confirm = bool((down & CONFIRM_BIT) or (pressed & CONFIRM_BIT))
+        esc = len(keys) > DIK_ESCAPE and keys[DIK_ESCAPE] != 0
+        ret = len(keys) > DIK_RETURN and keys[DIK_RETURN] != 0
+        esc_edge = esc and not prev_esc
+        prev_esc = esc
+        confirm = bool((down & CONFIRM_BIT) or (pressed & CONFIRM_BIT) or ret)
         confirm_edge = confirm and not prev_confirm
         prev_confirm = confirm
+        # Клавиатурный Esc игра маппит в pause-бит 0x100 (виден в InputUnit.down),
+        # но «фронта» (pressed) для клавиатуры движок не выставляет — а его
+        # проверка паузы в событии хочет именно фронт. Поэтому смотрим бит 0x100
+        # (или сырой Esc) и сами подаём pause-скрипт: он выставляет и down, и
+        # фронт, и движок открывает консольное катсценное меню.
+        pause_wanted = bool(down & PAUSE_BIT) or esc
         in_scene = cur == watch_h
         if in_scene and not flags_set:
             d0 = u32v(h, mod + STA) or 0
@@ -139,6 +158,21 @@ def main(argv=None):
             flags_set = False
             print(f"[{time.perf_counter() - t0:6.1f}s] сцена кончилась — флаги "
                   f"снял", flush=True)
+        # Подаём pause-бит, пока игрок держит паузу (Esc), а меню ещё закрыто:
+        # движок откроет своё консольное катсценное меню, и условие само
+        # перестанет выполняться (меню != InGame) — естественный лимит.
+        now = time.perf_counter()
+        if (pause_wanted and in_scene and menu == MENU_IN_GAME
+                and now - last_pause >= 0.5):
+            last_pause = now
+            try:
+                api.run_script({"name": "esc-as-pause",
+                                "commands": [{"t": 0, "duration": 2,
+                                              "input": {"pause": True}}]})
+                print(f"[{now - t0:6.1f}s] пауза с клавиатуры → pause-бит "
+                      f"(движок откроет консольное меню)", flush=True)
+            except Exception as e:  # noqa: BLE001
+                print(f"  Esc→pause ошибка: {e}", flush=True)
         key = (menu, in_scene)
         if key != prev:
             print(f"[{time.perf_counter() - t0:6.1f}s] menu={menu} "
