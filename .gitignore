@@ -1,5 +1,6 @@
 /target
 /tools/disasm/target
+/mods/cutscene_skip/target
 /out
 .env
 .qwen/
