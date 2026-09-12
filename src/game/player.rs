@@ -26,6 +26,9 @@ pub(crate) struct EnemyInfo {
     pub anim_frame: i32,
     pub dist: Option<f32>,
     pub blade_y: Option<f32>,
+    /// Адрес Behavior врага (для диагностики: точка останова на его поля).
+    #[allow(dead_code)]
+    pub behavior: usize,
 }
 
 pub(crate) struct Player {
@@ -333,6 +336,7 @@ impl Player {
                                 anim_frame,
                                 dist,
                                 blade_y: None,
+                                behavior: behavior as usize,
                             });
                             enemy_beh.push((behavior, idx));
                         }
@@ -366,6 +370,13 @@ impl Player {
             .iter()
             .filter(|e| e.dist.is_some())
             .min_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap_or(std::cmp::Ordering::Equal));
+        // Адрес анимации ближайшего врага — для аппаратной точки останова
+        // (`POST /watch {"enemy": true}`), читается только в debug-диагностике.
+        #[cfg(debug_assertions)]
+        if let Some(e) = nearest {
+            let anim = e.behavior + crate::tas::watch::ENEMY_ANIM_OFFSET;
+            crate::tas::watch::set_enemy_anim_addr(anim);
+        }
         match nearest {
             Some(e) => types::EnemyState {
                 pos: e.pos,

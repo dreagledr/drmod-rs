@@ -159,6 +159,40 @@ unsafe extern "system" fn veh_handler(
     if code == 0x406D1388 || code == 0x40010006 {
         return windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_SEARCH;
     }
+    // Аппаратная точка останова (`watch`): data breakpoint шлёт STATUS_SINGLE_STEP.
+    // Запоминаем Eip писателя и продолжаем — без логирования (может быть часто).
+    if code == crate::tas::watch::STATUS_SINGLE_STEP {
+        let (eip, caller, chain) = unsafe { (*info).ContextRecord.as_ref() }.map_or(
+            (0, 0, [0usize; 4]),
+            |c| {
+                // У записи в поле сеттерами без пролога `[esp]` — адрес возврата
+                // вызывающего; выше по стеку ищем ещё кандидатов-возвратов
+                // (фильтр — диапазон кода модуля игры), чтобы дойти до решения.
+                let (start, end) = crate::tas::watch::module_range();
+                let mut chain = [0usize; 4];
+                let mut nc = 0;
+                let mut caller = 0;
+                if c.Esp != 0 {
+                    let sp = c.Esp as *const usize;
+                    caller = unsafe { *sp };
+                    for i in 1..48 {
+                        if nc >= chain.len() {
+                            break;
+                        }
+                        let v = unsafe { *sp.add(i) };
+                        if v >= start && v < end {
+                            chain[nc] = v;
+                            nc += 1;
+                        }
+                    }
+                }
+                (c.Eip as usize, caller, chain)
+            },
+        );
+        if crate::tas::watch::handle_single_step(eip, caller, &chain) {
+            return windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
     // Повторный вход (исключение внутри logger::log_line/format! при рестарте) — не
     // логируем, чтобы диспетчер исключений не зациклился.
     if IN_VEH.swap(true, std::sync::atomic::Ordering::SeqCst) {
@@ -213,6 +247,10 @@ impl HelloHud {
         }
         .map(|h| h.0 as usize)
         .unwrap_or(0);
+
+        // Диапазон кода модуля игры — для фильтрации стека в watch (debug).
+        #[cfg(debug_assertions)]
+        crate::tas::watch::set_module_range(base_addr, base_addr + 0x200_0000);
 
         // Сущности игры: игрок (Pl0000) и камера (cCameraGame) — инкапсулируют
         // свои статические адреса и кэш указателей, наружу отдают read_* методы.
@@ -616,6 +654,11 @@ impl ImguiRenderLoop for HelloHud {
         // (в loading игра обнуляет static_ptr → кэш = null), иначе диагностика
         // ниже читает stale-указатель освобождённого игрока.
         let ui_state = self.read_game_state();
+
+        // Диагностика: обслужить заявку на аппаратную точку останова (DR0) —
+        // ставится на этот поток, здесь и идёт логика игры.
+        #[cfg(debug_assertions)]
+        crate::tas::watch::service();
 
         // ── Multiplayer network (выполняется каждый кадр, независимо от UI) ──
         if let Some(ref mut nc) = self.net_client {

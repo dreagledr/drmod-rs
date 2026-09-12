@@ -679,6 +679,24 @@ struct DtResponse {
     addr: String,
 }
 
+/// `GET/POST /watch` — ответ аппаратной точки останова (debug-only).
+#[cfg(debug_assertions)]
+#[derive(Serialize)]
+struct WatchResponse {
+    /// Точка стоит хотя бы на одном потоке.
+    armed: bool,
+    /// Адрес, на который поставлена точка (запись 4 байт).
+    addr: String,
+    /// Сколько потоков получили точку.
+    threads: usize,
+    /// Всего срабатываний с момента взвода.
+    total: u64,
+    /// Уникальные пары «Eip писателя ← адрес возврата вызывающего»: по
+    /// вызывающему видно, откуда пришло решение (у сеттера без пролога на
+    /// момент записи `[esp]` — адрес возврата).
+    hits: Vec<String>,
+}
+
 /// `POST /script/run` — ответ.
 #[derive(Serialize)]
 struct ScriptRunResponse {
@@ -730,6 +748,8 @@ enum Response {
     Logs(LogsResponse),
     Eject(EjectResponse),
     Dt(DtResponse),
+    #[cfg(debug_assertions)]
+    Watch(WatchResponse),
     Error(ErrorResponse),
 }
 
@@ -1482,6 +1502,10 @@ fn route(
         ("POST", "/script/stop") => handle_script_stop(state),
         ("POST", "/eject") => handle_eject(state),
         ("POST", "/dt") => handle_dt(body, state),
+        #[cfg(debug_assertions)]
+        ("GET", "/watch") => (200, Response::Watch(watch_json())),
+        #[cfg(debug_assertions)]
+        ("POST", "/watch") => handle_watch(body),
         ("GET", path) if path.starts_with("/script/") => handle_script_get(path, state),
         ("GET", "/logs") => handle_logs(query, state),
         _ => (
@@ -1626,6 +1650,81 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             addr: format!("0x{addr:08X}"),
         }),
     )
+}
+
+/// `GET/POST /watch` — аппаратная точка останова на запись в поле игры
+/// (debug-only). Тело POST: `{"on": true, "enemy": true}` — поле анимации
+/// ближайшего врага (`Behavior+0x618`), или `{"on": true, "addr": "0x..."}` —
+/// произвольный адрес (запись 4 байт); `{"on": false}` — снять. Срабатывание
+/// ловит VEH (`lib.rs`) и запоминает `Eip` писателя; статус — `GET /watch`.
+#[cfg(debug_assertions)]
+fn watch_json() -> WatchResponse {
+    use crate::tas::watch;
+    WatchResponse {
+        armed: watch::is_armed(),
+        addr: format!("0x{:08X}", watch::watch_addr()),
+        threads: watch::armed_threads(),
+        total: watch::total(),
+        hits: watch::hits()
+            .iter()
+            .map(|(eip, caller, chain)| {
+                let ch: Vec<String> = chain.iter().map(|c| format!("0x{c:08X}")).collect();
+                format!("0x{eip:08X} <- 0x{caller:08X} | {}", ch.join(" "))
+            })
+            .collect(),
+    }
+}
+
+/// `POST /watch` — взвести/снять точку (обрабатывается в render-цикле).
+#[cfg(debug_assertions)]
+fn handle_watch(body: &str) -> (u16, Response) {
+    use crate::tas::watch;
+
+    #[derive(Deserialize)]
+    struct Req {
+        on: bool,
+        #[serde(default)]
+        enemy: bool,
+        addr: Option<String>,
+    }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!(
+                        "bad body: {e} (ожидается {{\"on\": true, \"enemy\": true}} \
+                         или {{\"on\": true, \"addr\": \"0x...\"}})"
+                    ),
+                }),
+            )
+        }
+    };
+    if req.on {
+        let addr = if req.enemy {
+            watch::enemy_anim_addr()
+        } else {
+            req.addr
+                .as_deref()
+                .map(|s| s.trim_start_matches("0x"))
+                .filter(|s| !s.is_empty())
+                .and_then(|s| usize::from_str_radix(s, 16).ok())
+                .unwrap_or(0)
+        };
+        if addr == 0 {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: "addr=0: укажите enemy:true (нужен враг в кадре) или addr".into(),
+                }),
+            );
+        }
+        watch::request_arm(addr);
+    } else {
+        watch::request_disarm();
+    }
+    (200, Response::Watch(watch_json()))
 }
 
 /// `POST /script/run` — запуск скрипта из JSON-тела.
