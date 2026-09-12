@@ -599,6 +599,7 @@ unsafe extern "thiscall" fn rand_range_detour(this: *mut u32, lo: u32, hi: u32) 
         Some(&orig) => unsafe { orig(this, lo, hi) },
         None => lo,
     };
+    crate::api::rng_keep_frozen(this);
     crate::api::rng_pin(real, lo, hi)
 }
 
@@ -608,6 +609,7 @@ unsafe extern "thiscall" fn rand_range_signed_detour(this: *mut u32, lo: i32, hi
         Some(&orig) => unsafe { orig(this, lo, hi) },
         None => lo,
     };
+    crate::api::rng_keep_frozen(this);
     crate::api::rng_pin_signed(real, lo, hi)
 }
 
@@ -629,6 +631,7 @@ unsafe extern "thiscall" fn rand_float_detour(this: *mut u32, lo: f32, hi: f32) 
         Some(&orig) => unsafe { orig(this, lo, hi) },
         None => lo,
     };
+    crate::api::rng_keep_frozen(this);
     crate::api::rng_pin_float(real, lo, hi)
 }
 

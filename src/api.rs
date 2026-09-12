@@ -641,8 +641,10 @@ struct StateResponse {
     sim_ticks: u64,
     /// Шаг времени движка (см. `POST /dt`).
     dt: DtSnapshot,
-    /// Режим пина RNG решений ИИ (см. `POST /rng`): `off`/`lo`/`mid`/`hi`.
+    /// Режим пина RNG решений ИИ (см. `POST /rng`): `off`/`lo`/`mid`/`hi`/`seed`.
     rng_pin: String,
+    /// Последний записанный сид LCG (режим `seed`).
+    rng_seed: u32,
 }
 
 /// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
@@ -813,6 +815,8 @@ const SRM_TICK_RATE: usize = 0x7C;
 const SRM_TICKS: usize = 0x80;
 const SRM_TICK_DIFF: usize = 0x8C;
 const SRM_UNIT0_DELTA: usize = 0x48;
+/// Состояние глобального LCG решений ИИ (`randRange`/`randFloat`).
+const RNG_STATE: usize = 0x19D0814;
 /// Номинал движка: 1/60 с в миллисекундах и коэффициент 1.0.
 const NOMINAL_FRAME_MS: f32 = 16.666_668;
 const NOMINAL_RATE: f32 = 1.0;
@@ -924,6 +928,22 @@ fn capture_synth_base(srm: usize) {
 /// оригиналом, поэтому прочие потребители RNG не страдают — подменяется только
 /// значение, которое получает вызывающий.
 static RNG_PIN: AtomicU32 = AtomicU32::new(0);
+/// Последнее записанное начальное состояние LCG (режим `seed`) — для `/state`.
+static RNG_SEED: AtomicU32 = AtomicU32::new(0);
+/// Замороженное состояние LCG (режим `freeze`): состояние не продвигается,
+/// поэтому каждый вызов возвращает детерминированную функцию своих аргументов
+/// (не зависит от порядка бросков между потоками), но разные сайты ИИ получают
+/// разные значения — поведение остаётся «живым».
+static RNG_FREEZE: AtomicU32 = AtomicU32::new(0);
+
+/// Если включён режим `freeze` — возвращает состояние LCG к замороженному
+/// после броска (сам бросок уже отработал и вернул нужное значение).
+pub(crate) fn rng_keep_frozen(this: *mut u32) {
+    if RNG_PIN.load(Ordering::Relaxed) == 5 && !this.is_null() {
+        // SAFETY: `this` — указатель состояния LCG, переданный игрой.
+        unsafe { *this = RNG_FREEZE.load(Ordering::Relaxed) };
+    }
+}
 
 /// Подмена значения `randRange` (unsigned) по режиму пина.
 pub(crate) fn rng_pin(real: u32, lo: u32, hi: u32) -> u32 {
@@ -961,6 +981,8 @@ fn rng_pin_name() -> &'static str {
         1 => "lo",
         2 => "mid",
         3 => "hi",
+        4 => "seed",
+        5 => "freeze",
         _ => "off",
     }
 }
@@ -1630,6 +1652,7 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
             ticks: SYNTH_TICKS.load(Ordering::Relaxed),
         },
         rng_pin: rng_pin_name().to_string(),
+        rng_seed: RNG_SEED.load(Ordering::Relaxed),
     }
 }
 
@@ -1710,15 +1733,19 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     )
 }
 
-/// `POST /rng` — пин возвращаемого значения `randRange` (решения ИИ врага).
-/// Тело: `{"pin": "off"|"lo"|"mid"|"hi"}`. Состояние LCG продолжает крутиться
-/// через оригинал — подменяется только значение, которое получает вызывающий,
-/// так что прочие потребители RNG не страдают. `lo/mid/hi` делают выбор ИИ
-/// детерминированным (одинаковый ввод → одинаковое поведение врага).
+/// `POST /rng` — пин/сид возвращаемого значения `randRange`/`randFloat`
+/// (решения ИИ врага). Тело: `{"pin": "off"|"lo"|"mid"|"hi"}` — подмена
+/// значения; `{"pin": "seed", "seed": N}` — записать фиксированное состояние
+/// LCG (`base + 0x19D0814`) **на первом тике следующего скрипта** (точка
+/// детерминирована; запись из HTTP-потока дрожит по числу бросков). Состояние
+/// LCG при константном пине продолжает крутиться оригиналом — прочие
+/// потребители RNG не страдают.
 fn handle_rng(body: &str) -> (u16, Response) {
     #[derive(Deserialize)]
     struct Req {
         pin: String,
+        /// Начальное состояние LCG для режима `seed`.
+        seed: Option<u32>,
     }
     let req: Req = match serde_json::from_str(body) {
         Ok(r) => r,
@@ -1726,7 +1753,10 @@ fn handle_rng(body: &str) -> (u16, Response) {
             return (
                 400,
                 Response::Error(ErrorResponse {
-                    error: format!("bad body: {e} (ожидается {{\"pin\": \"off|lo|mid|hi\"}})"),
+                    error: format!(
+                        "bad body: {e} (ожидается {{\"pin\": \"off|lo|mid|hi|seed\"}} \
+                         или {{\"pin\": \"seed\", \"seed\": N}})"
+                    ),
                 }),
             )
         }
@@ -1736,15 +1766,25 @@ fn handle_rng(body: &str) -> (u16, Response) {
         "lo" => 1,
         "mid" => 2,
         "hi" => 3,
+        "seed" => 4,
+        "freeze" => 5,
         other => {
             return (
                 400,
                 Response::Error(ErrorResponse {
-                    error: format!("unknown pin '{other}' (off|lo|mid|hi)"),
+                    error: format!("unknown pin '{other}' (off|lo|mid|hi|seed|freeze)"),
                 }),
             )
         }
     };
+    if mode == 4 || mode == 5 {
+        let seed = req.seed.unwrap_or(1);
+        RNG_SEED.store(seed, Ordering::Relaxed);
+        logger::log_line(&format!(
+            "api: rng {} = 0x{seed:08X} (применится на первом тике следующего скрипта)",
+            if mode == 5 { "freeze" } else { "seed" }
+        ));
+    }
     RNG_PIN.store(mode, Ordering::Relaxed);
     logger::log_line(&format!("api: rng pin = '{}'", req.pin));
     (
@@ -2137,6 +2177,26 @@ fn script_tick(
     player_vel_y: f32,
 ) -> InputOverride {
     let k = script.frame;
+    // Режим `seed`: состояние LCG пишем **ровно на первом тике скрипта** — это
+    // детерминированная точка движка. Запись из HTTP-потока (или по поллингу
+    // /logs) слишком дрожит: число бросков до решения ИИ успевает разойтись,
+    // и одинаковый сид даёт разный итог.
+    if k == 0 && (RNG_PIN.load(Ordering::Relaxed) == 4 || RNG_PIN.load(Ordering::Relaxed) == 5)
+        && base_addr != 0
+    {
+        let addr = base_addr + RNG_STATE;
+        let seed = RNG_SEED.load(Ordering::Relaxed);
+        // SAFETY: адрес состояния LCG в памяти игры.
+        unsafe { *(addr as *mut u32) = seed };
+        if RNG_PIN.load(Ordering::Relaxed) == 5 {
+            RNG_FREEZE.store(seed, Ordering::Relaxed);
+            logger::log_line(&format!(
+                "api: rng freeze 0x{seed:08X} на первом тике скрипта"
+            ));
+        } else {
+            logger::log_line(&format!("api: rng seed 0x{seed:08X} на первом тике скрипта"));
+        }
+    }
     // Условные команды (`when_enemy`): спят, пока не выполнено условие по врагу.
     // При срабатывании подменяем `t` на текущий кадр — дальше работает обычная
     // логика (активное окно, фронт `pressed` на первом кадре).
