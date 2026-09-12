@@ -32,6 +32,7 @@ WIN_TITLE = "METAL GEAR RISING: REVENGEANCE"
 MENU = 0x17E9F9C
 STA = 0x17EA060
 SUB_HASH = 0x14B9178        # текущая подфаза: хэш (объект состояния +0x38)
+CHK_HASH = 0x14B914C        # чекпойнт-запись: хэш подфазы (объект состояния +0x0C)
 INPUT_UNIT = 0x177B850      # cInput::g_InputUnit0
 INPUT_KEYS = 0x19D06F8      # cInput::ms_InputKeys (DIK-буфер клавиатуры)
 DIK_ESCAPE = 0x01
@@ -100,7 +101,11 @@ def main(argv=None):
     p.add_argument("--watch", default="P370_RESTART,P370_IN",
                    help="подфазы сцены через запятую (сцена идёт от RESTART к IN)")
     p.add_argument("--next", default="P370_EVENT", help="куда переводить по скипу")
-    p.add_argument("--timeout", type=float, default=1800.0)
+    p.add_argument("--restart", action="store_true",
+                   help="после заказа рестартовать чекпойнт: он-то и грузит "
+                        "сцену, но загрузки/рестарты иногда роняют игру")
+    p.add_argument("--timeout", type=float, default=1800.0,
+                   help="сколько секунд ждать скипа, прежде чем выйти")
     p.add_argument("--hz", type=float, default=50.0,
                    help="частота опроса (клавиатурный Esc держится недолго)")
     a = p.parse_args(argv)
@@ -187,7 +192,10 @@ def main(argv=None):
                 armed = True
             if confirm_edge:
                 print(f"[{time.perf_counter() - t0:6.1f}s] confirm в "
-                      f"катсценном меню → заказ {a.next}", flush=True)
+                      f"катсценном меню → скип в {a.next}", flush=True)
+                # Шаг 1: заказ подфазы. Он пишет ТОЛЬКО поле текущей подфазы
+                # (сцену не грузит), но через копию состояния это же значение
+                # попадает и в запись чекпойнта.
                 try:
                     resp = api.http(api.DEFAULT_URL, "/order", "POST",
                                     {"name": a.next, "arg": 1,
@@ -195,27 +203,42 @@ def main(argv=None):
                     print("  ответ /order:", resp, flush=True)
                 except Exception as e:  # noqa: BLE001
                     print("  /order ошибка:", e, flush=True)
-                # закрыть меню, иначе игра остаётся на паузе и загрузка не пойдёт
-                try:
-                    api.run_script({"name": "close-cutscene-menu",
-                                    "commands": [{"t": 0, "duration": 3,
-                                                  "input": {"pause": True}}]})
-                    print("  меню закрываю (бит pause)", flush=True)
-                except Exception as e:  # noqa: BLE001
-                    print("  pause ошибка:", e, flush=True)
-                for i in range(10):
-                    time.sleep(3)
+                if a.restart:
+                    # Шаг 2: ждём, пока чекпойнт-запись догонит целевой подфазу.
+                    target_h = hash_of(a.next)
+                    deadline = time.perf_counter() + 8.0
+                    while time.perf_counter() < deadline:
+                        chk = u32v(h, mod + CHK_HASH)
+                        if chk == target_h:
+                            break
+                        time.sleep(0.2)
+                    print(f"  чекпойнт: 0x{u32v(h, mod + CHK_HASH) or 0:08X} "
+                          f"(ждём 0x{target_h:08X})", flush=True)
+                    # Шаг 3: рестарт чекпойнта — он и загружает нужную сцену.
                     try:
-                        st = api.state()
-                        pl = st.get("player") or {}
-                        print(f"  [{3 * (i + 1):3d}s] menu={st.get('menu_status')} "
-                              f"phase={st.get('mission_name')} "
-                              f"found={pl.get('found')} pos={pl.get('pos')}",
-                              flush=True)
+                        res = api.restart_mission(api.DEFAULT_URL, focus=True,
+                                                  watch=15.0)
+                        print("  рестарт:", res, flush=True)
                     except Exception as e:  # noqa: BLE001
-                        print(f"  [{3 * (i + 1):3d}s] /state: {e}", flush=True)
-                # уборка перед выходом: снять наши флаги (иначе катсценное меню
-                # останется включённым и в следующих сценах)
+                        print("  рестарт ошибка:", e, flush=True)
+                    for i in range(6):
+                        time.sleep(3)
+                        try:
+                            st = api.state()
+                            pl = st.get("player") or {}
+                            print(f"  [{3 * (i + 1):3d}s] "
+                                  f"menu={st.get('menu_status')} "
+                                  f"phase={st.get('mission_name')} "
+                                  f"player={pl.get('found')} pos={pl.get('pos')}",
+                                  flush=True)
+                        except Exception as e:  # noqa: BLE001
+                            print(f"  [{3 * (i + 1):3d}s] /state: {e}",
+                                  flush=True)
+                else:
+                    # Без --restart заказ только пишет поле подфазы: сцену
+                    # грузит штатный пункт Skip меню (нажатие игрока).
+                    print("  сцену грузит пункт Skip меню (без --restart)",
+                          flush=True)
                 clear_flags(h, mod)
                 print("  флаги катсценного меню сняты (уборка)", flush=True)
                 break
