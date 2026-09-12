@@ -82,6 +82,14 @@ def hash_of(name):
     return zlib.crc32(name.lower().encode()) & 0x7FFFFFFF
 
 
+def clear_flags(h, mod):
+    """Снять наши флаги катсценного меню (вернуть состояние движка как было)."""
+    d0 = u32v(h, mod + STA) or 0
+    d1 = u32v(h, mod + STA + 4) or 0
+    wr_u32(h, mod + STA, d0 & ~SOFT_EVENT)
+    wr_u32(h, mod + STA + 4, d1 & ~SKIP_OK)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser()
     p.add_argument("--watch", default="P370_IN", help="подфаза сцены (монолог)")
@@ -127,10 +135,7 @@ def main(argv=None):
                 wr_u32(h, mod + STA, d0 | SOFT_EVENT)
                 wr_u32(h, mod + STA + 4, d1 | SKIP_OK)
         elif not in_scene and flags_set:
-            d0 = u32v(h, mod + STA) or 0
-            d1 = u32v(h, mod + STA + 4) or 0
-            wr_u32(h, mod + STA, d0 & ~SOFT_EVENT)
-            wr_u32(h, mod + STA + 4, d1 & ~SKIP_OK)
+            clear_flags(h, mod)
             flags_set = False
             print(f"[{time.perf_counter() - t0:6.1f}s] сцена кончилась — флаги "
                   f"снял", flush=True)
@@ -173,6 +178,10 @@ def main(argv=None):
                               flush=True)
                     except Exception as e:  # noqa: BLE001
                         print(f"  [{3 * (i + 1):3d}s] /state: {e}", flush=True)
+                # уборка перед выходом: снять наши флаги (иначе катсценное меню
+                # останется включённым и в следующих сценах)
+                clear_flags(h, mod)
+                print("  флаги катсценного меню сняты (уборка)", flush=True)
                 break
         else:
             armed = False
