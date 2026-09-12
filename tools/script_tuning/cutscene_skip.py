@@ -97,7 +97,8 @@ def clear_flags(h, mod):
 
 def main(argv=None):
     p = argparse.ArgumentParser()
-    p.add_argument("--watch", default="P370_IN", help="подфаза сцены (монолог)")
+    p.add_argument("--watch", default="P370_RESTART,P370_IN",
+                   help="подфазы сцены через запятую (сцена идёт от RESTART к IN)")
     p.add_argument("--next", default="P370_EVENT", help="куда переводить по скипу")
     p.add_argument("--timeout", type=float, default=1800.0)
     p.add_argument("--hz", type=float, default=50.0,
@@ -105,8 +106,9 @@ def main(argv=None):
     a = p.parse_args(argv)
     api.setup_stdout()
     h, mod = open_game()
-    watch_h = hash_of(a.watch)
-    print(f"module base = 0x{mod:08X}; сцена {a.watch} (0x{watch_h:08X}) → "
+    watch_h = {hash_of(n) for n in a.watch.split(",") if n.strip()}
+    print(f"module base = 0x{mod:08X}; сцена {a.watch} "
+          f"({', '.join(f'0x{h:08X}' for h in watch_h)}) → "
           f"по скипу в {a.next}", flush=True)
     t0 = time.perf_counter()
     armed = False
@@ -137,7 +139,7 @@ def main(argv=None):
         # (или сырой Esc) и сами подаём pause-скрипт: он выставляет и down, и
         # фронт, и движок открывает консольное катсценное меню.
         pause_wanted = bool(down & PAUSE_BIT) or esc
-        in_scene = cur == watch_h
+        in_scene = cur in watch_h
         if in_scene and not flags_set:
             d0 = u32v(h, mod + STA) or 0
             d1 = u32v(h, mod + STA + 4) or 0
