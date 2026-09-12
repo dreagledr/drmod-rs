@@ -76,7 +76,7 @@
 | Метод | Путь | Описание |
 |-------|------|----------|
 | GET | `/health` | Живость, версия, base_addr |
-| GET | `/state` | Текущий снимок игры + последний скрипт + fps + текущий t_ms + `dt` + `rng_pin`/`rng_seed` |
+| GET | `/state` | Текущий снимок игры + последний скрипт + fps + текущий t_ms + `dt` + `rng_pin`/`rng_seed` + `cutscene_skip` |
 | POST | `/script/run` | Запустить скрипт (JSON-тело) |
 | POST | `/script/stop` | Остановить активный скрипт |
 | GET | `/script/{id}` | Статус скрипта по id |
@@ -145,7 +145,8 @@
     "ticks": true
   },
   "rng_pin": "off",
-  "rng_seed": 0
+  "rng_seed": 0,
+  "cutscene_skip": "off"
 }
 ```
 
@@ -155,6 +156,7 @@
 - `menu_status` — строка из `game::GameMenuStatus::name()` (`"In Game"`, `"Pause Menu"`, `"Mission Fail"`, …).
 - `dt` — шаг времени движка (`cSlowRateManager`, `base + 0x17E93B0`), см. §3.8: `frame_ms` — измеренная длительность кадра (номинал 16.667, живой разброс 16.25–19.25 = 52–61 FPS), `rate` = `frame_ms / 16.667`, `fixed` — включён ли фиксированный тик, `fixed_ms` — чем подменяем дельту, `ticks` — ведутся ли синтетические часы, `frames` — число кадров движка с момента включения фиксации, `synth_ticks_ms`/`synth_base_ms` — синтетические часы `m_fTicks` и их база (мс). Крутится и в меню, и в бою.
 - `rng_pin` (`off|lo|mid|hi|seed|freeze`) и `rng_seed` — режим пина/сида RNG решений ИИ, см. §3.10.
+- `cutscene_skip` (`off|armed|closing|skipped`) — этап скипа in-engine катсцены «как на консоли» (`game::cutscene_skip`): `armed` — идёт сцена `P370_*`, флаги консольного меню выставлены; `closing` — игрок подтвердил пункт, меню убирает движок; `skipped` — заказ следующей подфазы сделан. Выключается галочкой в окне Settings.
 
 ### 3.3. `POST /script/run`
 

@@ -110,6 +110,8 @@ struct HelloHud {
     pub(crate) ghost_positions: Vec<(segment::Vec3, i64)>,
     pub(crate) ghost_label: String,
     pub(crate) settings: settings::Settings,
+    // Скип катсцены «как на консоли» — кадровый автомат, живёт в потоке игры.
+    pub(crate) cutscene_skip: game::CutsceneSkip,
     // 3D test dummy
     dummy: CylinderRenderer,
     remote_sphere: SphereRenderer,
@@ -288,6 +290,7 @@ impl HelloHud {
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
             settings: settings::Settings::default(),
+            cutscene_skip: game::CutsceneSkip::new(),
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
             input_hooks,
@@ -984,6 +987,16 @@ impl ImguiRenderLoop for HelloHud {
         if self.api.eject_requested() {
             self.eject();
         }
+
+        // --- Скип катсцены «как на консоли»: пока идёт сцена P370_*, держим
+        // флаги консольного меню; по подтверждённому пункту убираем меню штатным
+        // путём движка, снимаем паузу и заказом подфазы. Пишет память движка и
+        // зовёт его request_subphase — поэтому только здесь, в потоке игры. ---
+        self.cutscene_skip.update(
+            self.base_addr,
+            ui_state.menu_status_raw,
+            self.settings.cutscene_skip,
+        );
 
         // --- Смена фазы/подфазы через API: POST /phase кладёт id и аргументы,
         // здесь (в потоке игры) вызываем движковый changePhase — движок не

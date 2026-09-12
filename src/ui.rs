@@ -246,12 +246,22 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
 pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
     let settings = &mut hud.settings;
     ui.window("Settings")
-        .size([250.0, 150.0], Condition::FirstUseEver)
+        .size([250.0, 175.0], Condition::FirstUseEver)
         .position([320.0, 30.0], Condition::FirstUseEver)
         .collapsed(true, Condition::FirstUseEver)
         .build(|| {
             ui.checkbox("Show best ghost", &mut settings.show_best_ghost);
             ui.slider("Ghost opacity", 0.0f32, 1.0f32, &mut settings.ghost_opacity);
+
+            ui.separator();
+            ui.checkbox(
+                "Скип катсцен (P370: Esc → SKIP)",
+                &mut settings.cutscene_skip,
+            );
+            let skip_status = hud.cutscene_skip.status();
+            if !skip_status.is_empty() {
+                ui.text_colored([0.5, 1.0, 0.5, 1.0], skip_status);
+            }
 
             ui.separator();
             if ui.button("Выход / Выгрузить DLL") {

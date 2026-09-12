@@ -1,6 +1,10 @@
 pub struct Settings {
     pub show_best_ghost: bool,
     pub ghost_opacity: f32,
+    /// Скип in-engine катсцены «как на консоли»: в сцене `P370_*` держим флаги
+    /// консольного меню, по подтверждённому SKIP убираем меню, снимаем паузу и
+    /// заказываем следующую подфазу (см. `game::cutscene_skip`).
+    pub cutscene_skip: bool,
 }
 
 impl Default for Settings {
@@ -8,6 +12,7 @@ impl Default for Settings {
         Self {
             show_best_ghost: true,
             ghost_opacity: 0.5,
+            cutscene_skip: true,
         }
     }
 }

@@ -3,10 +3,12 @@
 //! наружу отдаёт только методы чтения состояния.
 
 mod camera;
+mod cutscene_skip;
 mod phase;
 mod player;
 
 pub(crate) use camera::Camera;
+pub(crate) use cutscene_skip::{CutsceneSkip, status_name as cutscene_skip_status};
 pub(crate) use phase::{change_phase, hash_name, order_subphase};
 pub(crate) use player::Player;
 

@@ -659,6 +659,9 @@ struct StateResponse {
     rng_pin: String,
     /// Последний записанный сид LCG (режим `seed`).
     rng_seed: u32,
+    /// Скип катсцены «как на консоли» (`game::cutscene_skip`):
+    /// `off`/`armed`/`closing`/`skipped`.
+    cutscene_skip: String,
 }
 
 /// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
@@ -1742,6 +1745,7 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
         },
         rng_pin: rng_pin_name().to_string(),
         rng_seed: RNG_SEED.load(Ordering::Relaxed),
+        cutscene_skip: crate::game::cutscene_skip_status().to_string(),
     }
 }
 
