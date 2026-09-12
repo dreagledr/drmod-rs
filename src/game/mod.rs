@@ -3,9 +3,11 @@
 //! наружу отдаёт только методы чтения состояния.
 
 mod camera;
+mod phase;
 mod player;
 
 pub(crate) use camera::Camera;
+pub(crate) use phase::{change_phase, hash_name, order_subphase};
 pub(crate) use player::Player;
 
 /// Проверяет, что адрес указывает на committed и читаемую память.

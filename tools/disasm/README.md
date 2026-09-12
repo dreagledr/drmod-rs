@@ -135,3 +135,16 @@ vtable-таблицы.
   для objdump = ImageBase + RVA).
 - `--dump`/`scan_srm.py` дают **RVA**, а `dump.ps1` читает **память** процесса
   (там адреса уже с релокацией) — не путать (см. раздел «Адреса: файл ≠ память»).
+- `find_strings.py` — ASCII-строки в exe по подстроке: печатает VA **начала**
+  строки и секцию (`.rdata`/`.data`), удобно для поиска RTTI-имён и строк
+  логов (`py -3 tools/disasm/find_strings.py codec skip PhaseJump`).
+- `find_vtable.py` — по RTTI-имени класса (`.?AVcActCodecEnd@Trigger@@`) находит
+  vtable и её методы: `TypeDescriptor → CompleteObjectLocator → vtable`, слоты
+  печатает как RVA (`py -3 tools/disasm/find_vtable.py 0x18B18BC --slots 8`).
+  Так найдены акты/условия триггеров (`cActPhaseSubphase` и др.).
+- `peek.py` — чтение памяти **запущенной** игры по RVA: dword/float/страницы
+  (`--abs` — абсолютный адрес), `--str` — строка, `--dump` — hex-дамп
+  (`py -3 tools/disasm/peek.py 0x17E9F9C --str 0x1764674 --dump 0x14B9140 --len 0x40`).
+- `mem_find_u32.py` — поиск 4-байтных значений по всей памяти игры
+  (`py -3 tools/disasm/mem_find_u32.py 0x3c9a2f06 --context 0x40`); адреса
+  внутри модуля печатает как `base+0xRVA`. Так найдена таблица подфаз (`docs/PHASE.md`).

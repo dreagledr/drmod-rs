@@ -984,6 +984,36 @@ impl ImguiRenderLoop for HelloHud {
         if self.api.eject_requested() {
             self.eject();
         }
+
+        // --- Смена фазы/подфазы через API: POST /phase кладёт id и аргументы,
+        // здесь (в потоке игры) вызываем движковый changePhase — движок не
+        // потокобезопасен, из HTTP-потока вызывать нельзя. ---
+        if let Some(req) = self.api.take_phase_request() {
+            game::change_phase(self.base_addr, req.id, req.arg2, req.arg3, req.mode);
+            logger::log_line(&format!(
+                "phase: changePhase(id=0x{:X}, arg2={}, arg3={}, mode={})",
+                req.id, req.arg2, req.arg3, req.mode
+            ));
+        }
+
+        // --- Заказ смены подфазы через API: POST /order вызывает штатную
+        // движковую функцию заказа (тот же путь, что у сценария). ---
+        if let Some(order) = self.api.take_order_request() {
+            let ok = game::order_subphase(
+                self.base_addr,
+                &order.name,
+                order.arg,
+                order.clear_event,
+            )
+            .is_some();
+            logger::log_line(&format!(
+                "order: subphase {} arg={} clear_event={} → {}",
+                order.name,
+                order.arg,
+                order.clear_event,
+                if ok { "вызвано" } else { "не удалось" }
+            ));
+        }
     }
 }
 

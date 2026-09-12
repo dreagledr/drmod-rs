@@ -16,6 +16,7 @@
 //!
 //! Дизайн — `docs/API.md`.
 
+use crate::game;
 use crate::logger;
 use crate::segment;
 use crate::tas::addresses;
@@ -744,6 +745,26 @@ struct EjectResponse {
     ejecting: bool,
 }
 
+/// `POST /phase` — ответ. Саму смену фазы выполняет render-цикл
+/// (см. `handle_phase`): движок не потокобезопасен.
+#[derive(Serialize)]
+struct PhaseResponse {
+    id: String,
+    arg2: i32,
+    arg3: i32,
+    mode: u32,
+    queued: bool,
+}
+
+/// `POST /order` — ответ: заказ смены подфазы штатной функцией движка.
+#[derive(Serialize)]
+struct OrderResponse {
+    name: String,
+    arg: u32,
+    clear_event: bool,
+    queued: bool,
+}
+
 /// `GET /logs` — ответ.
 #[derive(Serialize)]
 struct LogsResponse {
@@ -771,6 +792,8 @@ enum Response {
     ScriptStatus(ScriptStatusJson),
     Logs(LogsResponse),
     Eject(EjectResponse),
+    Phase(PhaseResponse),
+    Order(OrderResponse),
     Dt(DtResponse),
     Rng(RngResponse),
     #[cfg(debug_assertions)]
@@ -1083,6 +1106,28 @@ struct SharedState {
     /// `shutdown()` + `hudhook::eject()` (из HTTP-потока это невозможно —
     /// `shutdown()` джойнит сам себя).
     eject_requested: bool,
+    /// Запрос смены подфазы через `POST /phase`: id и аргументы кладёт
+    /// HTTP-поток, render-цикл вызывает движковый `changePhase`.
+    phase_request: Option<PhaseRequest>,
+    /// Запрос заказа подфазы через `POST /order` (штатная функция движка).
+    order_request: Option<OrderRequest>,
+}
+
+/// Отложенный заказ смены подфазы (движковый `request_subphase`).
+#[derive(Clone)]
+pub struct OrderRequest {
+    pub name: String,
+    pub arg: u32,
+    pub clear_event: bool,
+}
+
+/// Отложенная смена фазы/подфазы (движковый `changePhase`).
+#[derive(Clone, Copy)]
+pub struct PhaseRequest {
+    pub id: u32,
+    pub arg2: i32,
+    pub arg3: i32,
+    pub mode: u32,
 }
 
 /// HTTP API-сервер. Владеет потоком; `Drop`/`shutdown` останавливает поток
@@ -1108,6 +1153,8 @@ impl ApiServer {
             last_sim_tick: 0,
             next_script_id: 1,
             eject_requested: false,
+            phase_request: None,
+            order_request: None,
         }));
 
         let stop = Arc::new(AtomicBool::new(false));
@@ -1401,6 +1448,16 @@ impl ApiServer {
         self.state.lock().unwrap().eject_requested = true;
     }
 
+    /// Забирает (и очищает) отложенный запрос смены фазы.
+    pub fn take_phase_request(&self) -> Option<PhaseRequest> {
+        self.state.lock().unwrap().phase_request.take()
+    }
+
+    /// Забирает (и очищает) отложенный заказ смены подфазы.
+    pub fn take_order_request(&self) -> Option<OrderRequest> {
+        self.state.lock().unwrap().order_request.take()
+    }
+
     /// Запускает встроенный скрипт NumPad4 (run-jump-attack) — тот же механизм,
     /// что и `POST /script/run`. Игнорируется, если другой скрипт уже активен.
     /// В release вызывается только извне (HTTP) — отсюда allow.
@@ -1609,6 +1666,8 @@ fn route(
         ("POST", "/script/run") => handle_script_run(body, state),
         ("POST", "/script/stop") => handle_script_stop(state),
         ("POST", "/eject") => handle_eject(state),
+        ("POST", "/phase") => handle_phase(body, state),
+        ("POST", "/order") => handle_order(body, state),
         ("POST", "/dt") => handle_dt(body, state),
         ("POST", "/rng") => handle_rng(body),
         #[cfg(debug_assertions)]
@@ -2072,6 +2131,135 @@ fn handle_eject(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     guard.eject_requested = true;
     logger::log_line("api: eject requested via POST /eject");
     (200, Response::Eject(EjectResponse { ejecting: true }))
+}
+
+/// `POST /phase` — смена фазы/подфазы (сцены). Тело: `{"name": "P370_RESTART"}`
+/// (имя → хэш движка) или `{"id": 880}` (числовой id фазы, как `mission_id`);
+/// опционально `arg2` (по умолчанию 0), `arg3` (-1), `mode` (0 или 1 —
+/// вариант движковой функции `0x8E3040`/`0x8E30B0`). Только кладёт запрос:
+/// сам `changePhase` вызывает render-цикл (движок не потокобезопасен),
+/// см. [`game::change_phase`].
+fn handle_phase(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    #[derive(Deserialize)]
+    struct PhaseRequestJson {
+        name: Option<String>,
+        id: Option<u32>,
+        arg2: Option<i32>,
+        arg3: Option<i32>,
+        mode: Option<u32>,
+    }
+    let req: PhaseRequestJson = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!("invalid body: {e}"),
+                }),
+            );
+        }
+    };
+    let base_addr = state.lock().unwrap().base_addr;
+    let id = match (req.id, req.name.as_deref()) {
+        (Some(id), _) => id,
+        (None, Some(name)) if !name.is_empty() && name.len() <= 31 => {
+            match game::hash_name(base_addr, name) {
+                Some(v) => v,
+                None => {
+                    return (
+                        400,
+                        Response::Error(ErrorResponse {
+                            error: "bad name".into(),
+                        }),
+                    );
+                }
+            }
+        }
+        _ => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: "need name (1..=31 chars) or id".into(),
+                }),
+            );
+        }
+    };
+    let pr = PhaseRequest {
+        id,
+        arg2: req.arg2.unwrap_or(0),
+        arg3: req.arg3.unwrap_or(-1),
+        mode: req.mode.unwrap_or(0),
+    };
+    state.lock().unwrap().phase_request = Some(pr);
+    logger::log_line(&format!(
+        "api: phase change requested: id=0x{:X} arg2={} arg3={} mode={}",
+        pr.id, pr.arg2, pr.arg3, pr.mode
+    ));
+    (
+        200,
+        Response::Phase(PhaseResponse {
+            id: format!("0x{:X}", pr.id),
+            arg2: pr.arg2,
+            arg3: pr.arg3,
+            mode: pr.mode,
+            queued: true,
+        }),
+    )
+}
+
+/// `POST /order` — заказ смены подфазы штатной функцией движка
+/// (`RVA 0x94E1F0`, тот же путь, что использует сценарий). Тело:
+/// `{"name": "P370_EVENT"}`; опционально `arg` (по умолчанию 1 — как у
+/// естественного перехода) и `clear_event` (снять `STA_EVENT` перед вызовом:
+/// во время события движок запрос игнорирует).
+fn handle_order(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    #[derive(Deserialize)]
+    struct OrderRequestJson {
+        name: String,
+        arg: Option<u32>,
+        clear_event: Option<bool>,
+    }
+    let req: OrderRequestJson = match serde_json::from_str(body) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!("invalid body: {e}"),
+                }),
+            );
+        }
+    };
+    if req.name.is_empty() || req.name.len() > 31 {
+        return (
+            400,
+            Response::Error(ErrorResponse {
+                error: "name must be 1..=31 chars".into(),
+            }),
+        );
+    }
+    let order = OrderRequest {
+        name: req.name,
+        arg: req.arg.unwrap_or(1),
+        clear_event: req.clear_event.unwrap_or(false),
+    };
+    logger::log_line(&format!(
+        "api: order subphase {} arg={} clear_event={}",
+        order.name, order.arg, order.clear_event
+    ));
+    let name = order.name.clone();
+    let arg = order.arg;
+    let clear_event = order.clear_event;
+    state.lock().unwrap().order_request = Some(order);
+    (
+        200,
+        Response::Order(OrderResponse {
+            name,
+            arg,
+            clear_event,
+            queued: true,
+        }),
+    )
 }
 
 /// `GET /script/{id}` — статус скрипта.
