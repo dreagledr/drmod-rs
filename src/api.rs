@@ -326,13 +326,22 @@ fn enemy_condition_ok(
     true
 }
 
-/// Триггер старта скрипта: скрипт взводится (`Armed`) и стартует, когда
+/// Триггер старта скрипта: скрипт взводится (`Armed`) и стартует либо когда
 /// позиция игрока попадает в зону вокруг `pos` (допуск как у отложенного
-/// старта record/playback: ±0.1 м по X/Z, ±1.0 м по Y).
+/// старта record/playback: ±0.1 м по X/Z, ±1.0 м по Y), либо через `ticks`
+/// тиков симуляции после взвода.
+///
+/// Тиковый старт нужен для воспроизводимости: позиционный триггер срабатывает
+/// на 0–1-м тике после загрузки (плюс-минус тик), а сдвиг старта на тик меняет
+/// фазу врага и «дрожит» исход. Тиковый же привязан к тикам симуляции — фаза
+/// одинаковая от прогона к прогону.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ScriptTrigger {
-    pos: [f32; 3],
+    #[serde(default)]
+    pos: Option<[f32; 3]>,
+    #[serde(default)]
+    ticks: Option<u64>,
 }
 
 /// Тело `POST /script/run` (JSON).
@@ -461,8 +470,12 @@ struct ScriptState {
     frame: u32,
     status: ScriptStatus,
     total_frames: u32,
-    /// Точка триггера старта (если скрипт взведён через `trigger`).
+    /// Точка триггера старта (если скрипт взведён через `trigger.pos`).
     trigger: Option<segment::Vec3>,
+    /// Старт через столько тиков симуляции после взвода (`trigger.ticks`).
+    trigger_ticks: Option<u64>,
+    /// Накоплено тиков симуляции в фазе `Armed` (для `trigger_ticks`).
+    armed_ticks: u64,
     /// Следующая фаза (заполняется, когда скрипт стартует с рестарта).
     pending: Option<PendingScript>,
     /// Игрок был найден за время скрипта: отличает реальный loading (надо
@@ -1250,17 +1263,32 @@ impl ApiServer {
                     logger::log_line(&format!("api: script {} '{}' done", s.id, s.name));
                 }
                 Some(s.id)
-            } else if s.status == ScriptStatus::Armed
-                && let Some(target) = s.trigger
-                && segment::in_zone(ui_state.position, target)
-            {
-                s.status = ScriptStatus::Running;
-                s.frame = 0;
-                hooks::clear_keybind_emulation();
-                logger::log_line(&format!(
-                    "api: script {} '{}' trigger -> started",
-                    s.id, s.name
-                ));
+            } else if s.status == ScriptStatus::Armed {
+                // Тиковый триггер (`trigger.ticks`): считаем тики симуляции в
+                // геймплее (в меню/загрузке тиков нет) и стартуем ровно через
+                // N — фаза врага тогда одинаковая от прогона к прогону.
+                // Позиционный триггер оставлен как раньше.
+                let mut started = false;
+                if let Some(n) = s.trigger_ticks {
+                    // Считаем тики только в геймплее: в загрузке тиков нет, а
+                    // при `ticks=0` скрипт иначе стартовал бы прямо в loading
+                    // (и его снял бы авто-стоп «player not readable»).
+                    if ui_state.menu_status.is_in_game() && ui_state.player_found {
+                        s.armed_ticks = s.armed_ticks.saturating_add(steps as u64);
+                        started = s.armed_ticks >= n;
+                    }
+                } else if let Some(target) = s.trigger {
+                    started = segment::in_zone(ui_state.position, target);
+                }
+                if started {
+                    s.status = ScriptStatus::Running;
+                    s.frame = 0;
+                    hooks::clear_keybind_emulation();
+                    logger::log_line(&format!(
+                        "api: script {} '{}' trigger -> started",
+                        s.id, s.name
+                    ));
+                }
                 None
             } else {
                 None
@@ -1413,6 +1441,8 @@ impl ApiServer {
             status: ScriptStatus::Running,
             total_frames,
             trigger: None,
+            trigger_ticks: None,
+            armed_ticks: 0,
             pending: None,
             player_was_found: false,
         });
@@ -1887,6 +1917,17 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
         Ok(v) => v,
         Err(e) => return (400, Response::Error(ErrorResponse { error: e })),
     };
+    if let Some(t) = &req.trigger
+        && t.pos.is_none()
+        && t.ticks.is_none()
+    {
+        return (
+            400,
+            Response::Error(ErrorResponse {
+                error: "trigger: нужен pos (зона) или ticks (тиков после взвода)".into(),
+            }),
+        );
+    }
     let mut guard = state.lock().unwrap();
     if guard
         .script
@@ -1941,11 +1982,17 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
         .unwrap_or(0);
     // Сброс остатков keybind-эмуляции (ripper/blade) до старта.
     hooks::clear_keybind_emulation();
-    let trigger = req.trigger.map(|t| segment::Vec3 {
-        x: t.pos[0],
-        y: t.pos[1],
-        z: t.pos[2],
-    });
+    let (trigger, trigger_ticks) = match req.trigger {
+        Some(t) => (
+            t.pos.map(|p| segment::Vec3 {
+                x: p[0],
+                y: p[1],
+                z: p[2],
+            }),
+            t.ticks,
+        ),
+        None => (None, None),
+    };
     let status = phase_status;
     let next_status = pending.as_ref().map(|p| p.status);
     clear_script_queue();
@@ -1958,6 +2005,8 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
         status,
         total_frames,
         trigger,
+        trigger_ticks,
+        armed_ticks: 0,
         pending,
         player_was_found: false,
     });
