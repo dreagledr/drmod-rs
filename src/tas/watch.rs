@@ -27,8 +27,8 @@ use windows::Win32::System::Threading::{
 
 /// `STATUS_SINGLE_STEP` — исключение от аппаратной точки останова.
 pub(crate) const STATUS_SINGLE_STEP: u32 = 0x8000_0004;
-/// Сколько уникальных EIP запомнить (дальше — только общий счётчик).
-const MAX_UNIQUE: usize = 32;
+/// Сколько уникальных пар (писатель, вызывающий) запомнить.
+const MAX_UNIQUE: usize = 64;
 /// `Behavior + 0x618` — поле текущей анимации (см. `game::player`).
 pub(crate) const ENEMY_ANIM_OFFSET: usize = 0x618;
 /// DR7: L0=1, RW0=01 (запись), LEN0=11 (4 байта).
@@ -55,17 +55,18 @@ static MODULE_START: AtomicUsize = AtomicUsize::new(0);
 static MODULE_END: AtomicUsize = AtomicUsize::new(0);
 static NHITS: AtomicUsize = AtomicUsize::new(0);
 static TOTAL: AtomicU64 = AtomicU64::new(0);
-/// Адрес поля анимации ближайшего врага — обновляется каждый кадр из
-/// `read_nearest_enemy`, чтобы `POST /watch {"enemy": true}` не искал его сам.
-static ENEMY_ANIM_ADDR: AtomicUsize = AtomicUsize::new(0);
+/// Адрес Behavior ближайшего врага — обновляется каждый кадр из
+/// `read_nearest_enemy`, чтобы `POST /watch {"enemy": true, "off": "0x…"}` не
+/// искал его сам.
+static ENEMY_BEHAVIOR: AtomicUsize = AtomicUsize::new(0);
 
-/// Обновляет адрес анимации ближайшего врага (зовётся из чтения состояния).
-pub(crate) fn set_enemy_anim_addr(addr: usize) {
-    ENEMY_ANIM_ADDR.store(addr, Ordering::Relaxed);
+/// Обновляет адрес Behavior ближайшего врага (зовётся из чтения состояния).
+pub(crate) fn set_enemy_behavior(addr: usize) {
+    ENEMY_BEHAVIOR.store(addr, Ordering::Relaxed);
 }
 
-pub(crate) fn enemy_anim_addr() -> usize {
-    ENEMY_ANIM_ADDR.load(Ordering::Relaxed)
+pub(crate) fn enemy_behavior() -> usize {
+    ENEMY_BEHAVIOR.load(Ordering::Relaxed)
 }
 
 /// Заявка на взвод точки (обработается в `service()` на главном потоке).
@@ -151,8 +152,10 @@ pub(crate) fn service() {
     }
 }
 
-/// VEH: наше ли это single-step. `true` — записали EIP писателя, адрес
-/// возврата вызывающего и кандидатов-возвратов со стека; выполнение продолжаем.
+/// VEH: наше ли это single-step. `true` — записали пару (Eip писателя, адрес
+/// возврата вызывающего) и кандидатов-возвратов со стека; выполнение продолжаем.
+/// Дедуп — по **паре**, а не по писателю: один сеттер зовётся из разных мест, и
+/// интересны как раз разные вызывающие.
 pub(crate) fn handle_single_step(eip: usize, caller: usize, chain: &[usize]) -> bool {
     if !ARMED.load(Ordering::Relaxed) {
         return false;
@@ -161,12 +164,10 @@ pub(crate) fn handle_single_step(eip: usize, caller: usize, chain: &[usize]) -> 
     let n = NHITS.load(Ordering::Relaxed);
     let mut known = false;
     for i in 0..n.min(MAX_UNIQUE) {
-        if HITS[i].load(Ordering::Relaxed) == eip {
+        if HITS[i].load(Ordering::Relaxed) == eip
+            && CALLERS[i].load(Ordering::Relaxed) == caller
+        {
             known = true;
-            // Первого вызывающего оставляем, но если он ещё не записан — пишем.
-            if CALLERS[i].load(Ordering::Relaxed) == 0 {
-                CALLERS[i].store(caller, Ordering::Relaxed);
-            }
             break;
         }
     }

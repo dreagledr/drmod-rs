@@ -1685,6 +1685,9 @@ fn handle_watch(body: &str) -> (u16, Response) {
         on: bool,
         #[serde(default)]
         enemy: bool,
+        /// Смещение от Behavior ближайшего врага (по умолчанию — поле
+        /// анимации, `+0x618`): напр. `"0x1744"` — поле ИИ.
+        off: Option<String>,
         addr: Option<String>,
     }
     let req: Req = match serde_json::from_str(body) {
@@ -1694,8 +1697,8 @@ fn handle_watch(body: &str) -> (u16, Response) {
                 400,
                 Response::Error(ErrorResponse {
                     error: format!(
-                        "bad body: {e} (ожидается {{\"on\": true, \"enemy\": true}} \
-                         или {{\"on\": true, \"addr\": \"0x...\"}})"
+                        "bad body: {e} (ожидается {{\"on\": true, \"enemy\": true, \
+                         \"off\": \"0x1744\"}} или {{\"on\": true, \"addr\": \"0x...\"}})"
                     ),
                 }),
             )
@@ -1703,7 +1706,15 @@ fn handle_watch(body: &str) -> (u16, Response) {
     };
     if req.on {
         let addr = if req.enemy {
-            watch::enemy_anim_addr()
+            let base = watch::enemy_behavior();
+            let off = req
+                .off
+                .as_deref()
+                .map(|s| s.trim_start_matches("0x"))
+                .filter(|s| !s.is_empty())
+                .and_then(|s| usize::from_str_radix(s, 16).ok())
+                .unwrap_or(watch::ENEMY_ANIM_OFFSET);
+            if base == 0 { 0 } else { base + off }
         } else {
             req.addr
                 .as_deref()
