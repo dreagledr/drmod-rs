@@ -641,6 +641,8 @@ struct StateResponse {
     sim_ticks: u64,
     /// Шаг времени движка (см. `POST /dt`).
     dt: DtSnapshot,
+    /// Режим пина RNG решений ИИ (см. `POST /rng`): `off`/`lo`/`mid`/`hi`.
+    rng_pin: String,
 }
 
 /// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
@@ -677,6 +679,13 @@ struct DtResponse {
     ticks: bool,
     /// Абсолютный адрес `cSlowRateManager` (для сверки с зондом).
     addr: String,
+}
+
+/// `POST /rng` — ответ: режим пина RNG.
+#[derive(Serialize)]
+struct RngResponse {
+    /// `off` | `lo` | `mid` | `hi`.
+    pin: String,
 }
 
 /// `GET/POST /watch` — ответ аппаратной точки останова (debug-only).
@@ -748,6 +757,7 @@ enum Response {
     Logs(LogsResponse),
     Eject(EjectResponse),
     Dt(DtResponse),
+    Rng(RngResponse),
     #[cfg(debug_assertions)]
     Watch(WatchResponse),
     Error(ErrorResponse),
@@ -907,6 +917,42 @@ fn capture_synth_base(srm: usize) {
     let cur = unsafe { *((srm + SRM_TICKS) as *const f32) };
     SYNTH_BASE_TICKS_BITS.store(cur.to_bits(), Ordering::Relaxed);
     SYNTH_LAST_TICKS_BITS.store(cur.to_bits(), Ordering::Relaxed);
+}
+
+/// Пин возвращаемого значения `randRange` (решения ИИ): 0 — выкл, 1 — `lo`,
+/// 2 — середина диапазона, 3 — `hi`. Состояние LCG при этом всё равно крутится
+/// оригиналом, поэтому прочие потребители RNG не страдают — подменяется только
+/// значение, которое получает вызывающий.
+static RNG_PIN: AtomicU32 = AtomicU32::new(0);
+
+/// Подмена значения `randRange` (unsigned) по режиму пина.
+pub(crate) fn rng_pin(real: u32, lo: u32, hi: u32) -> u32 {
+    match RNG_PIN.load(Ordering::Relaxed) {
+        1 => lo,
+        2 if hi >= lo => lo + (hi - lo) / 2,
+        3 => hi,
+        _ => real,
+    }
+}
+
+/// Подмена значения `randRange` (signed) по режиму пина.
+pub(crate) fn rng_pin_signed(real: i32, lo: i32, hi: i32) -> i32 {
+    match RNG_PIN.load(Ordering::Relaxed) {
+        1 => lo,
+        2 if hi >= lo => lo + (hi - lo) / 2,
+        3 => hi,
+        _ => real,
+    }
+}
+
+/// Режим пина RNG строкой (для `/state`).
+fn rng_pin_name() -> &'static str {
+    match RNG_PIN.load(Ordering::Relaxed) {
+        1 => "lo",
+        2 => "mid",
+        3 => "hi",
+        _ => "off",
+    }
 }
 
 /// Очередь ввода активного скрипта для подачи из детура `updateInputUnit`, то
@@ -1502,6 +1548,7 @@ fn route(
         ("POST", "/script/stop") => handle_script_stop(state),
         ("POST", "/eject") => handle_eject(state),
         ("POST", "/dt") => handle_dt(body, state),
+        ("POST", "/rng") => handle_rng(body),
         #[cfg(debug_assertions)]
         ("GET", "/watch") => (200, Response::Watch(watch_json())),
         #[cfg(debug_assertions)]
@@ -1572,6 +1619,7 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
             synth_base_ms: f32::from_bits(SYNTH_BASE_TICKS_BITS.load(Ordering::Relaxed)),
             ticks: SYNTH_TICKS.load(Ordering::Relaxed),
         },
+        rng_pin: rng_pin_name().to_string(),
     }
 }
 
@@ -1648,6 +1696,51 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             ms,
             ticks,
             addr: format!("0x{addr:08X}"),
+        }),
+    )
+}
+
+/// `POST /rng` — пин возвращаемого значения `randRange` (решения ИИ врага).
+/// Тело: `{"pin": "off"|"lo"|"mid"|"hi"}`. Состояние LCG продолжает крутиться
+/// через оригинал — подменяется только значение, которое получает вызывающий,
+/// так что прочие потребители RNG не страдают. `lo/mid/hi` делают выбор ИИ
+/// детерминированным (одинаковый ввод → одинаковое поведение врага).
+fn handle_rng(body: &str) -> (u16, Response) {
+    #[derive(Deserialize)]
+    struct Req {
+        pin: String,
+    }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!("bad body: {e} (ожидается {{\"pin\": \"off|lo|mid|hi\"}})"),
+                }),
+            )
+        }
+    };
+    let mode = match req.pin.as_str() {
+        "off" => 0,
+        "lo" => 1,
+        "mid" => 2,
+        "hi" => 3,
+        other => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!("unknown pin '{other}' (off|lo|mid|hi)"),
+                }),
+            )
+        }
+    };
+    RNG_PIN.store(mode, Ordering::Relaxed);
+    logger::log_line(&format!("api: rng pin = '{}'", req.pin));
+    (
+        200,
+        Response::Rng(RngResponse {
+            pin: rng_pin_name().into(),
         }),
     )
 }

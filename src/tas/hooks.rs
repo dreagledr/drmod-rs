@@ -45,6 +45,11 @@ static ORIG_IS_KEY_PRESSED: OnceLock<unsafe extern "thiscall" fn(*const u8, i32)
 /// `api::after_frame_time`).
 static ORIG_FRAME_TIME: OnceLock<unsafe extern "thiscall" fn(*mut u8, i32, f32)> =
     OnceLock::new();
+/// Trampoline `randRange` (unsigned/signed) — глобальный LCG ИИ.
+static ORIG_RAND_RANGE: OnceLock<unsafe extern "thiscall" fn(*mut u32, u32, u32) -> u32> =
+    OnceLock::new();
+static ORIG_RAND_RANGE_SIGNED: OnceLock<unsafe extern "thiscall" fn(*mut u32, i32, i32) -> i32> =
+    OnceLock::new();
 /// Эмуляция удержания keybind'ов (`isKeybindDown`): `[keybind] != 0` — детур
 /// возвращает 1 для этого keybind. Индексы — `addresses::KEYBIND_*`.
 static KEYBIND_HOLD: [AtomicU32; addresses::KEYBIND_TOTAL] =
@@ -584,6 +589,38 @@ fn set_original_frame_time(orig: unsafe extern "thiscall" fn(*mut u8, i32, f32))
     ORIG_FRAME_TIME.set(orig).map_err(|_| ())
 }
 
+/// Детур `randRange` (unsigned). Всегда крутит состояние LCG через оригинал
+/// (прочие потребители не страдают), но возвращаемое значение может подменить
+/// `api::rng_pin` — детерминированный пин для решений ИИ.
+unsafe extern "thiscall" fn rand_range_detour(this: *mut u32, lo: u32, hi: u32) -> u32 {
+    let real = match ORIG_RAND_RANGE.get() {
+        Some(&orig) => unsafe { orig(this, lo, hi) },
+        None => lo,
+    };
+    crate::api::rng_pin(real, lo, hi)
+}
+
+/// Детур `randRange` (signed).
+unsafe extern "thiscall" fn rand_range_signed_detour(this: *mut u32, lo: i32, hi: i32) -> i32 {
+    let real = match ORIG_RAND_RANGE_SIGNED.get() {
+        Some(&orig) => unsafe { orig(this, lo, hi) },
+        None => lo,
+    };
+    crate::api::rng_pin_signed(real, lo, hi)
+}
+
+/// Сохраняет trampoline `randRange` (unsigned).
+fn set_original_rand_range(orig: unsafe extern "thiscall" fn(*mut u32, u32, u32) -> u32) -> Result<(), ()> {
+    ORIG_RAND_RANGE.set(orig).map_err(|_| ())
+}
+
+/// Сохраняет trampoline `randRange` (signed).
+fn set_original_rand_range_signed(
+    orig: unsafe extern "thiscall" fn(*mut u32, i32, i32) -> i32,
+) -> Result<(), ()> {
+    ORIG_RAND_RANGE_SIGNED.set(orig).map_err(|_| ())
+}
+
 /// Сохраняет trampoline оригинальной `isKeybindPressed` после создания хука.
 fn set_original_is_keybind_pressed(orig: unsafe extern "C" fn(i32) -> i32) -> Result<(), ()> {
     ORIG_IS_KEYBIND_PRESSED.set(orig).map_err(|_| ())
@@ -621,6 +658,9 @@ pub struct InputHooks {
     keyboard_poll: Option<MhHook>,
     /// Хук обновителя времени кадра (`FRAME_TIME_UPDATE`) — фиксированный шаг.
     frame_time: Option<MhHook>,
+    /// Хуки `randRange` — пин значений RNG (`POST /rng`).
+    rand_range: Option<MhHook>,
+    rand_range_signed: Option<MhHook>,
 }
 
 impl InputHooks {
@@ -660,9 +700,11 @@ impl InputHooks {
         let key_pressed = Self::create_key_pressed_hook(base_addr);
         let keyboard_poll = Self::create_keyboard_poll_hook(base_addr);
         let frame_time = Self::create_frame_time_hook(base_addr);
+        let rand_range = Self::create_rand_range_hook(base_addr);
+        let rand_range_signed = Self::create_rand_range_signed_hook(base_addr);
 
         logger::log_line(&format!(
-            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={} frame_time_hook={}",
+            "=== drmod init === base=0x{:08X} input_hook={} keybind_hook={} keybind_down_hook={} key_down_hook={} key_pressed_hook={} keyboard_poll_hook={} frame_time_hook={} rand_range_hook={}/{}",
             base_addr,
             if input.is_some() { "OK" } else { "FAIL" },
             if keybind.is_some() { "OK" } else { "FAIL" },
@@ -670,7 +712,9 @@ impl InputHooks {
             if key_down.is_some() { "OK" } else { "FAIL" },
             if key_pressed.is_some() { "OK" } else { "FAIL" },
             if keyboard_poll.is_some() { "OK" } else { "FAIL" },
-            if frame_time.is_some() { "OK" } else { "FAIL" }
+            if frame_time.is_some() { "OK" } else { "FAIL" },
+            if rand_range.is_some() { "OK" } else { "FAIL" },
+            if rand_range_signed.is_some() { "OK" } else { "FAIL" }
         ));
 
         Self {
@@ -681,6 +725,8 @@ impl InputHooks {
             key_pressed,
             keyboard_poll,
             frame_time,
+            rand_range,
+            rand_range_signed,
         }
     }
 
@@ -948,6 +994,77 @@ impl InputHooks {
             "create_frame_time_hook: OK target=0x{:08X} detour=0x{:08X} trampoline=0x{:08X}",
             target as usize,
             frame_time_detour as *const () as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// MinHook на `randRange` (unsigned): детур крутит LCG, но значение может
+    /// подменить пин (`POST /rng`) — рычаг воспроизводимости решений ИИ.
+    fn create_rand_range_hook(base_addr: usize) -> Option<MhHook> {
+        use core::ffi::c_void;
+
+        if base_addr == 0 {
+            return None;
+        }
+        let target = (base_addr + addresses::RAND_RANGE) as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, rand_range_detour as *mut c_void) } {
+            Ok(h) => h,
+            Err(e) => {
+                logger::log_line(&format!(
+                    "create_rand_range_hook: FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "thiscall" fn(*mut u32, u32, u32) -> u32 =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = set_original_rand_range(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            logger::log_line(&format!("create_rand_range_hook: queue_enable FAIL err={e:?}"));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        logger::log_line(&format!(
+            "create_rand_range_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
+            hook.trampoline() as usize
+        ));
+        Some(hook)
+    }
+
+    /// MinHook на `randRange` (signed).
+    fn create_rand_range_signed_hook(base_addr: usize) -> Option<MhHook> {
+        use core::ffi::c_void;
+
+        if base_addr == 0 {
+            return None;
+        }
+        let target = (base_addr + addresses::RAND_RANGE_SIGNED) as *mut c_void;
+        let hook = match unsafe { MhHook::new(target, rand_range_signed_detour as *mut c_void) } {
+            Ok(h) => h,
+            Err(e) => {
+                logger::log_line(&format!(
+                    "create_rand_range_signed_hook: FAIL target=0x{:08X} err={:?}",
+                    target as usize, e
+                ));
+                return None;
+            }
+        };
+        let trampoline: unsafe extern "thiscall" fn(*mut u32, i32, i32) -> i32 =
+            unsafe { std::mem::transmute(hook.trampoline()) };
+        let _ = set_original_rand_range_signed(trampoline);
+        if let Err(e) = unsafe { hook.queue_enable() } {
+            logger::log_line(&format!(
+                "create_rand_range_signed_hook: queue_enable FAIL err={e:?}"
+            ));
+            return None;
+        }
+        let _ = unsafe { MH_ApplyQueued() };
+        logger::log_line(&format!(
+            "create_rand_range_signed_hook: OK target=0x{:08X} trampoline=0x{:08X}",
+            target as usize,
             hook.trampoline() as usize
         ));
         Some(hook)
