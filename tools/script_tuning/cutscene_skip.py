@@ -44,6 +44,7 @@ SUB_HASH = 0x14B9178        # текущая подфаза: хэш (объек�
 CHK_HASH = 0x14B914C        # чекпойнт-запись: хэш подфазы (объект состояния +0x0C)
 INPUT_UNIT = 0x177B850      # cInput::g_InputUnit0
 INPUT_KEYS = 0x19D06F8      # cInput::ms_InputKeys (DIK-буфер клавиатуры)
+MENU_OBJ = 0x1BEA140        # указатель на живой объект меню (cEventPauseMenu)
 DIK_ESCAPE = 0x01
 DIK_RETURN = 0x1C
 BUTTONS_DOWN = 0x00         # m_nButtonsDown
@@ -87,6 +88,11 @@ def u32v(h, addr):
     return struct.unpack("<I", b)[0] if b and len(b) == 4 else None
 
 
+def i32v(h, addr):
+    b = rd(h, addr, 4)
+    return struct.unpack("<i", b)[0] if b and len(b) == 4 else None
+
+
 def wr_u32(h, addr, value):
     return bool(k32.WriteProcessMemory(h, ctypes.c_void_p(addr),
                                        struct.pack("<I", value), 4,
@@ -113,6 +119,10 @@ def main(argv=None):
     p.add_argument("--restart", action="store_true",
                    help="после заказа рестартовать чекпойнт: он-то и грузит "
                         "сцену, но загрузки/рестарты иногда роняют игру")
+    p.add_argument("--observe", action="store_true",
+                   help="ничего не заказывать: только логировать состояние меню "
+                        "и объекта (курсор/подтверждённый пункт) — режим «игрок "
+                        "сам жмёт Skip, а мы смотрим, что делает движок»")
     p.add_argument("--timeout", type=float, default=1800.0,
                    help="сколько секунд ждать скипа, прежде чем выйти")
     p.add_argument("--hz", type=float, default=50.0,
@@ -130,6 +140,7 @@ def main(argv=None):
     prev = None
     prev_confirm = False
     prev_esc = False
+    prev_obj = None
     last_pause = 0.0
     while time.perf_counter() - t0 < a.timeout:
         cur = u32v(h, mod + SUB_HASH)
@@ -177,6 +188,9 @@ def main(argv=None):
         # Подаём pause-бит, пока игрок держит паузу (Esc), а меню ещё закрыто:
         # движок откроет своё консольное катсценное меню, и условие само
         # перестанет выполняться (меню != InGame) — естественный лимит.
+        # ⚠️ Проверено (2026-09-12, out/menu_input_test.py): в сцене-событии
+        # эта подача меню НЕ открывает — открывает только физический Esc игрока
+        # (игрок должен нажать Esc сам, инструмент лишь держит флаги).
         now = time.perf_counter()
         if (pause_wanted and in_scene and menu == MENU_IN_GAME
                 and now - last_pause >= 0.5):
@@ -199,12 +213,34 @@ def main(argv=None):
                 print(f"[{time.perf_counter() - t0:6.1f}s] КОНСОЛЬНОЕ МЕНЮ "
                       f"ОТКРЫТО (Cutscene Pause) — ждём confirm", flush=True)
                 armed = True
+            # Живой объект меню — cEventPauseMenu (base + 0x1BEA140):
+            # +0x38 курсор, +0x3C индекс подтверждённого пункта (до confirm -1).
+            obj = u32v(h, mod + MENU_OBJ)
+            snap = (obj, i32v(h, obj + 0x38) if obj else None,
+                    i32v(h, obj + 0x3C) if obj else None)
+            if snap != prev_obj:
+                print(f"[{time.perf_counter() - t0:6.1f}s] меню 0x{snap[0] or 0:08X}: "
+                      f"курсор={snap[1]} подтверждён={snap[2]}", flush=True)
+                prev_obj = snap
             if confirm_edge:
                 print(f"[{time.perf_counter() - t0:6.1f}s] confirm в "
-                      f"катсценном меню → скип в {a.next}", flush=True)
-                # Шаг 1: заказ подфазы. Он пишет ТОЛЬКО поле текущей подфазы
-                # (сцену не грузит), но через копию состояния это же значение
-                # попадает и в запись чекпойнта.
+                      f"катсценном меню (подтверждён пункт {snap[2]})", flush=True)
+                if a.observe:
+                    # Ничего не заказываем: смотрим, что сделает сам движок.
+                    for i in range(20):
+                        time.sleep(1)
+                        obj = u32v(h, mod + MENU_OBJ)
+                        print(f"  [{i + 1:2d}s] menu={u32v(h, mod + MENU)} "
+                              f"sub=0x{u32v(h, mod + SUB_HASH) or 0:08X} "
+                              f"chk=0x{u32v(h, mod + CHK_HASH) or 0:08X} "
+                              f"объект=0x{obj or 0:08X} "
+                              f"курсор={i32v(h, obj + 0x38) if obj else None} "
+                              f"подтв={i32v(h, obj + 0x3C) if obj else None}",
+                              flush=True)
+                    break
+                # Шаг 1: заказ подфазы. ⚠️ Он пишет ТОЛЬКО поле текущей подфазы
+                # (сцену не грузит!) — загрузку делает либо пункт Skip меню
+                # (нажатие игрока), либо рестарт чекпойнта (--restart).
                 try:
                     resp = api.http(api.DEFAULT_URL, "/order", "POST",
                                     {"name": a.next, "arg": 1,
