@@ -978,6 +978,33 @@ fn fps_cap_limit(base_addr: usize) -> Option<u32> {
     }
 }
 
+/// Снимок капа кадров для меню Settings: `(режим, значение)`. Режим: 0 — как
+/// в игре, 1 — снят, 2 — свой лимит в значении кадров/с.
+pub(crate) fn fps_cap_state() -> (u32, u32) {
+    (
+        FPS_CAP_MODE.load(Ordering::Relaxed),
+        FPS_CAP_VALUE.load(Ordering::Relaxed),
+    )
+}
+
+/// Ставит режим капа кадров (`0` — как в игре, `1` — снят, `2` — свой лимит) и
+/// сразу пишет период пацера. Общий путь `POST /fps` и меню Settings; значение
+/// пишется лишь в режиме своего лимита. Возвращает записанный период (единицы
+/// 3·мс).
+pub(crate) fn set_fps_cap(base_addr: usize, mode: u32, value: u32) -> u32 {
+    if mode == 2 {
+        FPS_CAP_VALUE.store(value.clamp(1, 1000), Ordering::Relaxed);
+    }
+    FPS_CAP_MODE.store(mode, Ordering::Relaxed);
+    // Пишем сразу (не ждём следующего кадра): в режиме «как в игре» возвращаем
+    // значение, которое движок и так держит для 60 FPS.
+    let period = fps_cap_period().unwrap_or(3000 / 60);
+    if base_addr != 0 {
+        unsafe { *((base_addr + FRAME_PACER_PERIOD) as *mut u32) = period };
+    }
+    period
+}
+
 /// Пишет выбранную дельту кадра (см. `FIXED_DT`). Только записи по готовому
 /// адресу: ни аллокаций, ни логов — это путь детура.
 fn apply_fixed_dt() {
@@ -1066,6 +1093,51 @@ fn capture_synth_base(srm: usize) {
     SYNTH_LAST_TICKS_BITS.store(cur.to_bits(), Ordering::Relaxed);
 }
 
+/// Снимок настроек фиксированного шага для меню Settings: `(включён, мс,
+/// синтетические часы)`.
+pub(crate) fn fixed_dt_state() -> (bool, f32, bool) {
+    (
+        FIXED_DT.load(Ordering::Relaxed),
+        f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed)),
+        SYNTH_TICKS.load(Ordering::Relaxed),
+    )
+}
+
+/// Меняет только величину фиксированного шага (слайдер в меню Settings), не
+/// перезахватывая базу синтетических часов.
+pub(crate) fn set_fixed_dt_ms(ms: f32) {
+    FIXED_DT_MS_BITS.store(ms.to_bits(), Ordering::Relaxed);
+}
+
+/// Включает/выключает фиксированный шаг и, если заданы, обновляет его дельту и
+/// режим синтетических часов. Общий путь `POST /dt` и меню Settings: при
+/// включении адрес `cSlowRateManager` считается от `base_addr`, а база
+/// синтетических часов берётся от текущего `m_fTicks`.
+pub(crate) fn set_fixed_dt(
+    base_addr: usize,
+    fixed: bool,
+    ms: Option<f32>,
+    ticks: Option<bool>,
+) {
+    if let Some(ms) = ms {
+        FIXED_DT_MS_BITS.store(ms.to_bits(), Ordering::Relaxed);
+    }
+    if let Some(ticks) = ticks {
+        SYNTH_TICKS.store(ticks, Ordering::Relaxed);
+    }
+    let addr = base_addr + SLOW_RATE_MANAGER;
+    if fixed {
+        SRM_ADDR.store(addr, Ordering::Relaxed);
+        FIXED_DT.store(true, Ordering::Relaxed);
+        if SYNTH_TICKS.load(Ordering::Relaxed) {
+            capture_synth_base(addr);
+        }
+    } else {
+        FIXED_DT.store(false, Ordering::Relaxed);
+        SRM_ADDR.store(0, Ordering::Relaxed);
+    }
+}
+
 /// Пин возвращаемого значения `randRange` (решения ИИ): 0 — выкл, 1 — `lo`,
 /// 2 — середина диапазона, 3 — `hi`. Состояние LCG при этом всё равно крутится
 /// оригиналом, поэтому прочие потребители RNG не страдают — подменяется только
@@ -1128,6 +1200,30 @@ fn rng_pin_name() -> &'static str {
         5 => "freeze",
         _ => "off",
     }
+}
+
+/// Снимок пина RNG для меню Settings: `(режим, сид)`. Режим: 0 — off, 1 — lo,
+/// 2 — mid, 3 — hi, 4 — seed, 5 — freeze.
+pub(crate) fn rng_pin_state() -> (u32, u32) {
+    (
+        RNG_PIN.load(Ordering::Relaxed),
+        RNG_SEED.load(Ordering::Relaxed),
+    )
+}
+
+/// Ставит режим пина RNG. Общий путь `POST /rng` и меню Settings; `seed` значим
+/// для режимов `seed`/`freeze` — он применится на первом тике следующего
+/// скрипта.
+pub(crate) fn set_rng_pin(mode: u32, seed: u32) {
+    if mode == 4 || mode == 5 {
+        RNG_SEED.store(seed, Ordering::Relaxed);
+        logger::log_line(&format!(
+            "api: rng {} = 0x{seed:08X} (применится на первом тике следующего скрипта)",
+            if mode == 5 { "freeze" } else { "seed" }
+        ));
+    }
+    RNG_PIN.store(mode, Ordering::Relaxed);
+    logger::log_line(&format!("api: rng pin = '{}'", rng_pin_name()));
 }
 
 /// Очередь ввода активного скрипта для подачи из детура `updateInputUnit`, то
@@ -1906,34 +2002,22 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             )
         }
     };
-    if let Some(ms) = req.ms {
-        if !(1.0..=1000.0).contains(&ms) {
-            return (
-                400,
-                Response::Error(ErrorResponse {
-                    error: format!("ms={ms} вне разумного диапазона 1..1000"),
-                }),
-            );
-        }
-        FIXED_DT_MS_BITS.store(ms.to_bits(), Ordering::Relaxed);
+    if let Some(ms) = req.ms
+        && !(1.0..=1000.0).contains(&ms)
+    {
+        return (
+            400,
+            Response::Error(ErrorResponse {
+                error: format!("ms={ms} вне разумного диапазона 1..1000"),
+            }),
+        );
     }
-    let addr = {
+    let base_addr = {
         let guard = state.lock().unwrap();
-        guard.base_addr + SLOW_RATE_MANAGER
+        guard.base_addr
     };
-    if let Some(ticks) = req.ticks {
-        SYNTH_TICKS.store(ticks, Ordering::Relaxed);
-    }
-    if req.fixed {
-        SRM_ADDR.store(addr, Ordering::Relaxed);
-        FIXED_DT.store(true, Ordering::Relaxed);
-        if SYNTH_TICKS.load(Ordering::Relaxed) {
-            capture_synth_base(addr);
-        }
-    } else {
-        FIXED_DT.store(false, Ordering::Relaxed);
-        SRM_ADDR.store(0, Ordering::Relaxed);
-    }
+    set_fixed_dt(base_addr, req.fixed, req.ms, req.ticks);
+    let addr = base_addr + SLOW_RATE_MANAGER;
     let ms = f32::from_bits(FIXED_DT_MS_BITS.load(Ordering::Relaxed));
     let ticks = SYNTH_TICKS.load(Ordering::Relaxed);
     logger::log_line(&format!(
@@ -1982,7 +2066,7 @@ fn handle_fps(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             )
         }
     };
-    if let Some(fps) = req.fps {
+    let (mode, value) = if let Some(fps) = req.fps {
         if !(1..=1000).contains(&fps) {
             return (
                 400,
@@ -1991,12 +2075,11 @@ fn handle_fps(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
                 }),
             );
         }
-        FPS_CAP_VALUE.store(fps, Ordering::Relaxed);
-        FPS_CAP_MODE.store(2, Ordering::Relaxed);
+        (2u32, fps)
     } else {
         match req.cap.as_deref() {
-            Some("off") | Some("uncapped") => FPS_CAP_MODE.store(1, Ordering::Relaxed),
-            None | Some("game") => FPS_CAP_MODE.store(0, Ordering::Relaxed),
+            Some("off") | Some("uncapped") => (1, FPS_CAP_VALUE.load(Ordering::Relaxed)),
+            None | Some("game") => (0, FPS_CAP_VALUE.load(Ordering::Relaxed)),
             Some(other) => {
                 return (
                     400,
@@ -2006,18 +2089,13 @@ fn handle_fps(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
                 )
             }
         }
-    }
+    };
     let base_addr = {
         let guard = state.lock().unwrap();
         guard.base_addr
     };
+    let period = set_fps_cap(base_addr, mode, value);
     let addr = base_addr + FRAME_PACER_PERIOD;
-    // Пишем сразу (не ждём следующего кадра): в режиме «как в игре» возвращаем
-    // значение, которое движок и так держит для 60 FPS.
-    let period = fps_cap_period().unwrap_or(3000 / 60);
-    if base_addr != 0 {
-        unsafe { *(addr as *mut u32) = period };
-    }
     logger::log_line(&format!(
         "api: fps cap = {} (период {period} ед. 3·мс, адрес 0x{addr:08X})",
         fps_cap_name()
@@ -2077,16 +2155,7 @@ fn handle_rng(body: &str) -> (u16, Response) {
             )
         }
     };
-    if mode == 4 || mode == 5 {
-        let seed = req.seed.unwrap_or(1);
-        RNG_SEED.store(seed, Ordering::Relaxed);
-        logger::log_line(&format!(
-            "api: rng {} = 0x{seed:08X} (применится на первом тике следующего скрипта)",
-            if mode == 5 { "freeze" } else { "seed" }
-        ));
-    }
-    RNG_PIN.store(mode, Ordering::Relaxed);
-    logger::log_line(&format!("api: rng pin = '{}'", req.pin));
+    set_rng_pin(mode, req.seed.unwrap_or(1));
     (
         200,
         Response::Rng(RngResponse {

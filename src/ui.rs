@@ -1,3 +1,4 @@
+use crate::api;
 use crate::game;
 use crate::net;
 #[cfg(debug_assertions)]
@@ -244,11 +245,13 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
 }
 
 pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
+    let base_addr = hud.base_addr;
     let settings = &mut hud.settings;
     ui.window("Settings")
-        .size([250.0, 175.0], Condition::FirstUseEver)
+        .size([320.0, 430.0], Condition::FirstUseEver)
         .position([320.0, 30.0], Condition::FirstUseEver)
         .collapsed(true, Condition::FirstUseEver)
+        .scroll_bar(true)
         .build(|| {
             ui.checkbox("Show best ghost", &mut settings.show_best_ghost);
             ui.slider("Ghost opacity", 0.0f32, 1.0f32, &mut settings.ghost_opacity);
@@ -264,8 +267,63 @@ pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
             }
 
             ui.separator();
+            render_tas_controls(ui, base_addr);
+
+            ui.separator();
             if ui.button("Выход / Выгрузить DLL") {
                 hud.api.request_eject();
             }
         });
+}
+
+/// Быстрые настройки TAS-автоматизации (`POST /dt`, `/rng`, `/fps`) прямо в
+/// меню Settings. Пишут тот же runtime-стейт, что и HTTP-ручки, — источник
+/// истины один, поэтому значения не рассинхронизируются с API. `base_addr`
+/// нужен для адресов `cSlowRateManager` (фиксированный шаг) и пацера (кап).
+fn render_tas_controls(ui: &Ui, base_addr: usize) {
+    // Фиксированный шаг времени движка (`POST /dt`).
+    let (dt_fixed, dt_ms, dt_ticks) = api::fixed_dt_state();
+    let mut fixed = dt_fixed;
+    let mut ms = dt_ms;
+    let mut ticks = dt_ticks;
+    ui.checkbox("Фиксированный dt", &mut fixed);
+    ui.slider("dt, мс", 1.0f32, 100.0f32, &mut ms);
+    ui.checkbox("Синтетические часы (m_fTicks)", &mut ticks);
+    // Полный сеттер (с перезахватом базы часов) — только при смене режима;
+    // слайдер дельты перезахват не делает.
+    if fixed != dt_fixed || ticks != dt_ticks {
+        api::set_fixed_dt(base_addr, fixed, None, Some(ticks));
+    } else if ms != dt_ms {
+        api::set_fixed_dt_ms(ms);
+    }
+
+    // Пин RNG решений ИИ (`POST /rng`).
+    const RNG_MODES: [&str; 6] = ["off", "lo", "mid", "hi", "seed", "freeze"];
+    let (rng_mode, rng_seed) = api::rng_pin_state();
+    let mut mode = (rng_mode as usize).min(RNG_MODES.len() - 1);
+    let mut seed = rng_seed as i32;
+    if ui.combo_simple_string("RNG", &mut mode, &RNG_MODES[..]) {
+        api::set_rng_pin(mode as u32, seed.max(0) as u32);
+    }
+    if mode == 4 || mode == 5 {
+        if ui.input_int("seed", &mut seed).build() {
+            api::set_rng_pin(mode as u32, seed.max(0) as u32);
+        }
+        ui.text_colored(
+            [0.6, 0.6, 0.6, 1.0],
+            "сид применится на 1-м тике скрипта",
+        );
+    }
+
+    // Кап кадров (`POST /fps`).
+    const FPS_MODES: [&str; 3] = ["как в игре", "снят", "свой лимит"];
+    let (fps_mode, fps_value) = api::fps_cap_state();
+    let mut fmode = (fps_mode as usize).min(FPS_MODES.len() - 1);
+    let mut fvalue = fps_value as i32;
+    if ui.combo_simple_string("Кап FPS", &mut fmode, &FPS_MODES[..]) {
+        api::set_fps_cap(base_addr, fmode as u32, fvalue.max(1) as u32);
+    }
+    if fmode == 2 && ui.input_int("FPS", &mut fvalue).step(10).build() {
+        api::set_fps_cap(base_addr, 2, fvalue.clamp(1, 1000) as u32);
+    }
 }
