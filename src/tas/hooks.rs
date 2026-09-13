@@ -516,7 +516,7 @@ unsafe extern "thiscall" fn keyboard_poll_detour(this: *const u8) {
             if word & (1 << bit) == 0 {
                 continue;
             }
-            let dik = (word_index * 32 + bit) as usize;
+            let dik = word_index * 32 + bit;
             unsafe { *keys.add(dik) |= 0x80 };
         }
     }

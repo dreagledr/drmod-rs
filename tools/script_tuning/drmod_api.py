@@ -273,6 +273,25 @@ def fixed_dt(on=True, base=DEFAULT_URL, ticks=None):
     return http(base, "/dt", "POST", body)
 
 
+def fps_cap(cap=None, fps=None, base=DEFAULT_URL):
+    """Кап кадров движка (`POST /fps`): `cap="off"` — снять, `cap="game"` — как
+    в игре, `fps=N` — свой лимит.
+
+    FPS держит софтовый пацер движка: главный цикл кладёт в `base + 0x1B206EC`
+    период кадра в единицах 3·мс (50 = 16.67 мс = 60 FPS, геймплей; 100 =
+    33.3 мс = 30 FPS, меню/ролики), а пацер `0xB98070` после `Present` спит,
+    пока период не пройдёт. Мод перезаписывает период каждый кадр, поэтому
+    снятый кап держится. Вместе с `fixed_dt(on=True)` (кадр = ровно 1/60 с
+    симуляции) это даёт ускорение прогонов при FPS выше 60.
+    """
+    body = {}
+    if fps is not None:
+        body["fps"] = int(fps)
+    elif cap is not None:
+        body["cap"] = cap
+    return http(base, "/fps", "POST", body)
+
+
 def build_restart_script(ups=1, downs=0, hold=6, open_gap=20, gap=10,
                          confirms=2, confirm_gap=25, tail=60):
     """Скрипт рестарта миссии: pause → стрелки → confirm ×N.

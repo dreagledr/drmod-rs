@@ -38,6 +38,8 @@ const BIND_ADDR: &str = "127.0.0.1:5223";
 const MAX_SCRIPT_FRAMES: u32 = 3600;
 /// Ёмкость кольцевого буфера логов (60 FPS × 60 сек).
 const RING_CAPACITY: usize = 3600;
+/// Окно расчёта живого FPS — за сколько последних миллисекунд буфера считаем.
+const FPS_WINDOW_MS: u64 = 500;
 /// Лимит тела запроса (защита от гигантских скриптов).
 const MAX_BODY_BYTES: u64 = 64 * 1024;
 /// Максимум кадров в ответе /logs.
@@ -638,6 +640,18 @@ struct CameraSnapshot {
     rot: [f32; 3],
 }
 
+/// `GET /state` — кап кадров (`POST /fps`): режим и действующий лимит.
+#[derive(Serialize)]
+struct FpsCapSnapshot {
+    /// `game` — кап игры, `off` — снят, `<N> fps` — свой лимит.
+    cap: String,
+    /// Действующий лимит кадров/с (`null` — кап снят). В режиме «как в игре» он
+    /// посчитан из живого периода пацера (50 → 60, 100 → 30) — ровно поэтому в
+    /// снимке лимит, а не само поле периода: в режимах мода поле перезаписывается
+    /// каждый кадр, и чтение «сырого» значения давало гонку с сеттером движка.
+    limit: Option<u32>,
+}
+
 /// `GET /state` — текущий снимок игры + статус скрипта + fps.
 #[derive(Serialize)]
 struct StateResponse {
@@ -662,6 +676,8 @@ struct StateResponse {
     /// Скип катсцены «как на консоли» (`game::cutscene_skip`):
     /// `off`/`armed`/`closing`/`skipped`.
     cutscene_skip: String,
+    /// Кап кадров (`POST /fps`).
+    fps_cap: FpsCapSnapshot,
 }
 
 /// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
@@ -697,6 +713,19 @@ struct DtResponse {
     /// Ведутся ли синтетические часы `m_fTicks`.
     ticks: bool,
     /// Абсолютный адрес `cSlowRateManager` (для сверки с зондом).
+    addr: String,
+}
+
+/// `POST /fps` — ответ: режим капа и записанный период пацера (единицы 3·мс).
+#[derive(Serialize)]
+struct FpsResponse {
+    cap: String,
+    /// Действующий лимит кадров/с (`null` — кап снят), как в `/state`.
+    limit: Option<u32>,
+    /// Что именно записано в поле пацера: 0 — кап снят, N — период = 3000/N
+    /// (в режиме «как в игре» — значение, которое держит движок для 60 FPS).
+    period: u32,
+    /// Абсолютный адрес цели пацера (для сверки с зондом).
     addr: String,
 }
 
@@ -789,7 +818,8 @@ struct ErrorResponse {
 #[serde(untagged)]
 enum Response {
     Health(HealthResponse),
-    State(StateResponse),
+    /// `Box` — снимок заметно больше остальных ответов; на JSON не влияет.
+    State(Box<StateResponse>),
     ScriptRun(ScriptRunResponse),
     ScriptStop(ScriptStopResponse),
     ScriptStatus(ScriptStatusJson),
@@ -798,6 +828,7 @@ enum Response {
     Phase(PhaseResponse),
     Order(OrderResponse),
     Dt(DtResponse),
+    Fps(FpsResponse),
     Rng(RngResponse),
     #[cfg(debug_assertions)]
     Watch(WatchResponse),
@@ -856,6 +887,14 @@ const SRM_TICK_DIFF: usize = 0x8C;
 const SRM_UNIT0_DELTA: usize = 0x48;
 /// Состояние глобального LCG решений ИИ (`randRange`/`randFloat`).
 const RNG_STATE: usize = 0x19D0814;
+/// Цель пацера кадров: период кадра в единицах 3·мс. Каждый кадр главного
+/// цикла (`0xB98AD0(mode)`) движок кладёт сюда `3000·period_с`: 50 = 16.67 мс
+/// (60 FPS, геймплей), 100 = 33.3 мс (30 FPS, меню/ролики). Пацер `0xB98070`
+/// зовётся из главного цикла сразу после `Present` (`0xB9D650` → `0xB98070`) и
+/// спит (`Sleep(остаток/3)`) с перепроверкой, пока с прошлого кадра не пройдёт
+/// этот период. `0` — условие `target <= elapsed` выполняется сразу, пацер не
+/// ждёт (кадры без капа). См. `POST /fps`.
+const FRAME_PACER_PERIOD: usize = 0x1B206EC;
 /// Номинал движка: 1/60 с в миллисекундах и коэффициент 1.0.
 const NOMINAL_FRAME_MS: f32 = 16.666_668;
 const NOMINAL_RATE: f32 = 1.0;
@@ -873,6 +912,71 @@ static SRM_ADDR: AtomicUsize = AtomicUsize::new(0);
 /// A/B: с ним анимация идёт по линейным 1/60-часам, без него — по реальному
 /// времени движка (при фиксированной дельте физика стабильна, а анимация нет).
 static SYNTH_TICKS: AtomicBool = AtomicBool::new(true);
+
+/// Режим капа кадров (`POST /fps`): `0` — как в игре, `1` — снят совсем,
+/// `2` — свой лимит в `FPS_CAP_VALUE` кадров/с.
+static FPS_CAP_MODE: AtomicU32 = AtomicU32::new(0);
+/// Кадров в секунду для режима своего лимита (1..1000).
+static FPS_CAP_VALUE: AtomicU32 = AtomicU32::new(60);
+
+/// Период пацера (единицы 3·мс) для текущего режима капа; `None` — режим «как
+/// в игре», поле движка не трогаем.
+fn fps_cap_period() -> Option<u32> {
+    match FPS_CAP_MODE.load(Ordering::Relaxed) {
+        1 => Some(0),
+        2 => Some(3000 / FPS_CAP_VALUE.load(Ordering::Relaxed).clamp(1, 1000)),
+        _ => None,
+    }
+}
+
+/// Имя режима капа для `/state` и ответов.
+fn fps_cap_name() -> String {
+    match FPS_CAP_MODE.load(Ordering::Relaxed) {
+        1 => "off".to_string(),
+        2 => format!("{} fps", FPS_CAP_VALUE.load(Ordering::Relaxed)),
+        _ => "game".to_string(),
+    }
+}
+
+/// Пишет период пацера текущего режима (`POST /fps`). Зовётся каждый кадр из
+/// render-цикла: render идёт внутри `Present`, то есть уже после того, как
+/// движок выставил свой период, и до ожидания пацера, — запись всегда успевает.
+/// Движок перезаписывает период при смене режима кадра (меню ↔ бой), поэтому
+/// одноразовой записи мало. В режиме «как в игре» не делает ничего (ни одного
+/// лишнего чтения памяти в горячем пути).
+pub(crate) fn apply_fps_cap(base_addr: usize) {
+    let Some(period) = fps_cap_period() else {
+        return;
+    };
+    if base_addr == 0 {
+        return;
+    }
+    unsafe {
+        *((base_addr + FRAME_PACER_PERIOD) as *mut u32) = period;
+    }
+}
+
+/// Живой период пацера из памяти движка (единицы 3·мс); 0 — не прочитан.
+fn pacer_period(base_addr: usize) -> u32 {
+    if base_addr == 0 {
+        return 0;
+    }
+    unsafe { *((base_addr + FRAME_PACER_PERIOD) as *const u32) }
+}
+
+/// Действующий лимит кадров/с: в своих режимах — из режима (точно, без чтения
+/// памяти), в режиме «как в игре» — из живого периода пацера (`50` → 60 FPS,
+/// `100` → 30 FPS); `None` — кап снят (или период не прочитан).
+fn fps_cap_limit(base_addr: usize) -> Option<u32> {
+    match FPS_CAP_MODE.load(Ordering::Relaxed) {
+        1 => None,
+        2 => Some(FPS_CAP_VALUE.load(Ordering::Relaxed).clamp(1, 1000)),
+        _ => match pacer_period(base_addr) {
+            0 => None,
+            period => Some(3000 / period),
+        },
+    }
+}
 
 /// Пишет выбранную дельту кадра (см. `FIXED_DT`). Только записи по готовому
 /// адресу: ни аллокаций, ни логов — это путь детура.
@@ -1205,8 +1309,25 @@ impl ApiServer {
         guard.frame_count += 1;
         let elapsed = guard.start.elapsed();
         let elapsed_ms = elapsed.as_millis() as u64;
-        if elapsed.as_secs_f32() > 0.0 {
-            guard.fps = guard.frame_count as f32 / elapsed.as_secs_f32();
+        // Живой FPS — по кадрам кольцевого буфера за последние FPS_WINDOW_MS:
+        // окно по времени, а не по числу кадров (окно в 120 кадров при 20 FPS
+        // растягивается на 6 с, и цифра долго «догоняет» реальный темп).
+        // Раньше это было среднее за всю сессию (`frame_count / uptime`) — при
+        // снятом капе оно показывало 40 вместо ~240.
+        if let Some(last) = guard.ring.frames.back() {
+            let cutoff = last.t_ms.saturating_sub(FPS_WINDOW_MS);
+            let mut first = last;
+            for f in guard.ring.frames.iter().rev() {
+                if f.t_ms < cutoff {
+                    break;
+                }
+                first = f;
+            }
+            let span = last.t_ms.saturating_sub(first.t_ms);
+            let frames = last.frame.saturating_sub(first.frame);
+            if span > 0 && frames > 0 {
+                guard.fps = frames as f32 * 1000.0 / span as f32;
+            }
         }
 
         // Авто-стоп при loading: игрок пропал ПОСЛЕ того, как был найден, —
@@ -1665,13 +1786,14 @@ fn route(
     };
     match (method, path) {
         ("GET", "/health") => (200, Response::Health(health_json(state))),
-        ("GET", "/state") => (200, Response::State(state_json(state))),
+        ("GET", "/state") => (200, Response::State(Box::new(state_json(state)))),
         ("POST", "/script/run") => handle_script_run(body, state),
         ("POST", "/script/stop") => handle_script_stop(state),
         ("POST", "/eject") => handle_eject(state),
         ("POST", "/phase") => handle_phase(body, state),
         ("POST", "/order") => handle_order(body, state),
         ("POST", "/dt") => handle_dt(body, state),
+        ("POST", "/fps") => handle_fps(body, state),
         ("POST", "/rng") => handle_rng(body),
         #[cfg(debug_assertions)]
         ("GET", "/watch") => (200, Response::Watch(watch_json())),
@@ -1746,6 +1868,10 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
         rng_pin: rng_pin_name().to_string(),
         rng_seed: RNG_SEED.load(Ordering::Relaxed),
         cutscene_skip: crate::game::cutscene_skip_status().to_string(),
+        fps_cap: FpsCapSnapshot {
+            cap: fps_cap_name(),
+            limit: fps_cap_limit(guard.base_addr),
+        },
     }
 }
 
@@ -1821,6 +1947,87 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             fixed: req.fixed,
             ms,
             ticks,
+            addr: format!("0x{addr:08X}"),
+        }),
+    )
+}
+
+/// `POST /fps` — кап кадров (пацер движка). Тело: `{"cap": "off"}` — снять кап
+/// совсем, `{"cap": "game"}` — вернуть кап игры, `{"fps": 120}` — свой лимит.
+/// Период пишется в `FRAME_PACER_PERIOD` (единицы 3·мс: 3000/fps) **каждый
+/// кадр** из render-цикла — движок перезаписывает поле при смене режима
+/// (меню ↔ бой). Смысл режима «off»: при фиксированном шаге (`POST /dt`)
+/// каждый кадр = ровно 1/60 с симуляции, поэтому на FPS выше 60 игра начинает
+/// идти быстрее реального времени (ускорение прогонов TAS-скриптов). Режим и
+/// действующий лимит видны в `/state` → `fps_cap`.
+fn handle_fps(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    #[derive(Deserialize)]
+    struct Req {
+        /// `"off"` — снять кап, `"game"` — как в игре. По умолчанию (без поля) —
+        /// «как в игре».
+        cap: Option<String>,
+        /// Свой лимит кадров/с (1..1000); перекрывает `cap`.
+        fps: Option<u32>,
+    }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!(
+                        "bad body: {e} (ожидается {{\"cap\": \"off\"}} или {{\"fps\": 120}})"
+                    ),
+                }),
+            )
+        }
+    };
+    if let Some(fps) = req.fps {
+        if !(1..=1000).contains(&fps) {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!("fps={fps} вне диапазона 1..1000"),
+                }),
+            );
+        }
+        FPS_CAP_VALUE.store(fps, Ordering::Relaxed);
+        FPS_CAP_MODE.store(2, Ordering::Relaxed);
+    } else {
+        match req.cap.as_deref() {
+            Some("off") | Some("uncapped") => FPS_CAP_MODE.store(1, Ordering::Relaxed),
+            None | Some("game") => FPS_CAP_MODE.store(0, Ordering::Relaxed),
+            Some(other) => {
+                return (
+                    400,
+                    Response::Error(ErrorResponse {
+                        error: format!("cap=\"{other}\" неизвестен (off | game)"),
+                    }),
+                )
+            }
+        }
+    }
+    let base_addr = {
+        let guard = state.lock().unwrap();
+        guard.base_addr
+    };
+    let addr = base_addr + FRAME_PACER_PERIOD;
+    // Пишем сразу (не ждём следующего кадра): в режиме «как в игре» возвращаем
+    // значение, которое движок и так держит для 60 FPS.
+    let period = fps_cap_period().unwrap_or(3000 / 60);
+    if base_addr != 0 {
+        unsafe { *(addr as *mut u32) = period };
+    }
+    logger::log_line(&format!(
+        "api: fps cap = {} (период {period} ед. 3·мс, адрес 0x{addr:08X})",
+        fps_cap_name()
+    ));
+    (
+        200,
+        Response::Fps(FpsResponse {
+            cap: fps_cap_name(),
+            limit: fps_cap_limit(base_addr),
+            period,
             addr: format!("0x{addr:08X}"),
         }),
     )
