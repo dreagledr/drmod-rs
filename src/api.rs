@@ -2779,6 +2779,32 @@ fn script_tick(
     let mut item = false;
     let mut camera_reset = false;
     let mut zandatsu = false;
+    // Бит направления, который был подан на ПРОШЛОМ кадре: фронт (`pressed`)
+    // ставим только когда бит появляется заново — так же, как игра считает
+    // `pressed` для реального ввода. Без фронта движения приёмы, которым нужен
+    // «вперёд-вперёд-хэви» (`anim 110`), проигрываются без root motion.
+    let mut dirs_prev = 0u32;
+    {
+        let pf = k.wrapping_sub(1);
+        for cmd in &script.commands {
+            if pf < cmd.t || pf >= cmd.t + cmd.duration {
+                continue;
+            }
+            let i = &cmd.input;
+            if i.forward {
+                dirs_prev |= addresses::input_bits::FORWARD;
+            }
+            if i.backward {
+                dirs_prev |= addresses::input_bits::BACK;
+            }
+            if i.left {
+                dirs_prev |= addresses::input_bits::LEFT;
+            }
+            if i.right {
+                dirs_prev |= addresses::input_bits::RIGHT;
+            }
+        }
+    }
     for cmd in &script.commands {
         if k < cmd.t || k >= cmd.t + cmd.duration {
             continue;
@@ -2788,21 +2814,33 @@ fn script_tick(
         let mut stick = [0.0f32, 0.0];
         if inp.forward {
             unit.buttons_down |= addresses::input_bits::FORWARD;
+            if dirs_prev & addresses::input_bits::FORWARD == 0 {
+                unit.buttons_pressed |= addresses::input_bits::FORWARD;
+            }
             stick[1] -= 1000.0;
             active = true;
         }
         if inp.backward {
             unit.buttons_down |= addresses::input_bits::BACK;
+            if dirs_prev & addresses::input_bits::BACK == 0 {
+                unit.buttons_pressed |= addresses::input_bits::BACK;
+            }
             stick[1] += 1000.0;
             active = true;
         }
         if inp.left {
             unit.buttons_down |= addresses::input_bits::LEFT;
+            if dirs_prev & addresses::input_bits::LEFT == 0 {
+                unit.buttons_pressed |= addresses::input_bits::LEFT;
+            }
             stick[0] -= 1000.0;
             active = true;
         }
         if inp.right {
             unit.buttons_down |= addresses::input_bits::RIGHT;
+            if dirs_prev & addresses::input_bits::RIGHT == 0 {
+                unit.buttons_pressed |= addresses::input_bits::RIGHT;
+            }
             stick[0] += 1000.0;
             active = true;
         }
