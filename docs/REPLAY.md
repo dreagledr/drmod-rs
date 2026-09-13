@@ -2,7 +2,7 @@
 
 Дизайн-документ системы записи и воспроизведения игрового ввода для Metal Gear Rising: Revengeance.
 
-> **Проверенные гипотезы и грабли (рантайм-верификация):** [REPLAY_FINDINGS.md](REPLAY_FINDINGS.md) — подтверждённые/опровергнутые гипотезы об устройстве ввода и технические ловушки (релокация базы, VirtualQuery/MEM_COMMIT, execute-протекты, call-скан, счётчики логов и т.д.). Обновлять при каждом рантайм-тесте.
+> **Проверенные гипотезы и грабли (рантайм-верификация):** [REPLAY_FINDINGS.md](REPLAY_FINDINGS.md) — подтверждённые/опровергнутые гипотезы об устройстве ввода и технические ловушки (релокация базы, VirtualQuery/MEM_COMMIT, execute-протекты, call-скан, счётчики логов и т.д.). Обновлять при каждом рантайм-тесте. Сводка общих граблей по проекту — [PITFALLS.md](PITFALLS.md); анализ десинка — [DESYNC_ANALYSIS.md](DESYNC_ANALYSIS.md).
 
 > Все адреса и смещения ниже взяты из read-only референса `ref/mgr-plugin-sdk` (файлы `game/Hw.h`, `game/Pl0000.h`, `shared/Events.h`). Смещения, помеченные как «вычислено из SDK», требуют рантайм-верификации (см. Этап 0). Адреса вида `base + N` отсчитываются от модуля игры (`GetModuleHandleA(null)`), как и в остальном коде drmod-rs.
 
@@ -277,7 +277,8 @@ pub enum ReplayMode {
 }
 
 /// Один кадр записи: полный InputUnit (m_CurrentInput) + полное состояние
-/// персонажа и камеры + номер кадра.
+/// персонажа и камеры + номер кадра + реальные флаги blade/ripper + сырые
+/// клавиши меню + ближайший враг.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct ReplayFrame {
@@ -285,10 +286,15 @@ pub struct ReplayFrame {
     pub input: InputUnit,       // m_CurrentInput (0xCF8)
     pub state: PlayerState,     // позиция/поворот/скорость/HP/состояния
     pub camera: CameraState,    // позиция камеры + view-proj матрица
+    pub blade_down: u8,         // удержание blade (keybind 8)
+    pub ripper_pressed: u8,     // фронт ripper (keybind 11)
+    pub raw_down: [u32; 6],     // m_aKeysDown (навигация в меню)
+    pub raw_pressed: [u32; 6],  // m_aKeysPressed
+    pub enemy: EnemyState,      // ближайший враг (found=0 — врага нет)
 }
 ```
 
-Размер кадра ≈ **216 байт** (`u32` + `InputUnit` 0x30 + `PlayerState` 0x58 + `CameraState` 0x4C). При 60 FPS одна минута ≈ 760 КБ.
+Размер кадра ≈ **316 байт** (`u32` + `InputUnit` 48 + `PlayerState` 88 + `CameraState` 92 + `blade_down`/`ripper_pressed` + `raw_down`/`raw_pressed` 2×24 + `EnemyState` 32). При 60 FPS минута (3600 кадров) в буфере ≈ 1.1 МБ. В БД кадр хранится не целиком, а по колонкам (`input_unit`/`state`/`camera` BLOB + `blade_down`/`ripper_pressed`/`raw_*`/`enemy`); актуальный layout BLOB'ов — в `replay-types/`.
 
 **Источник записи** — `m_CurrentInput` (`Pl0000 + 0xCF8`) + полное состояние из `cached_player_obj_ptr` и камеры, читается **в `render()`** (после `read_game_state()`): глобальный `g_InputUnit0` в `Present` сброшен (`valid=0`), а `m_CurrentInput` — персистентная копия, стабильно читается в render. Захват симметричен для записи и воспроизведения.
 

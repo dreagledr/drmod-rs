@@ -1,8 +1,11 @@
 # Анализ десинка Record → Playback (dbdump, 2026-08-23)
 
+> **Документ-история** (анализ десинка; сводка выводов — `QWEN.md` «Десинк Record→Playback»).
+
 Данные: `C:\temp\dbdump_out_release\` — record `73` (1021 кадров, P118_BEACH) и
 playbacks `74..82` (1021 кадров каждый, все с `source_replay_id = 73`).
-Экспорт: `tools/dbdump` (CSV/Parquet, 83 колонки). Анализ: pandas-скрипты
+Экспорт: `tools/dbdump` (CSV/Parquet; на момент анализа схема была 83 колонки,
+сейчас — 90). Анализ: pandas-скрипты
 `tools/desync_analysis/`.
 
 Результат: **источник расхождений — известный лаг подачи ввода в 1 кадр +

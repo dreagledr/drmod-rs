@@ -4,8 +4,8 @@
 `replay_playback_frames` в `%LOCALAPPDATA%\drmod\runs.db`) на плоские колонки
 для офлайн-аналитики. Layout BLOB'ов — общий с модом через крейт
 `replay-types/` (`drmod-replay-types`): структуры `InputUnit`/`PlayerState`/
-`CameraState` + `to_bytes`/`from_bytes` живут в одном месте, поэтому формат
-у писателя и читателя всегда совпадает.
+`CameraState`/`EnemyState` + `to_bytes`/`from_bytes` живут в одном месте,
+поэтому формат у писателя и читателя всегда совпадает.
 
 ## Сборка
 
@@ -82,7 +82,7 @@ record/playback (±0.1 м X/Z, ±1.0 м Y). Удаление поля `trigger` 
 но `script_tick` его пока не применяет. Записи длиннее 3600 кадров (60 сек)
 отклоняются — лимит API.
 
-## Схема колонок (83)
+## Схема колонок (90)
 
 Единая для CSV и Parquet (порядок и типы заданы один раз в `src/dump.rs`,
 `SCHEMA`): мета прогона (`replay_id`, `kind`, `mission_id`, `mission_name`,
@@ -91,9 +91,11 @@ record/playback (±0.1 м X/Z, ±1.0 м Y). Удаление поля `trigger` 
 `PlayerState` (позиция/поворот/скорость, HP, r_anim, оружие, кнопки, ripper/blade),
 `CameraState` (позиция, look-at, roll, `vp_00`..`vp_33`), производные `cam_yaw`/
 `cam_pitch` (из pos→lookAt), `blade_down`, `ripper_pressed`, `raw_down_0..5`,
-`raw_pressed_0..5`.
+`raw_pressed_0..5`, ближайший враг `enemy_pos_x/y/z`, `enemy_blade_y`,
+`enemy_anim`, `enemy_frame`, `enemy_hp`.
 
 - Старые строки без raw-данных (до 2026-08-23) — пустая ячейка CSV / `null` в parquet.
+- Строки без колонки `enemy` (до 2026-08-24) — пустые enemy-ячейки / `null`.
 - Parquet-колонки все nullable.
 - `cam_yaw`/`cam_pitch` — радианы, из `atan2(look_at - pos)`.
 
@@ -102,5 +104,5 @@ record/playback (±0.1 м X/Z, ±1.0 м Y). Удаление поля `trigger` 
 - **Legacy camera-формат** (записи до 2026-08-18, camera BLOB 76 байт вместо 92)
   не поддерживается — понятная ошибка с подсказкой. Актуальные прогоны — от id 29.
 - Мод БД не читает (воспроизведение идёт из памяти сессии); если колонки
-  `blade_down`/`ripper_pressed`/`raw_*` ещё не добавлены миграцией (мод не
-  запускался после 2026-08-23), дамп читает их как 0/NULL — без ошибки.
+  `blade_down`/`ripper_pressed`/`raw_*`/`enemy` ещё не добавлены миграцией (мод
+  не запускался после соответствующей даты), дамп читает их как 0/NULL — без ошибки.
