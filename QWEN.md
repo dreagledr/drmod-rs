@@ -54,7 +54,7 @@ replay-types/        # Общие replay-DTO (InputUnit/PlayerState/CameraState/
 tools/
 ├── dbdump/          # Экспорт replay-кадров в CSV/Parquet + --script (JSON для HTTP API) (x64, отдельный .cargo/config.toml)
 ├── desync_analysis/ # pandas-скрипты анализа десинка Record→Playback (CSV от dbdump)
-├── script_tuning/   # Тайминги core-скрипта 117 (+ timing_tune.py: мир freeze+ticks) и скип катсцен (cutscene_skip.py: консольное меню → наш скип; order.py/order_on_event.py: заказ подфазы; subphase_now.py) (python)
+├── script_tuning/   # Тайминги core-скрипта 117 (+ timing_tune.py: мир freeze+ticks; blade_tap_tune.py: свип кадра тапа Blade Mode) и скип катсцен (cutscene_skip.py: консольное меню → наш скип; order.py/order_on_event.py: заказ подфазы; subphase_now.py) (python)
 └── disasm/          # Дизассемблирование: scan_srm.py (PE + поиск обращений к SRM), disasm.py (обёртка llvm-objdump по RVA), find_vtable.py (RTTI→vtable), find_strings.py, peek.py, mem_find_u32.py
 mods/
 └── cutscene_skip/   # Самостоятельный мод: скип in-engine катсцены (лаунчер + встроенная DLL, без imgui); свой [workspace]
