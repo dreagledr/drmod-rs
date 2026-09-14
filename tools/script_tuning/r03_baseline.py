@@ -116,6 +116,10 @@ def build(a):
     if a.ripper_after >= 0:
         cmds.append({"t": a.pair_start + a.period * (a.strikes - 1) + 4
                      + a.ripper_after, "duration": 2, "input": RIPPER})
+    if a.long_jump:
+        # Прыжок после последнего LS — на месте (только `jump`).
+        cmds.append({"t": a.long_jump, "duration": a.jump_dur,
+                     "input": {"jump": True}})
     if a.tail:
         # Маркер вдали: мод пишет кадры только пока идёт скрипт, без него лог
         # обрывается в воздухе и посадки не видно. `camera_reset` — безобидно и
@@ -188,6 +192,9 @@ def main(argv=None):
     p.add_argument("--pair-start", type=int, default=214)
     p.add_argument("--strikes", type=int, default=2,
                    help="пар: 1 — приём, 2 — приём + кансел/фоллинг")
+    p.add_argument("--long-jump", dest="long_jump", type=int, default=0,
+                   help="кадр долгого прыжка (ninja-run + вперёд + прыжок) после LS")
+    p.add_argument("--jump-dur", type=int, default=8, help="кадров прыжка")
     p.add_argument("--extras", default="",
                    help="продолжения по одному: 'кадр:sx,sy;кадр:sx' "
                         "(приём = тап на кадре + удар на +4)")
@@ -277,6 +284,22 @@ def main(argv=None):
               f"{f['pos'][2]:7.2f}) blade={f['blade']} "
               f"fed={f['fed_down_bits']:06X}/{f['fed_pressed_bits']:06X}")
     print("серия: " + " ".join(f"{an}x{n}" for an, n in series_of(frames)))
+    # Аномалии: движение при `fed_down_bits == 0` в «не наших» анимациях —
+    # кандидат на взрыв гранаты / удар врага (в полёте 94/11 и приёмах 110 есть
+    # своё движение, их исключаем).
+    prev, shown = None, 0
+    for i, f in enumerate(frames):
+        if prev is not None:
+            d = [f["pos"][j] - prev["pos"][j] for j in range(3)]
+            mag = sum(x * x for x in d) ** 0.5
+            if (not int(f.get("fed_down_bits") or 0) and mag > 0.1
+                    and f["r_anim"] not in (94, 11, 110, 5, 71, 3)):
+                print(f"  без ввода: {i:4d} anim={f['r_anim']:>4} "
+                      f"d=({d[0]:+6.2f},{d[1]:+6.2f},{d[2]:+6.2f})")
+                shown += 1
+        prev = f
+    if shown:
+        print(f"  (кадров с движением без ввода: {shown})")
     if a.ripper_after >= 0:
         at = a.pair_start + a.period * (a.strikes - 1) + 4 + a.ripper_after
         if 0 <= at < len(frames):
