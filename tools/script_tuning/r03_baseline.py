@@ -57,6 +57,13 @@ PRESETS = {
                       "508:174,-985,1,4;576:-643,-766,1,4;"
                       "644:-643,-766,1,4;712:-643,-766,1,-1",
             "tail": 900},
+    # Готовый TAS первого сегмента R-03: восемь LS подряд (канселы
+    # 364/440/508/576/644/712/786/854, задержка удара 4, у 6-го — 10).
+    "ls8": {"extras": "364:190,-1000,0,4;440:190,-1000,1,4;"
+                      "508:174,-985,1,4;576:-643,-766,1,4;"
+                      "644:-643,-766,1,4;712:423,-906,1,10;"
+                      "786:996,-87,1,4;854:242,-970,1,4",
+            "tail": 1300},
 }
 
 
@@ -121,7 +128,21 @@ def build(a):
     if a.ripper_after >= 0:
         cmds.append({"t": a.pair_start + a.period * (a.strikes - 1) + 4
                      + a.ripper_after, "duration": 2, "input": RIPPER})
-    if a.pre_run:
+    if a.ninja_jump:
+        # Разгон — ninja-run ВПЕРЁД: если начинать с земли вправо, триггерится
+        # анимация автопреодоления препятствия и перетирает прыжок. На кадре
+        # прыжка сразу перекладываем вправо (на отрыве).
+        fwd = {"ninja_run": True, "forward": True}
+        right = {"ninja_run": True, "right": True,
+                 "left_stick": [1000.0, 0.0]}
+        cmds.append({"t": a.ninja_jump - a.pre_run, "duration": a.pre_run,
+                     "input": fwd})
+        cmds.append({"t": a.ninja_jump, "duration": a.jump_dur,
+                     "input": {**right, "jump": True}})
+        if a.nj_tail:
+            cmds.append({"t": a.ninja_jump + a.jump_dur,
+                         "duration": a.nj_tail, "input": right})
+    if a.pre_run and a.long_jump:
         # Пробежать немного прямо перед прыжком (бег: ~0.15 м/кадр), затем
         # пауза `pre_gap` кадров — чтобы к прыжку разбег погас и прыжок был на месте.
         cmds.append({"t": a.long_jump - a.pre_gap - a.pre_run,
@@ -207,6 +228,11 @@ def main(argv=None):
     p.add_argument("--pair-start", type=int, default=214)
     p.add_argument("--strikes", type=int, default=2,
                    help="пар: 1 — приём, 2 — приём + кансел/фоллинг")
+    p.add_argument("--ninja-jump", dest="ninja_jump", type=int, default=0,
+                   help="кадр ninja-прыжка: разгон --pre-run ВПЕРЁД, затем jump "
+                        "с разворотом вправо")
+    p.add_argument("--nj-tail", dest="nj_tail", type=int, default=20,
+                   help="кадров держать «вправо» после отрыва")
     p.add_argument("--pre-gap", dest="pre_gap", type=int, default=0,
                    help="кадров паузы между бегом и прыжком (погасить разбег)")
     p.add_argument("--pre-run", dest="pre_run", type=int, default=0,
