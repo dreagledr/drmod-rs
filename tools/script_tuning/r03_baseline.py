@@ -50,9 +50,33 @@ def build(a):
     cmds.append({"t": a.bm_start, "duration": a.bm_end - a.bm_start,
                  "input": BLADE})
     t = a.pair_start
-    for _ in range(a.strikes):
-        cmds.append({"t": t, "duration": 2, "input": FWD_B})
-        cmds.append({"t": t + 4, "duration": a.heavy_dur, "input": FWD_H})
+    for i in range(a.strikes):
+        # Аналоговое направление: приём — два тапа стика в ОДНУ сторону, а
+        # дискретные биты дают только ±45°, поэтому направление задаём стиком
+        # (`left_stick` перекрывает стик от бита forward).
+        sx = None
+        if i == 0:
+            sx = a.aim_x
+        elif i == a.strikes - 1:
+            sx = a.fall_x
+        stick = [sx, -1000.0] if sx is not None else None
+        tap = dict(FWD_B)
+        heavy = dict(FWD_H)
+        if stick:
+            tap["left_stick"] = stick
+            heavy["left_stick"] = stick
+        dur = a.heavy_dur
+        if a.strike_right and i == 0:
+            # Дискретный поворот вправо (грубый: 0 кадров → x -16.4, ≥1 → +18.8).
+            if a.strike_right in ("both", "tap"):
+                tap["right"] = True
+            if a.strike_right in ("both", "heavy"):
+                heavy["right"] = True
+        if a.fall_right and i == a.strikes - 1:
+            heavy["right"] = True
+            dur = a.fall_dur
+        cmds.append({"t": t, "duration": 2, "input": tap})
+        cmds.append({"t": t + 4, "duration": dur, "input": heavy})
         t += a.period
     if a.ripper_after >= 0:
         cmds.append({"t": a.pair_start + a.period * (a.strikes - 1) + 4
@@ -126,13 +150,34 @@ def main(argv=None):
                    help="конец хвоста core117 (до первой пары!)")
     p.add_argument("--bm-start", type=int, default=186)
     p.add_argument("--bm-end", type=int, default=196)
-    p.add_argument("--pair-start", type=int, default=210)
+    p.add_argument("--pair-start", type=int, default=214)
     p.add_argument("--strikes", type=int, default=2,
                    help="пар: 1 — приём, 2 — приём + кансел/фоллинг")
-    p.add_argument("--period", type=int, default=56)
+    p.add_argument("--period", type=int, default=52)
     p.add_argument("--heavy-dur", type=int, default=6)
-    p.add_argument("--ripper-after", type=int, default=30,
+    p.add_argument("--ripper-after", type=int, default=26,
                    help="кадров от удара до риппера (-1 — без риппера)")
+    p.add_argument("--strike-right", dest="strike_right", default=None,
+                   choices=["both", "tap", "heavy"],
+                   help="первый приём forward+right: both/tap/heavy")
+    p.add_argument("--fall-right", dest="fall_right", action="store_true",
+                   help="последний удар (фоллинг-лайтнинг) жать forward+right+heavy")
+    p.add_argument("--fall-dur", type=int, default=6,
+                   help="длительность удержания последнего удара (право)")
+    p.add_argument("--aim-x", type=float, default=190.0,
+                   help="left_stick.x (аналоговое направление) для ОБОИХ тапов "
+                        "первого приёма; forward = y -1000")
+    p.add_argument("--fall-x", type=float, default=None,
+                   help="left_stick.x для удара фоллинг-лайтнинга "
+                        "(по умолчанию — как --aim-x)")
+    p.add_argument("--aim-start", type=int, default=None,
+                   help="кадр начала прицела (по умолчанию pair_start-4)")
+    p.add_argument("--aim-dur", type=int, default=14,
+                   help="кадров поворота камеры (прицел)")
+    p.add_argument("--aims", default=None,
+                   help="свип прицела, напр. '-600,-300,0,300,600'")
+    p.add_argument("--target", default=None,
+                   help="цель посадки для сравнения, 'x,y,z'")
     p.add_argument("--tail", type=int, default=0,
                    help="кадр маркера вдали (продлить лог до посадки)")
     p.add_argument("--seed", type=lambda s: int(s, 0), default=1)
@@ -142,12 +187,38 @@ def main(argv=None):
     p.add_argument("--timeout", type=float, default=45.0)
     p.add_argument("--rearm-wait", type=float, default=14.0)
     a = p.parse_args(argv)
+    if a.aim_start is None:
+        a.aim_start = a.pair_start - 4
+    if a.fall_x is None:
+        a.fall_x = a.aim_x
     api.setup_stdout()
     api.focus_and_settle()
     api.fixed_dt(True)
     if not api.ensure_gameplay():
         print("не в геймплее")
         return 2
+    if a.aims is not None:
+        # Свип аналогового направления: печатаем точку посадки и Δ до цели.
+        target = a.target
+        tx, ty, tz = (float(v) for v in target.split(",")) \
+            if target else (None, None, None)
+        print("направление (stick x) → посадка → смещение от цели")
+        for aim in [float(x) for x in a.aims.split(",")]:
+            a.aim_x = aim
+            a.fall_x = aim
+            frames = run_once(a)
+            if not frames:
+                print(f"  aim {aim:+.0f}: прогон не удался")
+                continue
+            last = frames[-1]
+            p = last["pos"]
+            extra = ""
+            if tx is not None:
+                extra = (f"   Δ=({p[0] - tx:+.2f},{p[1] - ty:+.2f},"
+                         f"{p[2] - tz:+.2f})")
+            print(f"  aim {aim:+.0f}: pos=({p[0]:7.2f},{p[1]:6.2f},{p[2]:7.2f}) "
+                  f"anim={last['r_anim']}{extra}")
+        return 0
     frames = run_once(a)
     if not frames:
         print("прогон не удался")

@@ -97,11 +97,15 @@
   (фронты направлений) — `docs/LIGHTNING_STRIKE.md`.
 - `r03_baseline.py` — **R-03 TAS baseline целиком**: перелёт барьера (`core117` с
   `attack=78`) → стойка в BM на барьере → lightning strike `110` → BM-кансел →
-  falling lightning `94` → риппер в полёте → посадка (~50 м от барьера). Мир
-  фиксирует сам (`/dt fixed` + `/rng freeze seed 1` + `ticks=0` + рестарт),
+  falling lightning `94` → риппер в полёте → посадка с заходом на лестницу.
+  Мир фиксирует сам (`/dt fixed` + `/rng freeze seed 1` + `ticks=0` + рестарт),
   прогон воспроизводится бит-в-бит; тайминги — опции (`--end`, `--pair-start`,
-  `--period`, `--ripper-after`), `--tail` продлевает лог до посадки. Таблица
-  кадров и критические условия — `docs/LIGHTNING_STRIKE.md` §«R-03 TAS baseline».
+  `--period`, `--ripper-after`), наведение — аналоговый стик
+  (`--aim-x`/`--fall-x`), `--tail` продлевает лог до посадки. Дефолты — лучший
+  на сейчас набор (`pair_start=214`, `period=52`, `aim_x=190`, `ripper_after=26`):
+  посадка `(−12.26, 0.29, −0.65)` при цели-лестнице `(−11.90, 1.01, −1.96)`.
+  Таблица кадров и критические условия — `docs/LIGHTNING_STRIKE.md`
+  §«R-03 TAS baseline».
 - `selftest.py` — оффлайн-проверка того, что не требует игры: допуски
   `in_zone` (зеркало `segment::in_zone`) и метрики перелёта.
 - `order.py` — **заказ смены подфазы** через `POST /order` (скип катсцены
