@@ -110,8 +110,9 @@ def build(a):
             {"left_stick": stick}
         cmds.append({"t": int(fr), "duration": 2, "input": tap_in})
         delta = int(vals[3]) if len(vals) > 3 else 4
-        cmds.append({"t": int(fr) + delta, "duration": a.heavy_dur,
-                     "input": {**FWD_H, "left_stick": stick}})
+        if delta >= 0:
+            cmds.append({"t": int(fr) + delta, "duration": a.heavy_dur,
+                         "input": {**FWD_H, "left_stick": stick}})
     if a.ripper_after >= 0:
         cmds.append({"t": a.pair_start + a.period * (a.strikes - 1) + 4
                      + a.ripper_after, "duration": 2, "input": RIPPER})
