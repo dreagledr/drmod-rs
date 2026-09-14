@@ -52,6 +52,11 @@ PRESETS = {
                "end": 240, "tail": 0},
     "stairs": {},
     "showcase": {"aim_y": 1000.0, "aim_x": 364.0, "fall_x": 364.0},
+    # Пять LS подряд с BM-канселом в конце последнего (без прыжка).
+    "ls5": {"extras": "364:190,-1000,0,4;440:190,-1000,1,4;"
+                      "508:174,-985,1,4;576:-643,-766,1,4;"
+                      "644:-643,-766,1,4;712:-643,-766,1,-1",
+            "tail": 900},
 }
 
 
@@ -116,6 +121,16 @@ def build(a):
     if a.ripper_after >= 0:
         cmds.append({"t": a.pair_start + a.period * (a.strikes - 1) + 4
                      + a.ripper_after, "duration": 2, "input": RIPPER})
+    if a.pre_run:
+        # Пробежать немного прямо перед прыжком (бег: ~0.15 м/кадр), затем
+        # пауза `pre_gap` кадров — чтобы к прыжку разбег погас и прыжок был на месте.
+        cmds.append({"t": a.long_jump - a.pre_gap - a.pre_run,
+                     "duration": a.pre_run, "input": {"forward": True}})
+    if a.walk_frames:
+        # Пройти немного прямо шагом перед прыжком (после последнего LS).
+        cmds.append({"t": a.long_jump - a.walk_frames,
+                     "duration": a.walk_frames,
+                     "input": {"forward": True, "walk": True}})
     if a.long_jump:
         # Прыжок после последнего LS — на месте (только `jump`).
         cmds.append({"t": a.long_jump, "duration": a.jump_dur,
@@ -192,6 +207,12 @@ def main(argv=None):
     p.add_argument("--pair-start", type=int, default=214)
     p.add_argument("--strikes", type=int, default=2,
                    help="пар: 1 — приём, 2 — приём + кансел/фоллинг")
+    p.add_argument("--pre-gap", dest="pre_gap", type=int, default=0,
+                   help="кадров паузы между бегом и прыжком (погасить разбег)")
+    p.add_argument("--pre-run", dest="pre_run", type=int, default=0,
+                   help="кадров бега вперёд перед прыжком (1 м ≈ 7 кадров)")
+    p.add_argument("--walk-frames", dest="walk_frames", type=int, default=0,
+                   help="кадров шага вперёд перед прыжком (пройти ~1 м)")
     p.add_argument("--long-jump", dest="long_jump", type=int, default=0,
                    help="кадр долгого прыжка (ninja-run + вперёд + прыжок) после LS")
     p.add_argument("--jump-dur", type=int, default=8, help="кадров прыжка")
