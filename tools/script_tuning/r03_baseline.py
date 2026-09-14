@@ -41,14 +41,29 @@ BLADE = {"blade": True}
 RIPPER = {"ripper": True}
 
 
+#: Готовые профили прогона (`--preset`):
+#:  * `flight`   — «просто baseline»: перелёт за барьер (`core117` с `attack=78`,
+#:                 без стойки в BM, без приёма и риппера);
+#:  * `stairs`   — базовая связка с заходом на лестницу (дефолты инструмента);
+#:  * `showcase` — r03-showcase: то же, но на барьере стик **назад** (`aim_y=+1000`)
+#:                 с наклоном ~20° вправо (`aim_x=364`) — связка уносит за барьер.
+PRESETS = {
+    "flight": {"strikes": 0, "ripper_after": -1, "bm_start": 0, "bm_end": 0,
+               "end": 240, "tail": 0},
+    "stairs": {},
+    "showcase": {"aim_y": 1000.0, "aim_x": 364.0, "fall_x": 364.0},
+}
+
+
 def build(a):
     """Команды связки (тайминги — из опций, по умолчанию проверенные)."""
     cmds = core117.build(jump=a.jump, run_frames=a.run_frames, attack=a.attack,
                          dur_attack=a.dur_attack, ripper=a.ripper,
                          release_tail=a.release_tail, ninja=True,
                          ninja_flight=False, end=a.end)["commands"]
-    cmds.append({"t": a.bm_start, "duration": a.bm_end - a.bm_start,
-                 "input": BLADE})
+    if a.bm_end > a.bm_start:
+        cmds.append({"t": a.bm_start, "duration": a.bm_end - a.bm_start,
+                     "input": BLADE})
     t = a.pair_start
     for i in range(a.strikes):
         # Аналоговое направление: приём — два тапа стика в ОДНУ сторону, а
@@ -59,7 +74,7 @@ def build(a):
             sx = a.aim_x
         elif i == a.strikes - 1:
             sx = a.fall_x
-        stick = [sx, -1000.0] if sx is not None else None
+        stick = [sx, a.aim_y] if sx is not None else None
         tap = dict(FWD_B)
         heavy = dict(FWD_H)
         if stick:
@@ -167,6 +182,8 @@ def main(argv=None):
     p.add_argument("--aim-x", type=float, default=190.0,
                    help="left_stick.x (аналоговое направление) для ОБОИХ тапов "
                         "первого приёма; forward = y -1000")
+    p.add_argument("--aim-y", type=float, default=-1000.0,
+                   help="left_stick.y направления (forward = -1000, назад = +1000)")
     p.add_argument("--fall-x", type=float, default=None,
                    help="left_stick.x для удара фоллинг-лайтнинга "
                         "(по умолчанию — как --aim-x)")
@@ -185,7 +202,11 @@ def main(argv=None):
     p.add_argument("--every", type=int, default=6)
     p.add_argument("--from", dest="frm", type=int, default=0)
     p.add_argument("--timeout", type=float, default=45.0)
+    p.add_argument("--preset", default="stairs", choices=sorted(PRESETS),
+                   help="профиль: flight (перелёт за барьер) / stairs / showcase")
     p.add_argument("--rearm-wait", type=float, default=14.0)
+    pre, _ = p.parse_known_args(argv)
+    p.set_defaults(**PRESETS[pre.preset])
     a = p.parse_args(argv)
     if a.aim_start is None:
         a.aim_start = a.pair_start - 4
