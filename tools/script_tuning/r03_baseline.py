@@ -70,10 +70,10 @@ def build(a):
         # дискретные биты дают только ±45°, поэтому направление задаём стиком
         # (`left_stick` перекрывает стик от бита forward).
         sx = None
-        if i == 0:
-            sx = a.aim_x
-        elif i == a.strikes - 1:
+        if i == a.strikes - 1:
             sx = a.fall_x
+        else:
+            sx = a.aim_x
         stick = [sx, a.aim_y] if sx is not None else None
         tap = dict(FWD_B)
         heavy = dict(FWD_H)
@@ -93,6 +93,25 @@ def build(a):
         cmds.append({"t": t, "duration": 2, "input": tap})
         cmds.append({"t": t + 4, "duration": dur, "input": heavy})
         t += a.period
+    # Продолжения (после фоллинг-лайтнинга) — по одному приёму с СОБСТВЕННЫМ
+    # таймингом и направлением: `--extras "кадр:sx,sy;кадр:sx"` (без `sy` берётся
+    # `--aim-y`). Каждый приём = пара: тап на кадре, удар на +4.
+    for spec in (a.extras.split(";") if a.extras else []):
+        if not spec.strip():
+            continue
+        fr, _, vec = spec.strip().partition(":")
+        vals = [float(v) for v in vec.split(",")]
+        stick = [vals[0], vals[1] if len(vals) > 1 else a.aim_y]
+        # Третий элемент — `blade` в тапе (BM-кансел): по умолчанию — наоборот от
+        # `--extras-no-blade`; так можно цеплять «без BM», а кансел ставить в
+        # конце предыдущего приёма.
+        blade = (vals[2] != 0 if len(vals) > 2 else not a.extras_no_blade)
+        tap_in = {**FWD_B, "left_stick": stick} if blade else \
+            {"left_stick": stick}
+        cmds.append({"t": int(fr), "duration": 2, "input": tap_in})
+        delta = int(vals[3]) if len(vals) > 3 else 4
+        cmds.append({"t": int(fr) + delta, "duration": a.heavy_dur,
+                     "input": {**FWD_H, "left_stick": stick}})
     if a.ripper_after >= 0:
         cmds.append({"t": a.pair_start + a.period * (a.strikes - 1) + 4
                      + a.ripper_after, "duration": 2, "input": RIPPER})
@@ -168,6 +187,12 @@ def main(argv=None):
     p.add_argument("--pair-start", type=int, default=214)
     p.add_argument("--strikes", type=int, default=2,
                    help="пар: 1 — приём, 2 — приём + кансел/фоллинг")
+    p.add_argument("--extras", default="",
+                   help="продолжения по одному: 'кадр:sx,sy;кадр:sx' "
+                        "(приём = тап на кадре + удар на +4)")
+    p.add_argument("--extras-no-blade", dest="extras_no_blade",
+                   action="store_true",
+                   help="продолжение без BM: тап = только forward (без blade)")
     p.add_argument("--period", type=int, default=52)
     p.add_argument("--heavy-dur", type=int, default=6)
     p.add_argument("--ripper-after", type=int, default=26,
