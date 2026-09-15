@@ -23,8 +23,7 @@ use std::time::Instant;
 use serde::{Deserialize, Serialize};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GA_ROOT, GetAncestor, GetClassNameW, GetWindowRect, IsWindow, IsZoomed, SetWindowPos,
-    SWP_NOACTIVATE, SWP_NOZORDER,
+    GetWindowRect, IsWindow, IsZoomed, SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER,
 };
 
 use crate::logger;
@@ -78,10 +77,6 @@ static KEEPER: Mutex<Keeper> = Mutex::new(Keeper::new());
 struct Keeper {
     /// Файл настроек прочитан (делаем это в render-цикле, а не в `DllMain`).
     loaded: bool,
-    /// Диагностика окна (класс/корень/rect) уже записана.
-    logged_hwnd: bool,
-    /// Последнее сырое значение `Hw::OSWindow` — чтобы не спамить, когда окна нет.
-    last_raw: usize,
     restored: bool,
     last: Option<Rect>,
     changed_at: Option<Instant>,
@@ -91,8 +86,6 @@ impl Keeper {
     const fn new() -> Self {
         Self {
             loaded: false,
-            logged_hwnd: false,
-            last_raw: usize::MAX,
             restored: false,
             last: None,
             changed_at: None,
@@ -115,28 +108,6 @@ pub(crate) fn hwnd(base_addr: usize) -> Option<HWND> {
     } else {
         None
     }
-}
-
-/// Сырое значение указателя из `Hw::OSWindow` (до проверок) — для диагностики.
-fn raw_hwnd(base_addr: usize) -> usize {
-    if base_addr == 0 {
-        return 0;
-    }
-    unsafe { *((base_addr + OS_WINDOW) as *const *mut core::ffi::c_void) as usize }
-}
-
-/// Класс окна: видно, main это окно игры, дочернее или чужое.
-fn class_name(hwnd: HWND) -> String {
-    let mut buf = [0u16; 128];
-    let len = unsafe { GetClassNameW(hwnd, &mut buf) };
-    String::from_utf16_lossy(&buf[..len.max(0) as usize])
-}
-
-/// Корень иерархии окна (`GA_ROOT`): если main-окно — не корень, значит мод
-/// смотрит на дочернее окно, а не на окно игры.
-fn root_of(hwnd: HWND) -> Option<HWND> {
-    let root = unsafe { GetAncestor(hwnd, GA_ROOT) };
-    (!root.0.is_null()).then_some(root)
 }
 
 /// Текущий внешний прямоугольник окна; `None` — окна нет или оно неразумного
@@ -215,35 +186,9 @@ pub(crate) fn service(base_addr: usize) {
     }
 
     let Some(hwnd) = hwnd(base_addr) else {
-        // Окно ещё не создано или указатель не сошёлся — молчим, но раз в
-        // кадр не спамим: пишем только когда состояние меняется (см. KEEPER).
-        let raw = raw_hwnd(base_addr);
-        let mut k = KEEPER.lock().unwrap();
-        if k.last_raw != raw {
-            k.last_raw = raw;
-            drop(k);
-            logger::log_line(&format!(
-                "window: HWND из памяти движка = 0x{raw:08X} — окна нет (IsWindow=false)"
-            ));
-        }
         return;
     };
     let current = rect_of(hwnd);
-    {
-        let mut k = KEEPER.lock().unwrap();
-        // Диагностика первого кадра с окном: сырой HWND, класс, корень и rect —
-        // чтобы сразу видеть, то ли это окно (main игры / дочернее / чужое).
-        if !k.logged_hwnd {
-            k.logged_hwnd = true;
-            let raw = raw_hwnd(base_addr);
-            logger::log_line(&format!(
-                "window: HWND=0x{:08X} (raw 0x{raw:08X}) class='{}' root=0x{:08X} rect={current:?}",
-                hwnd.0 as usize,
-                class_name(hwnd),
-                root_of(hwnd).map_or(0, |r| r.0 as usize)
-            ));
-        }
-    }
     *CURRENT.lock().unwrap() = current;
     let saved = *SAVED.lock().unwrap();
 
