@@ -292,14 +292,24 @@ def fps_cap(cap=None, fps=None, base=DEFAULT_URL):
     return http(base, "/fps", "POST", body)
 
 
-def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, reset=False,
-                base=DEFAULT_URL):
+def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, headless=None,
+                hold=False, reset=False, base=DEFAULT_URL):
     """Headless-прогон (`POST /render`): снять отрисовку, сохранив логику.
 
     Логика мода (скрипты, запись/воспроизведение, трекинг сегмента) живёт в
     `HelloHud::render`, который вызывается из хука `Present`, а главный цикл
     игры делает **одну итерацию = один тик симуляции** — поэтому отрисовку
-    можно снять, а прогон от этого ускоряется, не меняясь:
+    можно снять, а прогон от этого ускоряется, не меняясь.
+
+    Рабочий режим — `headless=True`: снимает все три выключателя **и** кап
+    кадров (`/fps` → `off`); без снятого капа прогон упирается в пацер игры и
+    выигрыша нет. По концу прогона скрипта мод возвращает рендер и прежний кап
+    сам, поэтому клиенту не нужно помнить про `reset`. `hold=True` эту
+    автоматику выключает — нужен сериям прогонов (демо с `--runs N`), где конец
+    одного прогона не конец сессии: клиент возвращает всё сам (`reset=True`).
+
+    Гранулярные `skip_overlay`/`skip_present`/`skip_draw` — по одному
+    выключателю для замеров, кап они не трогают (см. `headless_bench.py`):
 
     * `skip_overlay` — overlay мода не строится и не рисуется (окна imgui,
       3D-маркеры). ⚠️ Скрывается и окно Settings: вернуть отрисовку можно
@@ -309,19 +319,21 @@ def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, reset=Fals
     * `skip_draw` — заглушки на отрисовку геометрии игры (`DrawPrimitive*`
       устройства): игра проходит весь кадровый код, но GPU не растеризует.
 
-    Поля независимы, переданные `None` не трогаются. `reset=True` возвращает
-    обычную отрисовку. Разбор и оговорки — `docs/HEADLESS.md`.
+    Переданные `None` поля не трогаются. `reset=True` возвращает отрисовку (и
+    кап, если шёл headless-прогон). Разбор и оговорки — `docs/HEADLESS.md`.
     """
     body = {}
     if reset:
         body["reset"] = True
     else:
-        if skip_overlay is not None:
-            body["skip_overlay"] = bool(skip_overlay)
-        if skip_present is not None:
-            body["skip_present"] = bool(skip_present)
-        if skip_draw is not None:
-            body["skip_draw"] = bool(skip_draw)
+        if headless is not None:
+            body["headless"] = bool(headless)
+            if headless and hold:
+                body["hold"] = True
+        for key, val in (("skip_overlay", skip_overlay), ("skip_present", skip_present),
+                         ("skip_draw", skip_draw)):
+            if val is not None:
+                body[key] = bool(val)
     return http(base, "/render", "POST", body)
 
 

@@ -665,6 +665,11 @@ struct RenderSnapshot {
     skip_draw: bool,
     /// Заглушки отрисовки уже стоят (ставятся лениво, из render-цикла).
     draw_hooked: bool,
+    /// Идёт headless-прогон (`{"headless": true}`): скипы + снятый кап кадров,
+    /// возврат по концу прогона скрипта.
+    headless: bool,
+    /// Прогон в режиме `hold`: авто-возврата нет, вернуть должен клиент.
+    hold: bool,
 }
 
 /// `GET /state` — текущий снимок игры + статус скрипта + fps.
@@ -938,6 +943,24 @@ static FPS_CAP_MODE: AtomicU32 = AtomicU32::new(0);
 /// Кадров в секунду для режима своего лимита (1..1000).
 static FPS_CAP_VALUE: AtomicU32 = AtomicU32::new(60);
 
+/// Авто-режим headless-прогона (`POST /render {"headless": true}`): мод держит
+/// снятую отрисовку и снятый кап кадров, а по концу прогона скрипта возвращает
+/// всё сам — рендер и кап «как в игре». Отдельный путь от гранулярных `skip_*`
+/// (те для замеров по одному выключателю и кап не трогают).
+static HEADLESS_AUTO: AtomicBool = AtomicBool::new(false);
+/// `hold`: не возвращать автоматически — клиент вернёт сам (`{"reset": true}`).
+/// Нужен сериям прогонов (демо с `--runs N`), где конец одного прогона — не
+/// конец сессии.
+static HEADLESS_HOLD: AtomicBool = AtomicBool::new(false);
+/// В этом headless-прогоне скрипт уже доходил до `Running`: концом прогона
+/// считаем только финал реально стартовавшего скрипта (остановка на loading до
+/// старта прогоном не считается).
+static HEADLESS_SAW_RUN: AtomicBool = AtomicBool::new(false);
+/// Кап, который был до headless-прогона: `(режим, значение)` — возвращаем ровно
+/// его, чтобы не перетирать ручные настройки (`/fps`).
+static HEADLESS_PREV_CAP_MODE: AtomicU32 = AtomicU32::new(0);
+static HEADLESS_PREV_CAP_VALUE: AtomicU32 = AtomicU32::new(60);
+
 /// Период пацера (единицы 3·мс) для текущего режима капа; `None` — режим «как
 /// в игре», поле движка не трогаем.
 fn fps_cap_period() -> Option<u32> {
@@ -1022,6 +1045,96 @@ pub(crate) fn set_fps_cap(base_addr: usize, mode: u32, value: u32) -> u32 {
         unsafe { *((base_addr + FRAME_PACER_PERIOD) as *mut u32) = period };
     }
     period
+}
+
+/// Включает/выключает headless-прогон (`POST /render {"headless": …}`).
+///
+/// Включение: снять отрисовку (три скипа) **и** снять кап кадров — без этого
+/// снятая отрисовка не даёт скорости: прогон упирается в пацер игры. Прежний
+/// кап запоминается и возвращается при выходе (ручные `/fps` не перетираем).
+///
+/// Выключение (или конец прогона, см. `headless_service`) возвращает рендер и
+/// прежний кап — поэтому клиенту не нужно помнить про `reset`: если скрипт
+/// доиграл, игра сама снова рисует.
+pub(crate) fn set_headless(base_addr: usize, on: bool, hold: bool) {
+    if on {
+        if !HEADLESS_AUTO.swap(true, Ordering::Relaxed) {
+            HEADLESS_PREV_CAP_MODE.store(FPS_CAP_MODE.load(Ordering::Relaxed), Ordering::Relaxed);
+            HEADLESS_PREV_CAP_VALUE.store(FPS_CAP_VALUE.load(Ordering::Relaxed), Ordering::Relaxed);
+        }
+        HEADLESS_HOLD.store(hold, Ordering::Relaxed);
+        HEADLESS_SAW_RUN.store(false, Ordering::Relaxed);
+        crate::render_hooks::set_skip(Some(true), Some(true), Some(true));
+        set_fps_cap(base_addr, 1, 0);
+        logger::log_line(&format!(
+            "api: headless-прогон вкл: без отрисовки и без капа{}",
+            if hold {
+                " (hold — возврат по reset от клиента)"
+            } else {
+                " (возврат по концу прогона)"
+            }
+        ));
+    } else {
+        finish_headless(base_addr, "запрос");
+    }
+}
+
+/// Возврат из headless-прогона: рендер как был и прежний кап кадров.
+/// `why` — для лога (`конец прогона` / `reset` / `запрос`).
+pub(crate) fn finish_headless(base_addr: usize, why: &str) {
+    let was_auto = HEADLESS_AUTO.swap(false, Ordering::Relaxed);
+    HEADLESS_HOLD.store(false, Ordering::Relaxed);
+    HEADLESS_SAW_RUN.store(false, Ordering::Relaxed);
+    // Гранулярные скипы тоже гасим: headless-прогон выключает отрисовку целиком.
+    crate::render_hooks::set_skip(Some(false), Some(false), Some(false));
+    if was_auto {
+        // Кап возвращаем только если его снял headless — иначе не трогаем ручные
+        // настройки `/fps`.
+        let mode = HEADLESS_PREV_CAP_MODE.load(Ordering::Relaxed);
+        let value = HEADLESS_PREV_CAP_VALUE.load(Ordering::Relaxed);
+        set_fps_cap(base_addr, mode, value);
+        logger::log_line(&format!(
+            "api: headless-прогон выкл ({}): рендер и кап вернулись ({})",
+            why,
+            fps_cap_name()
+        ));
+    } else {
+        logger::log_line(&format!(
+            "api: headless-прогон выкл ({}): рендер вернулся (авто-режима не было)",
+            why
+        ));
+    }
+}
+
+/// Автоматика headless-прогона: пока скрипт реально шёл (`Running`), его финал
+/// (`done`/`stopped`/скрипта нет) — это конец прогона, и мод сам возвращает
+/// рендер и кап. Зовётся каждый кадр из `frame_update` (поток игры).
+/// С `hold` автоматика выключена — серией прогонов управляет клиент.
+fn headless_service(base_addr: usize, status: Option<ScriptStatus>) {
+    if !HEADLESS_AUTO.load(Ordering::Relaxed) || HEADLESS_HOLD.load(Ordering::Relaxed) {
+        return;
+    }
+    if status == Some(ScriptStatus::Running) {
+        HEADLESS_SAW_RUN.store(true, Ordering::Relaxed);
+        return;
+    }
+    let finished = HEADLESS_SAW_RUN.load(Ordering::Relaxed)
+        && matches!(
+            status,
+            None | Some(ScriptStatus::Done | ScriptStatus::Stopped)
+        );
+    if finished {
+        finish_headless(base_addr, "конец прогона");
+    }
+}
+
+/// Снимок headless-прогона для `/state` и ответа `POST /render`: `(включён,
+/// hold)`.
+pub(crate) fn headless_state() -> (bool, bool) {
+    (
+        HEADLESS_AUTO.load(Ordering::Relaxed),
+        HEADLESS_HOLD.load(Ordering::Relaxed),
+    )
 }
 
 /// Пишет выбранную дельту кадра (см. `FIXED_DT`). Только записи по готовому
@@ -1583,6 +1696,11 @@ impl ApiServer {
             None
         };
 
+        // Headless-прогон: если скрипт доиграл, мод сам возвращает рендер и кап
+        // (`POST /render {"headless": true}`) — клиенту не нужно помнить про
+        // reset, и игра не останется без отрисовки на ускоренном прогоне.
+        headless_service(base_addr, guard.script.as_ref().map(|s| s.status));
+
         // Дельта кадра из cSlowRateManager: если включён фиксированный тик, тут
         // видно, осталась ли наша запись (номинал 16.667 / 1.0) или движок
         // перезаписал её своей измеренной после нас.
@@ -1910,7 +2028,7 @@ fn route(
         ("POST", "/dt") => handle_dt(body, state),
         ("POST", "/fps") => handle_fps(body, state),
         ("POST", "/rng") => handle_rng(body),
-        ("POST", "/render") => handle_render(body),
+        ("POST", "/render") => handle_render(body, state),
         #[cfg(debug_assertions)]
         ("GET", "/watch") => (200, Response::Watch(watch_json())),
         #[cfg(debug_assertions)]
@@ -1996,34 +2114,52 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
 /// самой ручки.
 fn render_json() -> RenderSnapshot {
     let (skip_overlay, skip_present, skip_draw) = crate::render_hooks::state();
+    let (headless, hold) = headless_state();
     RenderSnapshot {
         skip_overlay,
         skip_present,
         skip_draw,
         draw_hooked: crate::render_hooks::draw_hooked(),
+        headless,
+        hold,
     }
 }
 
-/// `POST /render` — headless-режим прогонов (`docs/HEADLESS.md`): снять
-/// отрисовку, не теряя логику кадра. Логика мода (скрипты, запись/воспроизведение,
-/// трекинг сегмента) живёт в `render`, который вызывается из хука `Present`, —
-/// поэтому «headless» тут не отдельный процесс, а три независимых выключателя:
+/// `POST /render` — headless-прогон (`docs/HEADLESS.md`): снять отрисовку,
+/// не теряя логику кадра. Логика мода (скрипты, запись/воспроизведение,
+/// трекинг сегмента) живёт в `render`, который вызывается из хука `Present`, а
+/// главный цикл игры делает **одну итерацию = один тик симуляции**, поэтому
+/// «headless» тут не отдельный процесс, а выключатели отрисовки:
 ///
-/// * `skip_overlay` — overlay мода (окна и 3D-маркеры) не строится и не рисуется;
-/// * `skip_present` — настоящий `Present` не вызывается (кадр не выводится);
-/// * `skip_draw` — заглушки на `DrawPrimitive*` устройства: игра проходит весь
-///   кадровый код, но GPU не считает геометрию (ставятся лениво, из render-цикла).
+/// * `{"headless": true}` — **рабочий режим прогона**: снять все три скипа (см.
+///   ниже) **и** кап кадров (`/fps` → `off`), а по концу прогона скрипта вернуть
+///   рендер и прежний кап самому (`headless_service`). Без снятого капа
+///   отрисовка не ускоряет прогон — он упирается в пацер игры;
+/// * `{"headless": true, "hold": true}` — то же, но без авто-возврата: нужен
+///   сериям прогонов (клиент вернёт сам, `{"reset": true}`);
+/// * гранулярные `{"skip_overlay": true}`, `{"skip_present": true}`,
+///   `{"skip_draw": true}` — по одному выключателю для замеров; кап не трогают:
+///   * `skip_overlay` — overlay мода (окна и 3D-маркеры) не строится и не
+///     рисуется;
+///   * `skip_present` — настоящий `Present` не вызывается (кадр не выводится);
+///   * `skip_draw` — заглушки на `DrawPrimitive*` устройства: игра проходит
+///     весь кадровый код, но GPU не считает геометрию (ставятся лениво, из
+///     render-цикла);
+/// * `{"reset": true}` — вернуть всё сейчас (скипы и, если шёл headless-прогон,
+///   прежний кап).
 ///
-/// Тело: любые из `{"skip_overlay": true, "skip_present": true, "skip_draw": true}`
-/// (отсутствующие поля не трогаются) либо `{"reset": true}` — вернуть обычную
-/// работу. Скорость прогона мерить по `dt.frames` / `sim_ticks` в `/state`
-/// (кадров в секунду = тиков в секунду: одна итерация главного цикла = один тик).
-fn handle_render(body: &str) -> (u16, Response) {
+/// Скорость прогона мерить по `dt.frames` / `sim_ticks` в `/state` (кадров в
+/// секунду = тиков в секунду: одна итерация главного цикла = один тик).
+fn handle_render(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     #[derive(Deserialize)]
     struct Req {
         skip_overlay: Option<bool>,
         skip_present: Option<bool>,
         skip_draw: Option<bool>,
+        /// Headless-прогон: скипы + снятый кап + авто-возврат по концу прогона.
+        headless: Option<bool>,
+        /// Только с `headless`: не возвращать автоматически (клиент вернёт сам).
+        hold: Option<bool>,
         /// Вернуть обычную отрисовку (перекрывает остальные поля).
         reset: Option<bool>,
     }
@@ -2034,28 +2170,37 @@ fn handle_render(body: &str) -> (u16, Response) {
                 400,
                 Response::Error(ErrorResponse {
                     error: format!(
-                        "bad body: {e} (ожидается {{\"skip_draw\": true}} или {{\"reset\": true}})"
+                        "bad body: {e} (ожидается {{\"headless\": true}} или {{\"reset\": true}})"
                     ),
                 }),
             )
         }
     };
-    let (overlay, present, draw) = if req.reset.unwrap_or(false) {
-        (Some(false), Some(false), Some(false))
-    } else {
-        (req.skip_overlay, req.skip_present, req.skip_draw)
+    let base_addr = {
+        let guard = state.lock().unwrap();
+        guard.base_addr
     };
-    if overlay.is_none() && present.is_none() && draw.is_none() {
+    if req.reset.unwrap_or(false) {
+        finish_headless(base_addr, "reset");
+        return (200, Response::Render(render_json()));
+    }
+    if let Some(on) = req.headless {
+        set_headless(base_addr, on, req.hold.unwrap_or(false));
+        return (200, Response::Render(render_json()));
+    }
+    if req.skip_overlay.is_none() && req.skip_present.is_none() && req.skip_draw.is_none() {
         return (
             400,
             Response::Error(ErrorResponse {
-                error: "нет полей: ожидается хотя бы одно из skip_overlay/skip_present/skip_draw \
-                        или reset"
+                error: "нет полей: ожидается headless/reset или хотя бы одно из \
+                        skip_overlay/skip_present/skip_draw"
                     .into(),
             }),
         );
     }
-    crate::render_hooks::set_skip(overlay, present, draw);
+    // Гранулярные выключатели: headless-прогон при этом не трогаем — иначе
+    // ручной флаг отключил бы авто-возврат капа.
+    crate::render_hooks::set_skip(req.skip_overlay, req.skip_present, req.skip_draw);
     let (skip_overlay, skip_present, skip_draw) = crate::render_hooks::state();
     logger::log_line(&format!(
         "api: render skip: overlay={skip_overlay} present={skip_present} draw={skip_draw}"

@@ -198,30 +198,45 @@ try {
     }
 }
 
-# ── Step 11: POST /render (headless) ──
-# Трогаем только skip_present: флаг мгновенно обратим и не ставит хуки
-# отрисовки (skip_draw ставит их лениво и живьём проверяется отдельно,
-# tools/script_tuning/headless_bench.py). skip_overlay не трогаем — он скрыл бы
-# окно Settings до самого reset.
+# ── Step 11: POST /render (headless-прогон) ──
 Write-Host "`n=== Step 11: POST /render (headless) ===" -ForegroundColor Cyan
+# Боевой режим целиком: `{"headless": true}` снимает отрисовку И кап кадров, а
+# `reset` возвращает и то, и другое (прежний кап — из запомненного). Картинка
+# замирает на полсекунды — сразу возвращаем обратно.
 try {
     $before = Invoke-RestMethod -Uri "$BaseUrl/state" -Method Get -TimeoutSec 3
     Assert-True "state.render present" ($null -ne $before.render)
-    Assert-True "render baseline off" ($before.render.skip_present -eq $false)
+    Assert-True "render baseline off" ($before.render.headless -eq $false)
+    $capBefore = $before.fps_cap.cap
 
-    $r1 = Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"skip_present": true}' -ContentType "application/json" -TimeoutSec 3
-    Assert-True "render skip_present on" ($r1.skip_present -eq $true)
+    $r1 = Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"headless": true}' -ContentType "application/json" -TimeoutSec 3
+    Assert-True "headless on" ($r1.headless -eq $true)
+    Assert-True "headless снял overlay" ($r1.skip_overlay -eq $true)
+    Assert-True "headless снял present" ($r1.skip_present -eq $true)
+    Assert-True "headless снял геометрию" ($r1.skip_draw -eq $true)
     $s1 = Invoke-RestMethod -Uri "$BaseUrl/state" -Method Get -TimeoutSec 3
-    Assert-True "state reflects skip_present" ($s1.render.skip_present -eq $true)
+    Assert-True "state отражает headless" ($s1.render.headless -eq $true)
+    Assert-True "кап снят (было $capBefore)" ($s1.fps_cap.cap -eq "off")
 
-    # Флаги независимы: reset возвращает всё, включая overlay и геометрию.
+    Start-Sleep -Milliseconds 500
     $r2 = Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"reset": true}' -ContentType "application/json" -TimeoutSec 3
-    Assert-True "render reset overlay" ($r2.skip_overlay -eq $false)
-    Assert-True "render reset present" ($r2.skip_present -eq $false)
-    Assert-True "render reset draw" ($r2.skip_draw -eq $false)
+    Assert-True "reset: headless off" ($r2.headless -eq $false)
+    Assert-True "reset: overlay" ($r2.skip_overlay -eq $false)
+    Assert-True "reset: present" ($r2.skip_present -eq $false)
+    Assert-True "reset: draw" ($r2.skip_draw -eq $false)
+    $s2 = Invoke-RestMethod -Uri "$BaseUrl/state" -Method Get -TimeoutSec 3
+    Assert-True "кап вернулся ($capBefore)" ($s2.fps_cap.cap -eq $capBefore)
+
+    # Гранулярный выключатель (для замеров) идёт мимо headless-прогона: кап и
+    # авто-возврат не трогает.
+    $r3 = Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"skip_present": true}' -ContentType "application/json" -TimeoutSec 3
+    Assert-True "гранулярный skip_present" ($r3.skip_present -eq $true)
+    Assert-True "гранулярный не включил headless" ($r3.headless -eq $false)
+    Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"reset": true}' -ContentType "application/json" -TimeoutSec 3 | Out-Null
 } catch {
     Write-Host "  FAIL: /render: $_" -ForegroundColor Red
     $script:Failures++
+    try { Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"reset": true}' -ContentType "application/json" -TimeoutSec 3 | Out-Null } catch {}
 }
 try {
     Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{}' -ContentType "application/json" -TimeoutSec 3 | Out-Null
