@@ -180,6 +180,7 @@ def run_once(a, tries=3):
                               "trigger": {"ticks": a.trigger_ticks},
                               "restart": {"ups": 1}})["script_id"]
         started, t0 = False, time.monotonic()
+        headless_on = False
         while time.monotonic() - t0 < a.timeout:
             try:
                 st = api.http(path=f"/script/{sid}")
@@ -188,6 +189,21 @@ def run_once(a, tries=3):
                 continue
             if st["status"] == "running":
                 started = True
+                if not headless_on and (a.headless_run or a.skip_run_levers is not None):
+                    # Headless — только на самом прогоне: рестарт миссии и
+                    # загрузка уровня уже прошли с обычной отрисовкой. Штатный
+                    # режим — `headless` (все выключатели + снятый кап, возврат
+                    # автоматом); `--skip-run` — диагностика по одному рычагу
+                    # (плюс снятый кап, иначе ускорения не будет).
+                    if a.headless_run:
+                        api.render_skip(headless=True)
+                    else:
+                        levers = a.skip_run_levers
+                        api.render_skip(skip_overlay="overlay" in levers,
+                                        skip_present="present" in levers,
+                                        skip_draw="draw" in levers)
+                        api.fps_cap(cap="off")
+                    headless_on = True
             if st["status"] in ("done", "stopped"):
                 break
             if not started and time.monotonic() - t0 > a.rearm_wait:
@@ -198,8 +214,14 @@ def run_once(a, tries=3):
             time.sleep(1.0)
             api.ensure_gameplay()
             continue
-        return [f for f in api.logs(script_id=sid, limit=1500)
-                if f.get("script_phase") == "running"]
+        try:
+            return [f for f in api.logs(script_id=sid, limit=1500)
+                    if f.get("script_phase") == "running"]
+        finally:
+            if headless_on:
+                api.render_skip(reset=True)
+                if not a.headless_run:
+                    api.fps_cap(cap="game")
     return None
 
 
@@ -249,6 +271,14 @@ def main(argv=None):
                    action="store_true",
                    help="продолжение без BM: тап = только forward (без blade)")
     p.add_argument("--period", type=int, default=52)
+    p.add_argument("--headless-run", dest="headless_run", action="store_true",
+                   help="на время самого прогона снять отрисовку и кап "
+                        "(POST /render headless), рестарт и загрузка — с обычной "
+                        "отрисовкой; возврат сразу по концу прогона")
+    p.add_argument("--skip-run", dest="skip_run", default=None,
+                   help="диагностика: на время прогона снять выбранные "
+                        "выключатели (overlay,present,draw; слово cap — только "
+                        "снять кап), рестарт и загрузка — с обычной отрисовкой")
     p.add_argument("--heavy-dur", type=int, default=6)
     p.add_argument("--ripper-after", type=int, default=26,
                    help="кадров от удара до риппера (-1 — без риппера)")
@@ -292,6 +322,16 @@ def main(argv=None):
         a.aim_start = a.pair_start - 4
     if a.fall_x is None:
         a.fall_x = a.aim_x
+    # `--skip-run`: набор рычагов только на время прогона (для диагностики
+    # падений); `cap` — не рычаг, а «снять кап» (он снимается и так).
+    a.skip_run_levers = None
+    if a.skip_run is not None:
+        names = {s.strip() for s in a.skip_run.split(",") if s.strip()}
+        unknown = names - {"overlay", "present", "draw", "cap"}
+        if unknown:
+            print(f"неизвестные рычаги: {', '.join(sorted(unknown))}")
+            return 2
+        a.skip_run_levers = names - {"cap"}
     api.setup_stdout()
     api.focus_and_settle()
     api.fixed_dt(True)

@@ -69,7 +69,9 @@ def main(argv=None):
         ("overlay", frozenset({"overlay"})),
         ("present", frozenset({"present"})),
         ("draw", frozenset({"draw"})),
-        ("all", frozenset({"overlay", "present", "draw"})),
+        # Боевая комбинация — overlay + заглушки геометрии. `present` в неё НЕ
+        # входит: выигрыша не даёт, а вместе с `draw` роняет игру (2026-09-15).
+        ("all", frozenset({"overlay", "draw"})),
     ]
     if args.only:
         wanted = {c.strip() for c in args.only.split(",") if c.strip()}

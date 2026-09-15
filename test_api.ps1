@@ -212,7 +212,9 @@ try {
     $r1 = Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"headless": true}' -ContentType "application/json" -TimeoutSec 3
     Assert-True "headless on" ($r1.headless -eq $true)
     Assert-True "headless снял overlay" ($r1.skip_overlay -eq $true)
-    Assert-True "headless снял present" ($r1.skip_present -eq $true)
+    # Present headless НЕ снимает: выигрыша он не даёт, а вместе со skip_draw
+    # роняет игру (docs/HEADLESS.md §5).
+    Assert-True "headless не трогает present" ($r1.skip_present -eq $false)
     Assert-True "headless снял геометрию" ($r1.skip_draw -eq $true)
     $s1 = Invoke-RestMethod -Uri "$BaseUrl/state" -Method Get -TimeoutSec 3
     Assert-True "state отражает headless" ($s1.render.headless -eq $true)
