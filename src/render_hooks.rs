@@ -88,29 +88,11 @@ type DrawIndexedPrimitiveUpFn = unsafe extern "system" fn(
 static SKIP_OVERLAY: AtomicBool = AtomicBool::new(false);
 /// Хотим ли пропускать отрисовку геометрии игры (заглушки на `DrawPrimitive*`).
 static SKIP_DRAW: AtomicBool = AtomicBool::new(false);
-/// Хотим ли пропускать кадровый рендер игры целиком (`0x651080`) — вместе с
-/// CPU-частью (обход сцены, состояния), а не только с растеканием по GPU.
-static SKIP_SCENE: AtomicBool = AtomicBool::new(false);
 /// Попытка установки хуков отрисовки завершена: render-цикл по этому флагу
 /// понимает, что повторять установку не нужно.
 static DRAW_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
 /// Стоит ли хотя бы один хук отрисовки (для `GET /state`).
 static DRAW_HOOKED: AtomicBool = AtomicBool::new(false);
-/// Попытка установки хука кадрового рендера завершена.
-static SCENE_INSTALL_DONE: AtomicBool = AtomicBool::new(false);
-/// Стоит ли хук кадрового рендера (для `GET /state`).
-static SCENE_HOOKED: AtomicBool = AtomicBool::new(false);
-
-/// RVA кадрового рендера игры: зовётся ровно раз за итерацию главного цикла
-/// (между `EndScene` и пацером), возврат — «кадр отрисован» (по нулю цикл может
-/// завершиться, поэтому заглушка возвращает 1). Внутри — очистки, состояния и
-/// отправка геометрии через обёртку D3D движка (`0xB9xxxx`), то есть вся
-/// CPU-часть кадрового прохода, которую заглушки `DrawPrimitive*` не снимают.
-/// Разбор вызвавшего цикла — `docs/HEADLESS.md` §1.1.
-const FRAME_RENDER_RVA: usize = 0x651080;
-
-/// Оригинал кадрового рендера (trampoline MinHook).
-static FRAME_RENDER: OnceLock<unsafe extern "system" fn() -> i32> = OnceLock::new();
 
 /// Оригиналы хуков отрисовки (trampoline MinHook); `None` — хук не поставлен,
 /// вызов уходит в заглушку без оригинала.
@@ -127,26 +109,6 @@ pub(crate) fn skip_overlay() -> bool {
 /// Включён ли пропуск отрисовки геометрии игры (заглушки на устройстве).
 pub(crate) fn skip_draw() -> bool {
     SKIP_DRAW.load(Ordering::Relaxed)
-}
-
-/// Включён ли пропуск кадрового рендера игры целиком (`0x651080`).
-pub(crate) fn skip_scene() -> bool {
-    SKIP_SCENE.load(Ordering::Relaxed)
-}
-
-/// Запрошен ли пропуск кадрового рендера (по этому флагу render-цикл ставит хук).
-pub(crate) fn scene_wanted() -> bool {
-    SKIP_SCENE.load(Ordering::Relaxed)
-}
-
-/// Завершена ли попытка установки хука кадрового рендера.
-pub(crate) fn scene_install_done() -> bool {
-    SCENE_INSTALL_DONE.load(Ordering::Relaxed)
-}
-
-/// Стоит ли хук кадрового рендера (для `GET /state`).
-pub(crate) fn scene_hooked() -> bool {
-    SCENE_HOOKED.load(Ordering::Relaxed)
 }
 
 /// Запрошен ли пропуск отрисовки геометрии (по этому флагу render-цикл ставит
@@ -172,25 +134,15 @@ pub(crate) fn skip_present() -> bool {
     hudhook::skip_present()
 }
 
-/// Снимок выключателей: `(overlay, present, draw, scene)` — «пропускать отрисовку».
-pub(crate) fn state() -> (bool, bool, bool, bool) {
-    (
-        skip_overlay(),
-        skip_present(),
-        skip_draw(),
-        skip_scene(),
-    )
+/// Снимок выключателей: `(overlay, present, draw)` — «пропускать отрисовку».
+pub(crate) fn state() -> (bool, bool, bool) {
+    (skip_overlay(), skip_present(), skip_draw())
 }
 
 /// Общий сеттер для `POST /render` и меню Settings: `None` — не трогать
 /// выключатель. Пишет ровно тот же runtime-стейт, что и HTTP-ручка, — источник
 /// истины один.
-pub(crate) fn set_skip(
-    overlay: Option<bool>,
-    present: Option<bool>,
-    draw: Option<bool>,
-    scene: Option<bool>,
-) {
+pub(crate) fn set_skip(overlay: Option<bool>, present: Option<bool>, draw: Option<bool>) {
     if let Some(v) = overlay {
         SKIP_OVERLAY.store(v, Ordering::SeqCst);
         // Геометрию imgui тоже не отправляем: даже если UI почему-то собран,
@@ -202,9 +154,6 @@ pub(crate) fn set_skip(
     }
     if let Some(v) = draw {
         SKIP_DRAW.store(v, Ordering::SeqCst);
-    }
-    if let Some(v) = scene {
-        SKIP_SCENE.store(v, Ordering::SeqCst);
     }
 }
 
@@ -284,68 +233,6 @@ impl DrawHooks {
             hooks.len()
         ));
         Self { hooks }
-    }
-}
-
-/// Хук кадрового рендера игры (`0x651080`) — экспериментальный выключатель
-/// `skip_scene`. Живёт в `HelloHud` как владелец (как `DrawHooks`).
-pub(crate) struct SceneHook {
-    #[allow(dead_code)] // keep-alive: хук живёт до выгрузки DLL
-    hook: Option<MhHook>,
-}
-
-impl SceneHook {
-    /// Ставит хук на кадровый рендер игры.
-    ///
-    /// Зовётся **только из render-цикла** (поток игры) — как и `DrawHooks::install`:
-    /// из HTTP-потока патчить пролог исполняемой функции нельзя.
-    ///
-    /// ⚠️ Хук уносит **весь** кадровый проход движка (не только GPU): обход сцены,
-    /// состояния, очередь кадра. Это агрессивнее заглушек `DrawPrimitive*` и по
-    /// сайд-эффектам ближе к связке `draw`+`present`, поэтому отдельный флаг.
-    pub(crate) fn install(base_addr: usize) -> Self {
-        if base_addr == 0 {
-            return Self { hook: None };
-        }
-        let target = (base_addr + FRAME_RENDER_RVA) as *mut c_void;
-        let hook = match unsafe { MhHook::new(target, frame_render_detour as *mut c_void) } {
-            Ok(h) => h,
-            Err(e) => {
-                logger::log_line(&format!("render: кадровый рендер 0x{FRAME_RENDER_RVA:X}: \
-                                           MH_CreateHook FAIL {e:?}"));
-                SCENE_INSTALL_DONE.store(true, Ordering::Relaxed);
-                return Self { hook: None };
-            }
-        };
-        if let Err(e) = unsafe { hook.queue_enable() } {
-            logger::log_line(&format!("render: кадровый рендер: queue_enable FAIL {e:?}"));
-            SCENE_INSTALL_DONE.store(true, Ordering::Relaxed);
-            return Self { hook: None };
-        }
-        let _ = unsafe { MH_ApplyQueued() };
-        let orig: unsafe extern "system" fn() -> i32 = unsafe { std::mem::transmute(hook.trampoline()) };
-        let _ = FRAME_RENDER.set(orig);
-        SCENE_HOOKED.store(true, Ordering::Relaxed);
-        SCENE_INSTALL_DONE.store(true, Ordering::Relaxed);
-        logger::log_line(&format!(
-            "render: кадровый рендер игры → заглушка (base+0x{FRAME_RENDER_RVA:X} = 0x{:08X}, \
-             trampoline 0x{:08X}) — снятие CPU-части кадрового прохода",
-            base_addr + FRAME_RENDER_RVA,
-            hook.trampoline() as usize
-        ));
-        Self { hook: Some(hook) }
-    }
-}
-
-/// Заглушка кадрового рендера: `1` = «кадр отрисован» (нулевой возврат заставил
-/// бы главный цикл завершиться).
-unsafe extern "system" fn frame_render_detour() -> i32 {
-    if skip_scene() {
-        return 1;
-    }
-    match FRAME_RENDER.get() {
-        Some(&orig) => unsafe { orig() },
-        None => 1,
     }
 }
 
@@ -527,14 +414,13 @@ mod tests {
     #[test]
     fn skip_flags_round_trip() {
         let before = state();
-        set_skip(Some(true), Some(true), None, Some(true));
-        assert_eq!(state(), (true, true, before.2, true));
-        set_skip(None, None, Some(true), Some(false));
+        set_skip(Some(true), Some(true), None);
+        assert_eq!(state(), (true, true, before.2));
+        set_skip(None, None, Some(true));
         assert!(skip_draw() && draw_wanted());
-        assert!(!skip_scene() && !scene_wanted());
-        set_skip(Some(false), Some(false), Some(false), Some(false));
-        assert_eq!(state(), (false, false, false, false));
-        set_skip(Some(before.0), Some(before.1), Some(before.2), Some(before.3));
+        set_skip(Some(false), Some(false), Some(false));
+        assert_eq!(state(), (false, false, false));
+        set_skip(Some(before.0), Some(before.1), Some(before.2));
     }
 
     /// Без базы модуля адрес устройства не читаем вообще: `None` (а не

@@ -331,19 +331,15 @@ fn render_tas_controls(ui: &Ui, base_addr: usize) {
     // Headless-режим (`POST /render`): снять отрисовку, сохранив логику кадра
     // (скрипты, трекинг, запись/воспроизведение). При снятом overlay окно
     // Settings тоже скрывается — вернуть можно только извне, см. подсказку ниже.
-    let (skip_overlay, skip_present, skip_draw, skip_scene) = render_hooks::state();
+    let (skip_overlay, skip_present, skip_draw) = render_hooks::state();
     let mut overlay = skip_overlay;
     let mut present = skip_present;
     let mut draw = skip_draw;
-    let mut scene = skip_scene;
     ui.checkbox("Headless: без overlay", &mut overlay);
     ui.checkbox("Headless: без Present", &mut present);
     ui.checkbox("Headless: без геометрии игры", &mut draw);
-    ui.checkbox("Headless: без кадрового рендера сцены", &mut scene);
-    if overlay != skip_overlay || present != skip_present || draw != skip_draw
-        || scene != skip_scene
-    {
-        render_hooks::set_skip(Some(overlay), Some(present), Some(draw), Some(scene));
+    if overlay != skip_overlay || present != skip_present || draw != skip_draw {
+        render_hooks::set_skip(Some(overlay), Some(present), Some(draw));
     }
     if overlay {
         ui.text_colored(

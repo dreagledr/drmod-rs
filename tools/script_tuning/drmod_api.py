@@ -292,8 +292,8 @@ def fps_cap(cap=None, fps=None, base=DEFAULT_URL):
     return http(base, "/fps", "POST", body)
 
 
-def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, skip_scene=None,
-                headless=None, hold=False, reset=False, base=DEFAULT_URL):
+def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, headless=None,
+                hold=False, reset=False, base=DEFAULT_URL):
     """Headless-прогон (`POST /render`): снять отрисовку, сохранив логику.
 
     Логика мода (скрипты, запись/воспроизведение, трекинг сегмента) живёт в
@@ -308,7 +308,7 @@ def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, skip_scene
     автоматику выключает — нужен сериям прогонов (демо с `--runs N`), где конец
     одного прогона не конец сессии: клиент возвращает всё сам (`reset=True`).
 
-    Гранулярные `skip_overlay`/`skip_present`/`skip_draw`/`skip_scene` — по одному
+    Гранулярные `skip_overlay`/`skip_present`/`skip_draw` — по одному
     выключателю для замеров, кап они не трогают (см. `headless_bench.py`):
 
     * `skip_overlay` — overlay мода не строится и не рисуется (окна imgui,
@@ -317,10 +317,7 @@ def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, skip_scene
     * `skip_present` — настоящий `Present` не вызывается (окно замирает на
       последнем кадре);
     * `skip_draw` — заглушки на отрисовку геометрии игры (`DrawPrimitive*`
-      устройства): игра проходит весь кадровый код, но GPU не растеризует;
-    * `skip_scene` — ⚠️ эксперимент: не вызывается кадровый рендер игры
-      (`0x651080`) вовсе, то есть снимается и CPU-проход сцены (обход,
-      состояния, очередь кадра).
+      устройства): игра проходит весь кадровый код, но GPU не растеризует.
 
     Переданные `None` поля не трогаются. `reset=True` возвращает отрисовку (и
     кап, если шёл headless-прогон). Разбор и оговорки — `docs/HEADLESS.md`.
@@ -334,7 +331,7 @@ def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, skip_scene
             if headless and hold:
                 body["hold"] = True
         for key, val in (("skip_overlay", skip_overlay), ("skip_present", skip_present),
-                         ("skip_draw", skip_draw), ("skip_scene", skip_scene)):
+                         ("skip_draw", skip_draw)):
             if val is not None:
                 body[key] = bool(val)
     return http(base, "/render", "POST", body)
