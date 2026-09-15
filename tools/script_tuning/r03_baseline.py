@@ -201,7 +201,8 @@ def run_once(a, tries=3):
                         levers = a.skip_run_levers
                         api.render_skip(skip_overlay="overlay" in levers,
                                         skip_present="present" in levers,
-                                        skip_draw="draw" in levers)
+                                        skip_draw="draw" in levers,
+                                        skip_scene="scene" in levers)
                         api.fps_cap(cap="off")
                     headless_on = True
             if st["status"] in ("done", "stopped"):
@@ -277,8 +278,9 @@ def main(argv=None):
                         "отрисовкой; возврат сразу по концу прогона")
     p.add_argument("--skip-run", dest="skip_run", default=None,
                    help="диагностика: на время прогона снять выбранные "
-                        "выключатели (overlay,present,draw; слово cap — только "
-                        "снять кап), рестарт и загрузка — с обычной отрисовкой")
+                        "выключатели (overlay,present,draw,scene; слово cap — "
+                        "только снять кап), рестарт и загрузка — с обычной "
+                        "отрисовкой")
     p.add_argument("--heavy-dur", type=int, default=6)
     p.add_argument("--ripper-after", type=int, default=26,
                    help="кадров от удара до риппера (-1 — без риппера)")
@@ -327,7 +329,7 @@ def main(argv=None):
     a.skip_run_levers = None
     if a.skip_run is not None:
         names = {s.strip() for s in a.skip_run.split(",") if s.strip()}
-        unknown = names - {"overlay", "present", "draw", "cap"}
+        unknown = names - {"overlay", "present", "draw", "scene", "cap"}
         if unknown:
             print(f"неизвестные рычаги: {', '.join(sorted(unknown))}")
             return 2

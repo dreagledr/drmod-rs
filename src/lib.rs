@@ -123,6 +123,10 @@ struct HelloHud {
     // ставятся лениво, из render-цикла, и живут здесь как владелец хуков.
     #[allow(dead_code)] // keep-alive: поле не читается, хуки живут до выгрузки DLL
     draw_hooks: Option<render_hooks::DrawHooks>,
+    // Хук кадрового рендера игры (`skip_scene`, эксперимент) — тот же принцип:
+    // ставится лениво из render-цикла и живёт здесь как владелец.
+    #[allow(dead_code)] // keep-alive
+    scene_hook: Option<render_hooks::SceneHook>,
     // Состояние Record/Replay + ручной инжекции ввода (debug) — в tas::replay.
     #[cfg(debug_assertions)]
     pub(crate) replay: replay::ReplayState,
@@ -300,6 +304,7 @@ impl HelloHud {
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
             input_hooks,
             draw_hooks: None,
+            scene_hook: None,
             #[cfg(debug_assertions)]
             replay: replay::ReplayState::default(),
             #[cfg(debug_assertions)]
@@ -775,6 +780,12 @@ impl ImguiRenderLoop for HelloHud {
         // сейчас; здесь патчим вне момента исполнения патчимого кода.
         if render_hooks::draw_wanted() && !render_hooks::install_done() {
             self.draw_hooks = Some(render_hooks::DrawHooks::install(self.base_addr));
+        }
+
+        // Кадровый рендер игры (`skip_scene`, эксперимент): тот же ленивый
+        // принцип — хук ставится из render-цикла при первом включении.
+        if render_hooks::scene_wanted() && !render_hooks::scene_install_done() {
+            self.scene_hook = Some(render_hooks::SceneHook::install(self.base_addr));
         }
 
         // Сначала собираем состояние игры: read_game_state обновляет кэш игрока

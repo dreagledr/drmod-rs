@@ -665,6 +665,11 @@ struct RenderSnapshot {
     skip_draw: bool,
     /// Заглушки отрисовки уже стоят (ставятся лениво, из render-цикла).
     draw_hooked: bool,
+    /// Кадровый рендер игры (`0x651080`) не вызывается: снят и CPU-проход сцены,
+    /// не только растекание по GPU. Экспериментальный выключатель.
+    skip_scene: bool,
+    /// Хук кадрового рендера уже стоит (ставится лениво, из render-цикла).
+    scene_hooked: bool,
     /// Идёт headless-прогон (`{"headless": true}`): скипы + снятый кап кадров,
     /// возврат по концу прогона скрипта.
     headless: bool,
@@ -1070,8 +1075,9 @@ pub(crate) fn set_headless(base_addr: usize, on: bool, hold: bool) {
         }
         HEADLESS_HOLD.store(hold, Ordering::Relaxed);
         HEADLESS_SAW_RUN.store(false, Ordering::Relaxed);
-        // overlay + заглушки геометрии; Present не трогаем (см. выше).
-        crate::render_hooks::set_skip(Some(true), Some(false), Some(true));
+        // overlay + заглушки геометрии; Present не трогаем (см. выше), кадровый
+        // рендер сцены тоже (эксперимент, включается отдельным флагом).
+        crate::render_hooks::set_skip(Some(true), Some(false), Some(true), None);
         set_fps_cap(base_addr, 1, 0);
         logger::log_line(&format!(
             "api: headless-прогон вкл: без overlay, без геометрии игры и без капа{}",
@@ -1093,7 +1099,7 @@ pub(crate) fn finish_headless(base_addr: usize, why: &str) {
     HEADLESS_HOLD.store(false, Ordering::Relaxed);
     HEADLESS_SAW_RUN.store(false, Ordering::Relaxed);
     // Гранулярные скипы тоже гасим: headless-прогон выключает отрисовку целиком.
-    crate::render_hooks::set_skip(Some(false), Some(false), Some(false));
+    crate::render_hooks::set_skip(Some(false), Some(false), Some(false), Some(false));
     if was_auto {
         // Кап возвращаем только если его снял headless — иначе не трогаем ручные
         // настройки `/fps`.
@@ -2120,13 +2126,15 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
 /// Снимок выключателей отрисовки (`POST /render`) — общий для `/state` и ответа
 /// самой ручки.
 fn render_json() -> RenderSnapshot {
-    let (skip_overlay, skip_present, skip_draw) = crate::render_hooks::state();
+    let (skip_overlay, skip_present, skip_draw, skip_scene) = crate::render_hooks::state();
     let (headless, hold) = headless_state();
     RenderSnapshot {
         skip_overlay,
         skip_present,
         skip_draw,
         draw_hooked: crate::render_hooks::draw_hooked(),
+        skip_scene,
+        scene_hooked: crate::render_hooks::scene_hooked(),
         headless,
         hold,
     }
@@ -2157,6 +2165,12 @@ fn render_json() -> RenderSnapshot {
 ///   * `skip_draw` — заглушки на `DrawPrimitive*` устройства: игра проходит
 ///     весь кадровый код, но GPU не считает геометрию (ставятся лениво, из
 ///     render-цикла);
+///   * `skip_scene` — ⚠️ **экспериментальный**: не вызывается кадровый рендер
+///     игры (`0x651080`) вовсе — снимается и CPU-проход сцены (обход, состояния,
+///     очередь кадра), а не только растекание по GPU. Заглушка возвращает `1`
+///     («кадр отрисован»), потому что по нулю главный цикл завершается. Как и
+///     `skip_present`, уносит сайд-эффекты кадрового прохода — проверять по
+///     одному рычагу (`--skip-run scene`);
 /// * `{"reset": true}` — вернуть всё сейчас (скипы и, если шёл headless-прогон,
 ///   прежний кап).
 ///
@@ -2168,6 +2182,9 @@ fn handle_render(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response)
         skip_overlay: Option<bool>,
         skip_present: Option<bool>,
         skip_draw: Option<bool>,
+        /// Кадровый рендер игры целиком (`0x651080`) — экспериментально:
+        /// снимает и CPU-проход сцены, но и его сайд-эффекты.
+        skip_scene: Option<bool>,
         /// Headless-прогон: скипы + снятый кап + авто-возврат по концу прогона.
         headless: Option<bool>,
         /// Только с `headless`: не возвращать автоматически (клиент вернёт сам).
@@ -2200,22 +2217,32 @@ fn handle_render(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response)
         set_headless(base_addr, on, req.hold.unwrap_or(false));
         return (200, Response::Render(render_json()));
     }
-    if req.skip_overlay.is_none() && req.skip_present.is_none() && req.skip_draw.is_none() {
+    if req.skip_overlay.is_none()
+        && req.skip_present.is_none()
+        && req.skip_draw.is_none()
+        && req.skip_scene.is_none()
+    {
         return (
             400,
             Response::Error(ErrorResponse {
                 error: "нет полей: ожидается headless/reset или хотя бы одно из \
-                        skip_overlay/skip_present/skip_draw"
+                        skip_overlay/skip_present/skip_draw/skip_scene"
                     .into(),
             }),
         );
     }
     // Гранулярные выключатели: headless-прогон при этом не трогаем — иначе
     // ручной флаг отключил бы авто-возврат капа.
-    crate::render_hooks::set_skip(req.skip_overlay, req.skip_present, req.skip_draw);
-    let (skip_overlay, skip_present, skip_draw) = crate::render_hooks::state();
+    crate::render_hooks::set_skip(
+        req.skip_overlay,
+        req.skip_present,
+        req.skip_draw,
+        req.skip_scene,
+    );
+    let (skip_overlay, skip_present, skip_draw, skip_scene) = crate::render_hooks::state();
     logger::log_line(&format!(
-        "api: render skip: overlay={skip_overlay} present={skip_present} draw={skip_draw}"
+        "api: render skip: overlay={skip_overlay} present={skip_present} \
+         draw={skip_draw} scene={skip_scene}"
     ));
     (200, Response::Render(render_json()))
 }
