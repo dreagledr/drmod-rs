@@ -198,8 +198,46 @@ try {
     }
 }
 
-# ── Step 11: load test (20 параллельных /state) ──
-Write-Host "`n=== Step 11: load test (20 parallel /state) ===" -ForegroundColor Cyan
+# ── Step 11: POST /render (headless) ──
+# Трогаем только skip_present: флаг мгновенно обратим и не ставит хуки
+# отрисовки (skip_draw ставит их лениво и живьём проверяется отдельно,
+# tools/script_tuning/headless_bench.py). skip_overlay не трогаем — он скрыл бы
+# окно Settings до самого reset.
+Write-Host "`n=== Step 11: POST /render (headless) ===" -ForegroundColor Cyan
+try {
+    $before = Invoke-RestMethod -Uri "$BaseUrl/state" -Method Get -TimeoutSec 3
+    Assert-True "state.render present" ($null -ne $before.render)
+    Assert-True "render baseline off" ($before.render.skip_present -eq $false)
+
+    $r1 = Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"skip_present": true}' -ContentType "application/json" -TimeoutSec 3
+    Assert-True "render skip_present on" ($r1.skip_present -eq $true)
+    $s1 = Invoke-RestMethod -Uri "$BaseUrl/state" -Method Get -TimeoutSec 3
+    Assert-True "state reflects skip_present" ($s1.render.skip_present -eq $true)
+
+    # Флаги независимы: reset возвращает всё, включая overlay и геометрию.
+    $r2 = Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"reset": true}' -ContentType "application/json" -TimeoutSec 3
+    Assert-True "render reset overlay" ($r2.skip_overlay -eq $false)
+    Assert-True "render reset present" ($r2.skip_present -eq $false)
+    Assert-True "render reset draw" ($r2.skip_draw -eq $false)
+} catch {
+    Write-Host "  FAIL: /render: $_" -ForegroundColor Red
+    $script:Failures++
+}
+try {
+    Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{}' -ContentType "application/json" -TimeoutSec 3 | Out-Null
+    Write-Host "  FAIL: empty /render body should be 400" -ForegroundColor Red
+    $script:Failures++
+} catch {
+    if ($_.Exception.Response.StatusCode.value__ -eq 400) {
+        Write-Host "  PASS: empty /render body -> 400" -ForegroundColor Green
+    } else {
+        Write-Host "  FAIL: empty /render body: $_" -ForegroundColor Red
+        $script:Failures++
+    }
+}
+
+# ── Step 12: load test (20 параллельных /state) ──
+Write-Host "`n=== Step 12: load test (20 parallel /state) ===" -ForegroundColor Cyan
 try {
     Add-Type -AssemblyName System.Net.Http
     $client = [System.Net.Http.HttpClient]::new()
@@ -217,9 +255,9 @@ try {
     $script:Failures++
 }
 
-# ── Step 12: POST /eject (только с -Eject) ──
+# ── Step 13: POST /eject (только с -Eject) ──
 if ($Eject) {
-    Write-Host "`n=== Step 12: POST /eject ===" -ForegroundColor Cyan
+    Write-Host "`n=== Step 13: POST /eject ===" -ForegroundColor Cyan
     try {
         $ej = Invoke-RestMethod -Uri "$BaseUrl/eject" -Method Post -TimeoutSec 3
         Assert-True "ejecting response" ($ej.ejecting -eq $true)

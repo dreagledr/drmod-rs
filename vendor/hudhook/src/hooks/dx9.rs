@@ -103,8 +103,15 @@ unsafe extern "system" fn dx9_present_impl(
         error!("Render error: {e:?}");
     }
 
-    trace!("Call IDirect3DDevice9::Present trampoline");
-    let result = dx9_present(device, psourcerect, pdestrect, hdestwindowoverride, pdirtyregion);
+    // Headless-режим: кадр не выводим (окно сохраняет последнее изображение).
+    // Игра результат `Present` не разбирает (кроме кода D3DERR_DEVICELOST),
+    // поэтому возвращаем D3D_OK, не вызывая оригинал.
+    let result = if crate::skip_present() {
+        HRESULT(0)
+    } else {
+        trace!("Call IDirect3DDevice9::Present trampoline");
+        dx9_present(device, psourcerect, pdestrect, hdestwindowoverride, pdirtyregion)
+    };
     if EJECT_REQUESTED.load(Ordering::SeqCst) {
         perform_eject();
     }

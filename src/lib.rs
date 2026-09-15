@@ -10,6 +10,7 @@ mod game;
 mod logger;
 mod net;
 mod overlay;
+mod render_hooks;
 mod segment;
 mod settings;
 mod skeleton;
@@ -118,6 +119,10 @@ struct HelloHud {
     // Хуки ввода (MinHook) + адреса сырого ввода — живут в tas::hooks.
     #[allow(dead_code)] // keep-alive: поле не читается, но Drop снимает хуки
     input_hooks: tas::hooks::InputHooks,
+    // Заглушки отрисовки геометрии игры (headless-режим, `POST /render`) —
+    // ставятся лениво, из render-цикла, и живут здесь как владелец хуков.
+    #[allow(dead_code)] // keep-alive: поле не читается, хуки живут до выгрузки DLL
+    draw_hooks: Option<render_hooks::DrawHooks>,
     // Состояние Record/Replay + ручной инжекции ввода (debug) — в tas::replay.
     #[cfg(debug_assertions)]
     pub(crate) replay: replay::ReplayState,
@@ -294,6 +299,7 @@ impl HelloHud {
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
             input_hooks,
+            draw_hooks: None,
             #[cfg(debug_assertions)]
             replay: replay::ReplayState::default(),
             #[cfg(debug_assertions)]
@@ -500,6 +506,104 @@ impl HelloHud {
         state
     }
 
+    /// Отрисовка overlay мода: 3D-маркеры, призрак лучшего сегмента, метки
+    /// чужих игроков и окна imgui. Вынесена отдельным методом, чтобы
+    /// headless-режим (`POST /render`) выключал её одной ветвью в `render`:
+    /// отрисовка не подменяет логику кадра и не обязана идти каждый кадр.
+    ///
+    /// `ui_state` читает только окно диагностики (debug-сборка).
+    fn draw_overlay(
+        &mut self,
+        ui: &Ui,
+        #[allow(unused_variables)] ui_state: &ui::UiState,
+    ) {
+        // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ (debug) ---
+        #[cfg(debug_assertions)]
+        if let (Some((sx, sy, sz)), Some(vp), Some(cam_pos)) =
+            (self.saved_position, self.camera.view_proj(), self.camera.pos())
+        {
+            overlay::draw_world_pos(
+                ui,
+                (sx, sy, sz),
+                &vp,
+                (cam_pos[0], cam_pos[1], cam_pos[2]),
+                self.viewport,
+                0xFF_00_FF_00,
+                "Saved",
+            );
+        }
+
+        // --- ОТРИСОВКА ПРИЗРАКА ЛУЧШЕГО СЕГМЕНТА ---
+        if self.settings.show_best_ghost
+            && self.active_segment.is_some()
+            && !self.ghost_positions.is_empty()
+            && !self.ghost_label.is_empty()
+            && let (Some(vp), Some(cam_pos), Some(seg)) = (
+                self.camera.view_proj(),
+                self.camera.pos(),
+                self.active_segment.as_ref(),
+            )
+        {
+            let current_ms = seg.start_instant.elapsed().as_millis() as i64;
+            let idx = self
+                .ghost_positions
+                .partition_point(|&(_, dur)| dur <= current_ms);
+            if idx > 0 {
+                let (gp, _) = self.ghost_positions[idx - 1];
+                overlay::draw_world_pos(
+                    ui,
+                    (gp.x, gp.y, gp.z),
+                    &vp,
+                    (cam_pos[0], cam_pos[1], cam_pos[2]),
+                    self.viewport,
+                    0xFF0000FF,
+                    &self.ghost_label,
+                );
+            }
+        }
+
+        // --- ОТРИСОВКА ЧУЖИХ ИГРОКОВ (2D маркеры) ---
+        if let (Some(nc), Some(vp), Some(cam_pos), Some(seg)) = (
+            &self.net_client,
+            self.camera.view_proj(),
+            self.camera.pos(),
+            self.active_segment.as_ref(),
+        ) {
+            for rp in &nc.remote_players {
+                if rp.mission_id != seg.mission_id {
+                    continue;
+                }
+                if rp.last_update.elapsed() > std::time::Duration::from_secs(5) {
+                    continue;
+                }
+                let label = if rp.is_mock {
+                    format!("{} [mock]", rp.name)
+                } else {
+                    format!("{} ({}HP)", rp.name, rp.hp)
+                };
+                overlay::draw_world_pos(
+                    ui,
+                    (rp.pos.x, rp.pos.y, rp.pos.z),
+                    &vp,
+                    (cam_pos[0], cam_pos[1], cam_pos[2]),
+                    self.viewport,
+                    0xFF8080FF,
+                    &label,
+                );
+            }
+        }
+
+        #[cfg(debug_assertions)]
+        ui::render_main_window(ui, self, ui_state);
+
+        #[cfg(debug_assertions)]
+        ui::render_actions_window(ui);
+
+        ui::render_multiplayer_window(ui, self);
+
+        ui::render_settings_window(ui, self);
+    }
+
     /// Выгрузка DLL: отключение сети, остановка HTTP-потока (снятие override
     /// ввода), затем флаг eject для hudhook (обрабатывается в render-цикле
     /// после Present). Единая точка для кнопки «Выход» и `POST /eject`.
@@ -531,6 +635,13 @@ impl ImguiRenderLoop for HelloHud {
 
     fn render_3d(&mut self, device: &IDirect3DDevice9) {
         self.d3d_frame_count = self.d3d_frame_count.wrapping_add(1);
+
+        // Headless (`POST /render {"skip_overlay": true}`): 3D-маркеры мода
+        // (призрак, сохранённая позиция, чужие игроки) не рисуем. Счётчик кадров
+        // выше уже инкрементирован — на нём висит диагностика.
+        if render_hooks::skip_overlay() {
+            return;
+        }
 
         // Read D3D viewport — единственный надёжный источник размера области рендера
         {
@@ -657,6 +768,14 @@ impl ImguiRenderLoop for HelloHud {
         // того, как движок выставил период пацера, и до его ожидания — запись
         // успевает всегда. В режиме «как в игре» вызов ничего не делает.
         api::apply_fps_cap(self.base_addr);
+
+        // Headless (`POST /render {"skip_draw": true}`): заглушки на отрисовку
+        // геометрии игры ставим здесь — в потоке игры. Из HTTP-потока MinHook
+        // перезаписывал бы пролог функции, которая может исполняться прямо
+        // сейчас; здесь патчим вне момента исполнения патчимого кода.
+        if render_hooks::draw_wanted() && !render_hooks::install_done() {
+            self.draw_hooks = Some(render_hooks::DrawHooks::install(self.base_addr));
+        }
 
         // Сначала собираем состояние игры: read_game_state обновляет кэш игрока
         // (в loading игра обнуляет static_ptr → кэш = null), иначе диагностика
@@ -901,91 +1020,12 @@ impl ImguiRenderLoop for HelloHud {
             }
         }
 
-        // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ (debug) ---
-        #[cfg(debug_assertions)]
-        if let (Some((sx, sy, sz)), Some(vp), Some(cam_pos)) =
-            (self.saved_position, self.camera.view_proj(), self.camera.pos())
-        {
-            overlay::draw_world_pos(
-                ui,
-                (sx, sy, sz),
-                &vp,
-                (cam_pos[0], cam_pos[1], cam_pos[2]),
-                self.viewport,
-                0xFF_00_FF_00,
-                "Saved",
-            );
+        // --- Overlay мода — отдельной веткой: в headless-режиме (`POST
+        // /render`) отрисовка выключается целиком, вся логика кадра выше уже
+        // отработала (её отрисовка не заменяет). ---
+        if !render_hooks::skip_overlay() {
+            self.draw_overlay(ui, &ui_state);
         }
-
-        // --- ОТРИСОВКА ПРИЗРАКА ЛУЧШЕГО СЕГМЕНТА ---
-        if self.settings.show_best_ghost
-            && self.active_segment.is_some()
-            && !self.ghost_positions.is_empty()
-            && !self.ghost_label.is_empty()
-            && let (Some(vp), Some(cam_pos), Some(seg)) = (
-                self.camera.view_proj(),
-                self.camera.pos(),
-                self.active_segment.as_ref(),
-            )
-        {
-            let current_ms = seg.start_instant.elapsed().as_millis() as i64;
-            let idx = self
-                .ghost_positions
-                .partition_point(|&(_, dur)| dur <= current_ms);
-            if idx > 0 {
-                let (gp, _) = self.ghost_positions[idx - 1];
-                overlay::draw_world_pos(
-                    ui,
-                    (gp.x, gp.y, gp.z),
-                    &vp,
-                    (cam_pos[0], cam_pos[1], cam_pos[2]),
-                    self.viewport,
-                    0xFF0000FF,
-                    &self.ghost_label,
-                );
-            }
-        }
-
-        // --- ОТРИСОВКА ЧУЖИХ ИГРОКОВ (2D маркеры) ---
-        if let (Some(nc), Some(vp), Some(cam_pos), Some(seg)) = (
-            &self.net_client,
-            self.camera.view_proj(),
-            self.camera.pos(),
-            self.active_segment.as_ref(),
-        ) {
-            for rp in &nc.remote_players {
-                if rp.mission_id != seg.mission_id {
-                    continue;
-                }
-                if rp.last_update.elapsed() > std::time::Duration::from_secs(5) {
-                    continue;
-                }
-                let label = if rp.is_mock {
-                    format!("{} [mock]", rp.name)
-                } else {
-                    format!("{} ({}HP)", rp.name, rp.hp)
-                };
-                overlay::draw_world_pos(
-                    ui,
-                    (rp.pos.x, rp.pos.y, rp.pos.z),
-                    &vp,
-                    (cam_pos[0], cam_pos[1], cam_pos[2]),
-                    self.viewport,
-                    0xFF8080FF,
-                    &label,
-                );
-            }
-        }
-
-        #[cfg(debug_assertions)]
-        ui::render_main_window(ui, self, &ui_state);
-
-        #[cfg(debug_assertions)]
-        ui::render_actions_window(ui);
-
-        ui::render_multiplayer_window(ui, self);
-
-        ui::render_settings_window(ui, self);
 
         // --- EJECT через API: POST /eject ставит флаг в SharedState, здесь
         // (в render-цикле, как и кнопка «Выход») выполняем саму выгрузку. ---

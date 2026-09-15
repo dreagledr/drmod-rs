@@ -652,6 +652,21 @@ struct FpsCapSnapshot {
     limit: Option<u32>,
 }
 
+/// `GET /state` — headless-режим (`POST /render`): что именно снято с отрисовки.
+/// Та же форма — у ответа `POST /render`.
+#[derive(Serialize)]
+struct RenderSnapshot {
+    /// Overlay мода (окна imgui и 3D-маркеры) не строится и не рисуется.
+    skip_overlay: bool,
+    /// Настоящий `Present` не вызывается — кадр не выводится на экран.
+    skip_present: bool,
+    /// Вызовы отрисовки геометрии игры возвращают `D3D_OK`: игра проходит весь
+    /// свой кадровый код, но GPU ничего не растеризует.
+    skip_draw: bool,
+    /// Заглушки отрисовки уже стоят (ставятся лениво, из render-цикла).
+    draw_hooked: bool,
+}
+
 /// `GET /state` — текущий снимок игры + статус скрипта + fps.
 #[derive(Serialize)]
 struct StateResponse {
@@ -678,6 +693,8 @@ struct StateResponse {
     cutscene_skip: String,
     /// Кап кадров (`POST /fps`).
     fps_cap: FpsCapSnapshot,
+    /// Headless-режим (`POST /render`).
+    render: RenderSnapshot,
 }
 
 /// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
@@ -830,6 +847,8 @@ enum Response {
     Dt(DtResponse),
     Fps(FpsResponse),
     Rng(RngResponse),
+    /// Ответ `POST /render` — та же форма, что `render` в `/state`.
+    Render(RenderSnapshot),
     #[cfg(debug_assertions)]
     Watch(WatchResponse),
     Error(ErrorResponse),
@@ -1891,6 +1910,7 @@ fn route(
         ("POST", "/dt") => handle_dt(body, state),
         ("POST", "/fps") => handle_fps(body, state),
         ("POST", "/rng") => handle_rng(body),
+        ("POST", "/render") => handle_render(body),
         #[cfg(debug_assertions)]
         ("GET", "/watch") => (200, Response::Watch(watch_json())),
         #[cfg(debug_assertions)]
@@ -1968,7 +1988,79 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
             cap: fps_cap_name(),
             limit: fps_cap_limit(guard.base_addr),
         },
+        render: render_json(),
     }
+}
+
+/// Снимок выключателей отрисовки (`POST /render`) — общий для `/state` и ответа
+/// самой ручки.
+fn render_json() -> RenderSnapshot {
+    let (skip_overlay, skip_present, skip_draw) = crate::render_hooks::state();
+    RenderSnapshot {
+        skip_overlay,
+        skip_present,
+        skip_draw,
+        draw_hooked: crate::render_hooks::draw_hooked(),
+    }
+}
+
+/// `POST /render` — headless-режим прогонов (`docs/HEADLESS.md`): снять
+/// отрисовку, не теряя логику кадра. Логика мода (скрипты, запись/воспроизведение,
+/// трекинг сегмента) живёт в `render`, который вызывается из хука `Present`, —
+/// поэтому «headless» тут не отдельный процесс, а три независимых выключателя:
+///
+/// * `skip_overlay` — overlay мода (окна и 3D-маркеры) не строится и не рисуется;
+/// * `skip_present` — настоящий `Present` не вызывается (кадр не выводится);
+/// * `skip_draw` — заглушки на `DrawPrimitive*` устройства: игра проходит весь
+///   кадровый код, но GPU не считает геометрию (ставятся лениво, из render-цикла).
+///
+/// Тело: любые из `{"skip_overlay": true, "skip_present": true, "skip_draw": true}`
+/// (отсутствующие поля не трогаются) либо `{"reset": true}` — вернуть обычную
+/// работу. Скорость прогона мерить по `dt.frames` / `sim_ticks` в `/state`
+/// (кадров в секунду = тиков в секунду: одна итерация главного цикла = один тик).
+fn handle_render(body: &str) -> (u16, Response) {
+    #[derive(Deserialize)]
+    struct Req {
+        skip_overlay: Option<bool>,
+        skip_present: Option<bool>,
+        skip_draw: Option<bool>,
+        /// Вернуть обычную отрисовку (перекрывает остальные поля).
+        reset: Option<bool>,
+    }
+    let req: Req = match serde_json::from_str(body) {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: format!(
+                        "bad body: {e} (ожидается {{\"skip_draw\": true}} или {{\"reset\": true}})"
+                    ),
+                }),
+            )
+        }
+    };
+    let (overlay, present, draw) = if req.reset.unwrap_or(false) {
+        (Some(false), Some(false), Some(false))
+    } else {
+        (req.skip_overlay, req.skip_present, req.skip_draw)
+    };
+    if overlay.is_none() && present.is_none() && draw.is_none() {
+        return (
+            400,
+            Response::Error(ErrorResponse {
+                error: "нет полей: ожидается хотя бы одно из skip_overlay/skip_present/skip_draw \
+                        или reset"
+                    .into(),
+            }),
+        );
+    }
+    crate::render_hooks::set_skip(overlay, present, draw);
+    let (skip_overlay, skip_present, skip_draw) = crate::render_hooks::state();
+    logger::log_line(&format!(
+        "api: render skip: overlay={skip_overlay} present={skip_present} draw={skip_draw}"
+    ));
+    (200, Response::Render(render_json()))
 }
 
 /// `POST /dt` — включить/выключить фиксированный шаг времени движка.

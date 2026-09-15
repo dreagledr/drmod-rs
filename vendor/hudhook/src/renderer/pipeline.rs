@@ -155,6 +155,11 @@ impl<T: RenderEngine> Pipeline<T> {
         self.render_loop.render(ui);
         let draw_data = self.ctx.render();
 
+        // Headless-режим: логика render-цикла уже отработала, но кадр не рисуем.
+        if crate::skip_draw() {
+            return Ok(());
+        }
+
         self.engine.render(draw_data, render_target)?;
 
         Ok(())

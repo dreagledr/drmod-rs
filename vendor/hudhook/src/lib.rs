@@ -152,6 +152,12 @@ static mut HUDHOOK: OnceCell<Hudhook> = OnceCell::new();
 static CONSOLE_ALLOCATED: AtomicBool = AtomicBool::new(false);
 static EJECT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static HOOK_EJECTION_BARRIER: HookEjectionBarrier = HookEjectionBarrier::new();
+/// Headless-режим: `ImguiRenderLoop::render` (логика мода) вызывается как
+/// обычно, но собранная геометрия imgui не отправляется в устройство.
+static DRAW_SKIP: AtomicBool = AtomicBool::new(false);
+/// Headless-режим: настоящий `IDirect3DDevice9::Present` не вызывается, кадр на
+/// экран не выводится (окно сохраняет последнее показанное изображение).
+static PRESENT_SKIP: AtomicBool = AtomicBool::new(false);
 
 /// Texture Loader for ImguiRenderLoop callbacks to load and replace textures
 pub trait RenderContext {
@@ -237,6 +243,34 @@ pub fn free_console() -> Result<(), Error> {
 pub fn eject() {
     trace!("Requesting eject");
     EJECT_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// Пропуск отрисовки overlay (headless-режим ускоренных прогонов).
+///
+/// Когда включено, покадровый `ImguiRenderLoop::render` продолжает вызываться —
+/// то есть вся логика мода выполняется, — но `imgui::Context::render`'ом
+/// собранная геометрия в устройство не отправляется. Смысл: рендер дорогой, а
+/// логика в нём же; так её сохраняют, а отрисовку снимают.
+pub fn set_skip_draw(skip: bool) {
+    DRAW_SKIP.store(skip, Ordering::SeqCst);
+}
+
+/// Включён ли пропуск отрисовки overlay (см. [`set_skip_draw`]).
+pub fn skip_draw() -> bool {
+    DRAW_SKIP.load(Ordering::SeqCst)
+}
+
+/// Пропуск настоящего `Present`: кадр не выводится на экран. Игра результат
+/// `Present` не разбирает (кроме кода «устройство потеряно»), а пацер кадров
+/// считает время сам, поэтому пропуск безопасен — выигрыш в том, что не
+/// выполняется блит back buffer'а в окно.
+pub fn set_skip_present(skip: bool) {
+    PRESENT_SKIP.store(skip, Ordering::SeqCst);
+}
+
+/// Включён ли пропуск настоящего `Present` (см. [`set_skip_present`]).
+pub fn skip_present() -> bool {
+    PRESENT_SKIP.load(Ordering::SeqCst)
 }
 
 /// Perform the ejection that was previously requested

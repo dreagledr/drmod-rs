@@ -86,6 +86,7 @@
 | POST | `/eject` | Выгрузить DLL (ставит флаг → render-цикл выполняет eject) |
 | POST | `/dt` | Фиксированный шаг времени движка (§3.8) |
 | POST | `/fps` | Кап кадров: снять/вернуть/свой лимит (§3.13) |
+| POST | `/render` | Headless-прогон: снять отрисовку, сохранив логику (§3.14) |
 | POST | `/rng` | Пин/сид RNG решений ИИ (§3.10) |
 | POST | `/order` | Заказ смены подфазы — скип катсцены (§3.11) |
 | POST | `/phase` | Движковый `changePhase` — не влияет на смену подфазы (§3.12) |
@@ -150,7 +151,8 @@
   "rng_pin": "off",
   "rng_seed": 0,
   "cutscene_skip": "off",
-  "fps_cap": { "cap": "game", "limit": 60 }
+  "fps_cap": { "cap": "game", "limit": 60 },
+  "render": { "skip_overlay": false, "skip_present": false, "skip_draw": false, "draw_hooked": false }
 }
 ```
 
@@ -162,6 +164,7 @@
 - `dt` — шаг времени движка (`cSlowRateManager`, `base + 0x17E93B0`), см. §3.8: `frame_ms` — измеренная длительность кадра (номинал 16.667, живой разброс 16.25–19.25 = 52–61 FPS), `rate` = `frame_ms / 16.667`, `fixed` — включён ли фиксированный тик, `fixed_ms` — чем подменяем дельту, `ticks` — ведутся ли синтетические часы, `frames` — число кадров движка с момента включения фиксации, `synth_ticks_ms`/`synth_base_ms` — синтетические часы `m_fTicks` и их база (мс). Крутится и в меню, и в бою.
 - `rng_pin` (`off|lo|mid|hi|seed|freeze`) и `rng_seed` — режим пина/сида RNG решений ИИ, см. §3.10.
 - `cutscene_skip` (`off|armed|closing|skipped`) — этап скипа in-engine катсцены «как на консоли» (`game::cutscene_skip`): `armed` — идёт сцена `P370_*`, флаги консольного меню выставлены; `closing` — игрок подтвердил пункт, меню убирает движок; `skipped` — заказ следующей подфазы сделан. Выключается галочкой в окне Settings.
+- `render` — headless-режим (`POST /render`, §3.14): `skip_overlay` (overlay мода не строится и не рисуется), `skip_present` (настоящий `Present` не вызывается), `skip_draw` (заглушки на отрисовку геометрии игры), `draw_hooked` (заглушки уже поставлены — они ставятся лениво, из render-цикла). Меру ускорения смотреть по `dt.frames`/`sim_ticks`, а не по `fps`.
 
 ### 3.3. `POST /script/run`
 
@@ -433,6 +436,50 @@ Iris Xe; кап менялся на ходу, `--fixed-dt` включён):
 копии игры/другие задачи делят те же ядра, поэтому для прогонов имеет смысл
 свой лимит (`{"fps": N}`), а не безлимит.
 
+### 3.14. `POST /render` — headless-прогон (снять отрисовку, сохранив логику)
+
+Тело: любые из `{"skip_overlay": true, "skip_present": true, "skip_draw": true}`
+(отсутствующие поля не трогаются) либо `{"reset": true}` — вернуть обычную
+работу. Ответ — та же форма, что поле `render` в `/state`:
+
+```json
+{ "skip_overlay": true, "skip_present": true, "skip_draw": true, "draw_hooked": true }
+```
+
+| Поле | Что снимается | Что остаётся |
+|------|---------------|--------------|
+| `skip_overlay` | overlay мода: 3D-маркеры (призрак, чужие игроки), экранные метки, окна imgui; hudhook не подаёт геометрию imgui | вся логика кадра — скрипты, запись/воспроизведение, трекинг сегмента, `/state` |
+| `skip_present` | настоящий `IDirect3DDevice9::Present` (возвращаем `D3D_OK`, кадр не выводится) | кадр движка целиком, включая `EndScene` и пацер |
+| `skip_draw` | отрисовка геометрии устройства (`DrawPrimitive*` → `D3D_OK`) | игра проходит весь кадровый код (обход сцены, состояния, `EndScene`, `Present`, тик), но GPU не растеризует |
+
+**Зачем.** Логика мода живёт в `HelloHud::render`, который вызывается из хука
+`Present`, — то есть рендер и логика в одном кадре, а главный цикл игры делает
+**одну итерацию = один тик симуляции**. Поэтому три выключателя ускоряют прогон,
+не меняя подачу кадров скрипта: она идёт по тикам (`api::feed_tick`), а не по
+кадрам отрисовки. Разбор главного цикла и обоснование выбора точек — в
+`docs/HEADLESS.md`.
+
+**Механизм `skip_draw`.** MinHook на слотах vtable живого устройства игры
+(`base + 0x1B206D4`): `DrawPrimitive` (`+0x144`), `DrawIndexedPrimitive`
+(`+0x148`), `DrawPrimitiveUP` (`+0x14C`), `DrawIndexedPrimitiveUP` (`+0x150`) —
+заглушка возвращает `D3D_OK`. Поток управления игры не меняется (в отличие от
+пропуска кадрового рендера целиком), поэтому «все считаются»: обход сцены,
+состояния и очередь кадра отрабатывают как обычно. Хуки ставятся **лениво, из
+render-цикла** при первом включении (патчить пролог функции из HTTP-потока
+нельзя — она может исполняться в этот момент) и потом не снимаются: выключение
+`skip_draw` оставляет их пробросом в оригинал. Поле `draw_hooked` показывает,
+встали ли они.
+
+**Замер.** Скорость считать по `dt.frames` (кадры движка) и `sim_ticks` (тики) в
+`/state` — дельтой за интервал, а не по полю `fps` (оно среднее по окну).
+Комбинируется с §3.8 (`/dt`) и §3.13 (`/fps`).
+
+**Ограничения.** (1) При `skip_overlay` скрывается и окно Settings: вернуть
+отрисовку можно только извне — `{"reset": true}`. (2) При `skip_present`/`skip_draw`
+окно замирает на последнем показанном кадре. (3) `skip_draw` — «null-рендер»:
+игра не видит результата отрисовки, поэтому если сцена начнёт вести себя странно
+(зависание кадра, отсутствие смены фаз), первым делом выключать его.
+
 ---
 
 ## 4. Формат скрипта
@@ -621,6 +668,8 @@ NumPad4 запускает тот же механизм, что и `POST /script
 | `src/tas/types.rs` | `#[derive(Serialize)]` для `InputUnit`, `PlayerState`, `CameraState` |
 | `src/api.rs` (новый) | `ScriptRunner`, `RingBuffer`, `ApiServer` (TcpListener, поток, `Arc<Mutex<SharedState>>`), обработчики эндпоинтов |
 | `src/lib.rs` | `mod api;` (без cfg); поле `api: ApiServer`; `api.frame_update(...)` в `render()`; `api.stop_script()` в `stop_on_loading`; NumPad4 → `api.start_builtin_script()`; перед `hudhook::eject()` — `api.shutdown()` |
+| `src/render_hooks.rs` (новый) | Headless-режим (§3.14): флаги скипа overlay/`Present`/геометрии игры + ленивая установка MinHook-заглушек `DrawPrimitive*` на vtable устройства |
+| `vendor/hudhook` (форк) | `set_skip_draw` — не подавать геометрию imgui (логика `render` при этом выполняется); `set_skip_present` — не вызывать настоящий `Present` |
 | `src/tas/replay.rs` | `update_input_injection` остаётся для debug-кнопок (W/camera/jump); при активном API-скрипте debug-инжекция не вмешивается |
 
 **Release:** `ReplayState` (record/playback) остаётся `#[cfg(debug_assertions)]`; скрипты, API и подача ввода — общий код (примитивы `set_input_override`, `set_ripper_frames`, `set_blade_hold`, `read_player_state` уже не под cfg).

@@ -28,6 +28,7 @@
 |----------|-------|
 | [`QWEN.md`](QWEN.md) | Обзор проекта, архитектура, адреса памяти, заметки по фичам |
 | [`docs/API.md`](docs/API.md) | HTTP API (`127.0.0.1:5223`), механика ввода (в т.ч. меню) |
+| [`docs/HEADLESS.md`](docs/HEADLESS.md) | Headless-прогон: разбор главного цикла игры, снятие отрисовки без потери логики |
 | [`docs/PHASE.md`](docs/PHASE.md) | Фазы/подфазы, катсценное меню |
 | [`docs/ENEMY_TRACKING.md`](docs/ENEMY_TRACKING.md) | Запись состояния ближайшего врага |
 | [`docs/REPLAY.md`](docs/REPLAY.md) | Дизайн Record/Replay и подачи ввода |

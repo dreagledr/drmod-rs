@@ -292,6 +292,58 @@ def fps_cap(cap=None, fps=None, base=DEFAULT_URL):
     return http(base, "/fps", "POST", body)
 
 
+def render_skip(skip_overlay=None, skip_present=None, skip_draw=None, reset=False,
+                base=DEFAULT_URL):
+    """Headless-прогон (`POST /render`): снять отрисовку, сохранив логику.
+
+    Логика мода (скрипты, запись/воспроизведение, трекинг сегмента) живёт в
+    `HelloHud::render`, который вызывается из хука `Present`, а главный цикл
+    игры делает **одну итерацию = один тик симуляции** — поэтому отрисовку
+    можно снять, а прогон от этого ускоряется, не меняясь:
+
+    * `skip_overlay` — overlay мода не строится и не рисуется (окна imgui,
+      3D-маркеры). ⚠️ Скрывается и окно Settings: вернуть отрисовку можно
+      только извне — `render_skip(reset=True)`;
+    * `skip_present` — настоящий `Present` не вызывается (окно замирает на
+      последнем кадре);
+    * `skip_draw` — заглушки на отрисовку геометрии игры (`DrawPrimitive*`
+      устройства): игра проходит весь кадровый код, но GPU не растеризует.
+
+    Поля независимы, переданные `None` не трогаются. `reset=True` возвращает
+    обычную отрисовку. Разбор и оговорки — `docs/HEADLESS.md`.
+    """
+    body = {}
+    if reset:
+        body["reset"] = True
+    else:
+        if skip_overlay is not None:
+            body["skip_overlay"] = bool(skip_overlay)
+        if skip_present is not None:
+            body["skip_present"] = bool(skip_present)
+        if skip_draw is not None:
+            body["skip_draw"] = bool(skip_draw)
+    return http(base, "/render", "POST", body)
+
+
+def frame_rate(seconds=3.0, base=DEFAULT_URL):
+    """Темп кадров движка и тиков симуляции за окно (кадров/с, тиков/с).
+
+    Считается по дельтам `dt.frames` (вызовы `updateFrameTime`, `0xA03970`) и
+    `sim_ticks` (тики симуляции, детур `updateInputUnit`). Одна итерация
+    главного цикла = один тик, поэтому именно по этим числам видно ускорение
+    headless-режима: поле `fps` в `/state` — темп по кольцевому буферу, и для
+    замеров подходит хуже (в нём же лежит среднее по окну).
+    """
+    t0 = time.monotonic()
+    before = state(base)
+    time.sleep(seconds)
+    after = state(base)
+    elapsed = max(1e-6, time.monotonic() - t0)
+    frames = after["dt"]["frames"] - before["dt"]["frames"]
+    ticks = after["sim_ticks"] - before["sim_ticks"]
+    return frames / elapsed, ticks / elapsed
+
+
 def build_restart_script(ups=1, downs=0, hold=6, open_gap=20, gap=10,
                          confirms=2, confirm_gap=25, tail=60):
     """Скрипт рестарта миссии: pause → стрелки → confirm ×N.
