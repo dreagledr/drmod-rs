@@ -672,16 +672,6 @@ struct RenderSnapshot {
     hold: bool,
 }
 
-/// `GET /state` — окно игры (`POST /window`): текущий прямоугольник и
-/// запомненный (тот, что вернётся при следующем запуске).
-#[derive(Serialize)]
-struct WindowSnapshot {
-    /// Текущий внешний прямоугольник окна (`null` — окна ещё нет).
-    current: Option<crate::window::Rect>,
-    /// Запомненный прямоугольник (`null` — не запоминали).
-    saved: Option<crate::window::Rect>,
-}
-
 /// `GET /state` — текущий снимок игры + статус скрипта + fps.
 #[derive(Serialize)]
 struct StateResponse {
@@ -710,8 +700,6 @@ struct StateResponse {
     fps_cap: FpsCapSnapshot,
     /// Headless-режим (`POST /render`).
     render: RenderSnapshot,
-    /// Окно игры (`POST /window`).
-    window: WindowSnapshot,
 }
 
 /// Шаг времени движка: живая дельта кадра и признак фиксированного тика.
@@ -866,8 +854,6 @@ enum Response {
     Rng(RngResponse),
     /// Ответ `POST /render` — та же форма, что `render` в `/state`.
     Render(RenderSnapshot),
-    /// Ответ `POST /window` — та же форма, что `window` в `/state`.
-    Window(WindowSnapshot),
     #[cfg(debug_assertions)]
     Watch(WatchResponse),
     Error(ErrorResponse),
@@ -2050,7 +2036,6 @@ fn route(
         ("POST", "/fps") => handle_fps(body, state),
         ("POST", "/rng") => handle_rng(body),
         ("POST", "/render") => handle_render(body, state),
-        ("POST", "/window") => handle_window(body),
         #[cfg(debug_assertions)]
         ("GET", "/watch") => (200, Response::Watch(watch_json())),
         #[cfg(debug_assertions)]
@@ -2129,88 +2114,7 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
             limit: fps_cap_limit(guard.base_addr),
         },
         render: render_json(),
-        window: window_json(),
     }
-}
-
-/// Снимок окна игры (`POST /window`) — и для `/state`, и для ответа ручки.
-fn window_json() -> WindowSnapshot {
-    let (current, saved) = crate::window::state();
-    WindowSnapshot { current, saved }
-}
-
-/// `POST /window` — окно игры: поставить размер/позицию и запомнить их.
-///
-/// Тело (все поля опциональны, применяются по порядку):
-/// * `x`, `y`, `w`, `h` — поставить окну внешний прямоугольник (то, что видит
-///   ОС: рамка + заголовок). Прямоугольник сразу запоминается;
-/// * `{"save": true}` — запомнить текущий прямоугольник;
-/// * `{"forget": true}` — забыть запомненный (файл стирается).
-///
-/// Запоминание работает и без ручных запросов: мод сам сохраняет положение,
-/// когда окно перестали двигать (1 с), и возвращает его при следующем запуске
-/// (после инжекта). Файл — `%LOCALAPPDATA%\drmod\window.json`.
-///
-/// Само изменение окна выполняет render-цикл (поток игры): `SetWindowPos`
-/// синхронно заходит в `WndProc` игры, а движок не потокобезопасен. Здесь
-/// только ставится запрос.
-fn handle_window(body: &str) -> (u16, Response) {
-    #[derive(Deserialize)]
-    struct Req {
-        x: Option<i32>,
-        y: Option<i32>,
-        w: Option<i32>,
-        h: Option<i32>,
-        save: Option<bool>,
-        forget: Option<bool>,
-    }
-    let req: Req = match serde_json::from_str(body) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                400,
-                Response::Error(ErrorResponse {
-                    error: format!("bad body: {e} (ожидается {{\"w\": 320, \"h\": 200}})"),
-                }),
-            )
-        }
-    };
-    if req.save.unwrap_or(false) {
-        crate::window::request_save();
-    }
-    if req.forget.unwrap_or(false) {
-        crate::window::request_forget();
-    }
-    if req.x.is_some() || req.y.is_some() || req.w.is_some() || req.h.is_some() {
-        // Недостающие поля берём из текущего прямоугольника: `{"w":320}` должен
-        // менять только ширину, а не тащить окно в угол 0,0.
-        let (current, _) = crate::window::state();
-        let base = current.unwrap_or(crate::window::Rect {
-            x: 0,
-            y: 0,
-            w: 800,
-            h: 600,
-        });
-        let rect = crate::window::Rect {
-            x: req.x.unwrap_or(base.x),
-            y: req.y.unwrap_or(base.y),
-            w: req.w.unwrap_or(base.w),
-            h: req.h.unwrap_or(base.h),
-        };
-        crate::window::request_apply(rect);
-    } else if req.save.is_none() && req.forget.is_none() {
-        return (
-            400,
-            Response::Error(ErrorResponse {
-                error: "нет полей: ожидается x/y/w/h или save/forget".into(),
-            }),
-        );
-    }
-    logger::log_line(&format!(
-        "api: window запрос: x={:?} y={:?} w={:?} h={:?} save={:?} forget={:?}",
-        req.x, req.y, req.w, req.h, req.save, req.forget
-    ));
-    (200, Response::Window(window_json()))
 }
 
 /// Снимок выключателей отрисовки (`POST /render`) — общий для `/state` и ответа
