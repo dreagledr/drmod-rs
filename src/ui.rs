@@ -5,6 +5,7 @@ use crate::net;
 use crate::overlay;
 use crate::render_hooks;
 use crate::segment;
+use crate::window;
 use crate::HelloHud;
 use imgui::*;
 
@@ -347,4 +348,54 @@ fn render_tas_controls(ui: &Ui, base_addr: usize) {
             "окна мода скрыты — вернуть: POST /render {\"reset\": true}",
         );
     }
+
+    // Окно игры (`POST /window`): маленькое окно + запоминание положения.
+    // Прямоугольник — внешний (рамка и заголовок включены); изменения ставит
+    // render-цикл, поэтому после «Применить» цифры обновятся следующим кадром.
+    ui.separator();
+    ui.text("Окно игры");
+    let (win_cur, win_saved) = window::state();
+    match win_cur {
+        Some(r) => ui.text(format!("сейчас: {}x{} @ ({}, {})", r.w, r.h, r.x, r.y)),
+        None => ui.text("сейчас: окно не найдено"),
+    };
+    match win_saved {
+        Some(r) => ui.text(format!("запомнено: {}x{} @ ({}, {})", r.w, r.h, r.x, r.y)),
+        None => ui.text("запомнено: нет"),
+    };
+    let mut w = win_cur.map_or(320, |r| r.w);
+    let mut h = win_cur.map_or(200, |r| r.h);
+    let mut x = win_cur.map_or(0, |r| r.x);
+    let mut y = win_cur.map_or(0, |r| r.y);
+    ui.set_next_item_width(70.0);
+    ui.input_int("W##win", &mut w).build();
+    ui.same_line();
+    ui.set_next_item_width(70.0);
+    ui.input_int("H##win", &mut h).build();
+    ui.same_line();
+    ui.set_next_item_width(70.0);
+    ui.input_int("X##win", &mut x).build();
+    ui.same_line();
+    ui.set_next_item_width(70.0);
+    ui.input_int("Y##win", &mut y).build();
+    if ui.button("Применить (и запомнить)") {
+        window::request_apply(window::Rect {
+            x,
+            y,
+            w,
+            h,
+        });
+    }
+    ui.same_line();
+    if ui.button("Запомнить текущее") {
+        window::request_save();
+    }
+    ui.same_line();
+    if ui.button("Забыть") {
+        window::request_forget();
+    }
+    ui.text_colored(
+        [0.6, 0.6, 0.6, 1.0],
+        "внешние размеры; положение запоминается само и вернётся после перезапуска",
+    );
 }

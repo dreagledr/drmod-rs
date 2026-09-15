@@ -16,6 +16,7 @@ mod settings;
 mod skeleton;
 mod tas;
 mod ui;
+mod window;
 
 use d3d_render::{CylinderRenderer, SphereRenderer};
 use skeleton::BonePos;
@@ -776,6 +777,12 @@ impl ImguiRenderLoop for HelloHud {
         if render_hooks::draw_wanted() && !render_hooks::install_done() {
             self.draw_hooks = Some(render_hooks::DrawHooks::install(self.base_addr));
         }
+
+        // Окно игры: вернуть запомненный прямоугольник, выполнить запросы из
+        // HTTP/меню (применить/запомнить/забыть) и запомнить новое положение,
+        // когда окно перестали двигать. Всё в потоке игры: `SetWindowPos`
+        // синхронно заходит в `WndProc` игры.
+        window::service(self.base_addr);
 
         // Сначала собираем состояние игры: read_game_state обновляет кэш игрока
         // (в loading игра обнуляет static_ptr → кэш = null), иначе диагностика

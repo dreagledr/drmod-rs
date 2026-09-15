@@ -235,6 +235,11 @@ try {
     Assert-True "гранулярный skip_present" ($r3.skip_present -eq $true)
     Assert-True "гранулярный не включил headless" ($r3.headless -eq $false)
     Invoke-RestMethod -Uri "$BaseUrl/render" -Method Post -Body '{"reset": true}' -ContentType "application/json" -TimeoutSec 3 | Out-Null
+
+    # Окно игры: только чтение — двигать окно в smoke-тесте не будем (это видно
+    # и мешает, если за машиной человек).
+    Assert-True "state.window есть" ($null -ne $before.window)
+    Assert-True "окно найдено" ($null -ne $before.window.current)
 } catch {
     Write-Host "  FAIL: /render: $_" -ForegroundColor Red
     $script:Failures++
@@ -249,6 +254,18 @@ try {
         Write-Host "  PASS: empty /render body -> 400" -ForegroundColor Green
     } else {
         Write-Host "  FAIL: empty /render body: $_" -ForegroundColor Red
+        $script:Failures++
+    }
+}
+try {
+    Invoke-RestMethod -Uri "$BaseUrl/window" -Method Post -Body '{}' -ContentType "application/json" -TimeoutSec 3 | Out-Null
+    Write-Host "  FAIL: empty /window body should be 400" -ForegroundColor Red
+    $script:Failures++
+} catch {
+    if ($_.Exception.Response.StatusCode.value__ -eq 400) {
+        Write-Host "  PASS: empty /window body -> 400" -ForegroundColor Green
+    } else {
+        Write-Host "  FAIL: empty /window body: $_" -ForegroundColor Red
         $script:Failures++
     }
 }
