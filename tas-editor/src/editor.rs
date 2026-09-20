@@ -8,13 +8,22 @@ use crate::model::{self, BitAction, Issue, Script, Trigger, WhenEnemy};
 use crate::panels;
 use windows_reactor::*;
 
-/// Высота полосы свойств: выше — она распирает окно и выдавливает таймлайн и JSON.
+/// Полоса свойств, таймлайн и JSON получают явные высоты: контейнеры в этом рендере
+/// не клипуют, поэтому контент выше отведённой строки рисуется поверх нижних панелей.
 const PANEL_CHROME: f64 = 96.0;
 const PROPS_OPEN_HEIGHT: f64 = 320.0;
 const PROPS_CLOSED_HEIGHT: f64 = 70.0;
 const FALLBACK_WINDOW_HEIGHT: f64 = 900.0;
-/// Доля свободной высоты, которую забирает JSON-редактор; остальное — таймлайн.
-const JSON_SHARE: f64 = 0.3;
+/// Доля свободной высоты под JSON-редактор по умолчанию; дальше её двигает сплиттер.
+const SPLITTER_HEIGHT: f64 = 12.0;
+const SPLITTER_COLOR: Color = Color::rgb(0x8a, 0x8f, 0x94);
+const SPLITTER_ACTIVE_COLOR: Color = Color::rgb(0x4c, 0x7c, 0xd0);
+const DEFAULT_SPLIT_RATIO: f64 = 0.81;
+
+/// Высота строки кадра в таймлайне (в DIPs, с учётом отступов `ListView`).
+pub(crate) const ROW_HEIGHT: f64 = 66.0;
+/// Тулбар и заголовок таймлайна.
+pub(crate) const TIMELINE_CHROME: f64 = 60.0;
 
 /// Числовые поля условия `when_enemy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,15 +57,31 @@ pub(crate) struct Editor {
     pub(crate) selected_frame: Option<usize>,
     pub(crate) conditional_index: Option<usize>,
     pub(crate) status: String,
+    /// Текст в той форме, в какой его ждёт `RichEditBox` (CR-разделители).
+    /// Подаём контролу ровно её: как только отдадим более короткую форму, контрол
+    /// переустановит текст и на каждую установку ответит событием — бесконечный цикл,
+    /// в котором затирается ввод пользователя.
+    pub(crate) text_for_control: String,
     pub(crate) pane_open: bool,
     pub(crate) properties_open: bool,
-    /// Клиентская высота окна в DIPs: от неё считаются высоты таймлайна и JSON.
+    /// Доля высоты под таймлайн (остальное — JSON). Меняется сплиттером.
+    pub(crate) split_ratio: f64,
+    /// Первый видимый кадр: список показывает ровно те строки, что влезают в высоту
+    /// таймлайна (контейнеры здесь не клипуют, и «лишние» строки выдавливали бы редактор).
+    pub(crate) frame_offset: usize,
+    /// Начало перетаскивания сплиттера: `(window_y, ratio)`.
+    pub(crate) drag_start: Option<(f64, f64)>,
+    /// Клиентская высота окна в DIPs: от неё считаются высоты панелей.
     pub(crate) window_height: f64,
 }
 
 #[derive(Clone)]
 pub(crate) enum Msg {
     Resized(WindowSize),
+    ShiftFrames(i32),
+    SplitDragStart(f64),
+    SplitDragTo(f64),
+    SplitDragEnd,
     SelectFile(Option<usize>),
     Reset,
     TextChanged(String),
@@ -102,6 +127,7 @@ impl Editor {
 
         self.script = entry.script.clone();
         self.text = model::to_text(&self.script);
+        self.text_for_control = cr_form(&self.text);
         self.matrix = FrameMatrix::from_script(&self.script);
         self.issues = model::validate(&self.script);
         self.parse_error = None;
@@ -125,6 +151,7 @@ impl Editor {
     fn commit_matrix(&mut self) {
         self.matrix.apply_to(&mut self.script);
         self.sync_text();
+        self.text_for_control = cr_form(&self.text);
         self.issues = model::validate(&self.script);
         self.parse_error = None;
     }
@@ -158,8 +185,89 @@ impl Editor {
 
     fn after_properties_change(&mut self) {
         self.sync_text();
+        self.text_for_control = cr_form(&self.text);
         self.issues = model::validate(&self.script);
     }
+
+    /// Свободная высота под таймлайн: окно минус свойства, шапки панелей и сплиттер.
+    fn available_height(&self) -> f64 {
+        let total = if self.window_height > 200.0 {
+            self.window_height
+        } else {
+            FALLBACK_WINDOW_HEIGHT
+        };
+        let props = if self.properties_open {
+            PROPS_OPEN_HEIGHT
+        } else {
+            PROPS_CLOSED_HEIGHT
+        };
+        (total - props - PANEL_CHROME - SPLITTER_HEIGHT).max(240.0)
+    }
+
+    /// Высота, отведённая таймлайну (её задаёт сплиттер).
+    pub(crate) fn timeline_height(&self) -> f64 {
+        (self.available_height() * self.split_ratio).max(120.0)
+    }
+
+    /// Сколько строк кадров помещается в таймлайн: список показывает ровно столько,
+    /// иначе лишние строки рисуются поверх нижней панели (контейнеры здесь не клипуют).
+    pub(crate) fn visible_frames(&self) -> usize {
+        let rows = (self.timeline_height() - TIMELINE_CHROME) / ROW_HEIGHT;
+        rows.floor().max(1.0) as usize
+    }
+
+    /// Диапазон видимых кадров: `(первый, последний включительно)`.
+    pub(crate) fn visible_frame_range(&self) -> (usize, usize) {
+        let total = self.matrix.len();
+        if total == 0 {
+            return (0, 0);
+        }
+        let count = self.visible_frames().min(total);
+        let first = self.frame_offset.min(total.saturating_sub(1));
+        (first, (first + count - 1).min(total - 1))
+    }
+}
+
+/// Текст в форме `RichEditBox`: LF → CR и завершающий CR.
+pub(crate) fn cr_form(text: &str) -> String {
+    let mut shown = text.replace('\n', "\r");
+    shown.push('\r');
+    shown
+}
+
+/// Тянущаяся полоса между таймлайном и JSON-редактором (`GridSplitter` в реакторе нет).
+///
+/// Реагирует только на нажатие левой кнопки и последующее перетаскивание (никакого
+/// hover): фон обязателен, иначе `Border` прозрачен для hit-test и событий не получит.
+fn splitter(editor: &Editor, context: &mut ViewContext<Editor>) -> Border {
+    let color = if editor.drag_start.is_some() {
+        SPLITTER_ACTIVE_COLOR
+    } else {
+        SPLITTER_COLOR
+    };
+
+    Border::new()
+        .height(SPLITTER_HEIGHT)
+        .background(Brush::Solid(color))
+        // Без захвата указателя `PointerMoved` приходит только пока курсор над полосой —
+        // перетаскивание «отваливается» на первом же смещении.
+        .capture_pointer_on_press(true)
+        .on_pointer_pressed(context.callback(|info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                Msg::SplitDragStart(info.window_y)
+            } else {
+                Msg::SplitDragEnd
+            }
+        }))
+        .on_pointer_moved(context.callback(|info: PointerEventInfo| {
+            if info.is_left_button_pressed {
+                Msg::SplitDragTo(info.window_y)
+            } else {
+                // Кнопку отпустили вне полосы — перетаскивание закончено.
+                Msg::SplitDragEnd
+            }
+        }))
+        .on_pointer_released(context.callback(|_: PointerEventInfo| Msg::SplitDragEnd))
 }
 
 impl Component for Editor {
@@ -186,8 +294,12 @@ impl Component for Editor {
             selected_frame: None,
             conditional_index: None,
             status: String::new(),
+            text_for_control: String::new(),
             pane_open: true,
             properties_open: false,
+            split_ratio: DEFAULT_SPLIT_RATIO,
+            frame_offset: 0,
+            drag_start: None,
             window_height: 0.0,
         };
         editor.load(0);
@@ -197,6 +309,23 @@ impl Component for Editor {
     fn update(&mut self, message: Msg, _context: &ComponentContext<Self>) {
         match message {
             Msg::Resized(size) => self.window_height = size.height,
+            Msg::ShiftFrames(delta) => {
+                let last = self
+                    .matrix
+                    .len()
+                    .saturating_sub(self.visible_frames());
+                let next = self.frame_offset as i32 + delta;
+                self.frame_offset = next.clamp(0, last as i32) as usize;
+            }
+            Msg::SplitDragStart(y) => self.drag_start = Some((y, self.split_ratio)),
+            Msg::SplitDragTo(y) => {
+                if let Some((start_y, start_ratio)) = self.drag_start {
+                    let available = self.available_height();
+                    self.split_ratio =
+                        (start_ratio + (y - start_y) / available).clamp(0.2, 0.85);
+                }
+            }
+            Msg::SplitDragEnd => self.drag_start = None,
             Msg::SelectFile(index) => {
                 if let Some(index) = index
                     && Some(index) != self.selected_file
@@ -211,10 +340,18 @@ impl Component for Editor {
                 }
             }
             Msg::TextChanged(value) => {
-                // `RichEditBox` отдаёт CRLF/CR и дописывает хвост из сотен переводов
-                // строк — нормализуем и срезаем пустой хвост, оставляя один финальный `\n`.
+                // Запоминаем ровно ту форму, которую вернул контрол: её же и подадим,
+                // тогда `SetText` пойдёт с идентичным текстом и цикл событий разорвётся.
+                self.text_for_control = value.clone();
+                // `RichEditBox` отдаёт CR-разделители и хвост из пустых абзацев —
+                // нормализуем в LF и срезаем пустой хвост, оставляя один финальный `\n`.
                 let normalized = value.replace("\r\n", "\n").replace('\r', "\n");
-                self.text = format!("{}\n", normalized.trim_end_matches('\n'));
+                let normalized = format!("{}\n", normalized.trim_end_matches('\n'));
+                // Эхо программной установки (текст не изменился) — модель не трогаем.
+                if normalized == self.text {
+                    return;
+                }
+                self.text = normalized;
                 match model::from_text(&self.text) {
                     Ok(script) => {
                         self.script = script;
@@ -341,36 +478,30 @@ impl Component for Editor {
             None => "TAS Editor".to_string(),
         };
         context.window_title(title);
-        // Высоты считаем от клиентской высоты окна: `ListView` не ограничивает себя сам,
-        // поэтому панели получают явные размеры, заполняющие окно целиком.
         context.on_window_size(context.callback(Msg::Resized));
 
-        let height = if self.window_height > 200.0 {
-            self.window_height
-        } else {
-            FALLBACK_WINDOW_HEIGHT
-        };
-        let props = if self.properties_open {
-            PROPS_OPEN_HEIGHT
-        } else {
-            PROPS_CLOSED_HEIGHT
-        };
-        let available = (height - props - PANEL_CHROME).max(320.0);
-        let json_height = (available * JSON_SHARE).clamp(140.0, 380.0);
-        let timeline_height = (available - json_height).max(180.0);
-
+        // Таймлайн сам показывает ровно столько строк, сколько влезает в его высоту,
+        // JSON-редактор — `STAR`-строка: так он всегда добирает свободное место,
+        // и внизу окна не остаётся зазора.
         let content = Grid::new()
-            .rows([GridLength::Auto, GridLength::Auto, GridLength::Auto])
+            .rows([
+                GridLength::Auto,
+                GridLength::Auto,
+                GridLength::Auto,
+                GridLength::Star(1.0),
+            ])
             .children((
                 Border::new()
                     .grid_row(0)
                     .content(panels::properties::render(self, context)),
                 Border::new()
                     .grid_row(1)
-                    .content(panels::timeline::render(self, context, timeline_height)),
+                    .content(panels::timeline::render(self, context)),
+                // Своя тянущаяся полоса: `GridSplitter` в реакторе нет.
+                splitter(self, context).grid_row(2),
                 Border::new()
-                    .grid_row(2)
-                    .content(panels::text_editor::render(self, context, json_height)),
+                    .grid_row(3)
+                    .content(panels::text_editor::render(self, context)),
             ));
 
         SplitView::new()
