@@ -1,0 +1,15 @@
+[package]
+name = "tas-editor"
+version = "0.1.0"
+edition = "2024"
+description = "TAS Editor for Metal Gear Rising: Revengeance - WinUI 3 desktop app on windows-reactor"
+publish = false
+
+# Собственный workspace: корневой drmod-rs не должен тянуть GUI-крейт x64 в 32-битную сборку.
+[workspace]
+
+[dependencies]
+windows-reactor = "0.100"
+
+[build-dependencies]
+windows-reactor-setup = "0.100"
