@@ -1,25 +1,17 @@
 #![windows_subsystem = "windows"]
 
+mod editor;
+mod matrix;
+mod mock;
+mod model;
+mod panels;
+
+#[cfg(test)]
+mod layout_test;
+
+use editor::Editor;
 use windows_reactor::*;
 
-struct HelloWorld;
-
-impl Component for HelloWorld {
-    type Message = ();
-    type Input = ();
-
-    fn create(_input: &(), _context: &ComponentContext<Self>) -> Self {
-        Self
-    }
-
-    fn update(&mut self, _message: (), _context: &ComponentContext<Self>) {}
-
-    fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
-        context.window_title("TAS Editor");
-        "Hello, world!".into()
-    }
-}
-
 fn main() {
-    App::run_component::<HelloWorld>(()).unwrap();
+    App::run_component::<Editor>(()).unwrap();
 }

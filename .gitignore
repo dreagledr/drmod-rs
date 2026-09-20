@@ -2,6 +2,7 @@
 /tools/disasm/target
 /mods/cutscene_skip/target
 /tas-editor/target
+/tas-editor/dist
 /out
 .env
 .qwen/
