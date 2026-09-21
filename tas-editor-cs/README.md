@@ -204,6 +204,20 @@ leaks its feature switches into ordinary Debug builds, and the Debug runtimeconf
 work with. `PublishAot` is therefore gated on `Configuration=Release` here; `InvariantGlobalization`
 stays on for every configuration, since it is a globalization mode and does not touch the updater.
 
+### Docking chrome can put the shell into states it does not survive
+
+The workspace tool window has `CanPin`, `CanAutoHide`, `CanHide` and `CanFloat` turned off, and that
+guard is load-bearing rather than cosmetic. Measured 2026-09-21 on the pin / auto-hide affordance:
+collapsed, the pane unrenders its content while the split keeps reserving the space — an empty left
+column with an orphaned `Scripts` tab and no obvious way back; brought back, it returns as an
+unthemed floating overlay (dark surface, dark heading text on top of it, caption clipped at the
+edge) that covers the document. Both halves are library-side — the collapse does not release the
+split space, and the floating chrome gets no app theme — so nothing in this project can fix them;
+the guard only keeps the pane docked. Re-enable the flags together with a fix for those states.
+
+One affordance is still live and unverified: the tab strip's add-tab button (`AddButton`,
+"Добавить новую вкладку"). Worth a click before trusting the strip.
+
 ### An XML comment cannot contain `--`
 
 Flag names like `--aot` practically invite one, and the build fails with `MSB4025` when one lands in a

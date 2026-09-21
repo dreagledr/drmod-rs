@@ -31,6 +31,18 @@ sealed class Editor : Component
         {
             Title = "Scripts",
             Key = WorkspacePaneKey,
+            // Collapsing the workspace is forbidden outright: every route out of the docked
+            // state lands it in a state the shell does not survive yet. Measured on the pin /
+            // auto-hide affordance — collapsed, the pane unrenders but the split still reserves
+            // its half, leaving an empty left column with an orphaned tab; brought back, it
+            // returns as an unthemed floating overlay (dark surface, dark heading on top of it,
+            // caption clipped) covering the document. The cause is library-side — the collapse
+            // does not release the split space, and the floating chrome gets no app theme — so
+            // the stub keeps the pane pinned in place instead.
+            CanPin = false,
+            CanAutoHide = false,
+            CanHide = false,
+            CanFloat = false,
             Content = Component<WorkspacePanel, WorkspacePanelProps>(
                 new WorkspacePanelProps(StubScripts, selectedId, setSelectedId)),
         };
@@ -49,7 +61,7 @@ sealed class Editor : Component
         var layout = new DockSplit(Orientation.Horizontal, new DockNode[]
         {
             new DockTabGroup(new DockableContent[] { workspacePane }, Width: 340,
-                Role: DockGroupRole.ToolWindowStrip),
+                Role: DockGroupRole.General),
             new DockTabGroup(new DockableContent[] { scriptPane },
                 Role: DockGroupRole.DocumentArea),
         });
