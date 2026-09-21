@@ -3,10 +3,10 @@
 /mods/cutscene_skip/target
 /tas-editor/target
 /tas-editor/dist
-/tas-editor-cs/bin
-/tas-editor-cs/obj
-/tas-editor-cs/publish
-/tas-editor-cs/dist
+/tas-editor-cs/**/bin
+/tas-editor-cs/**/obj
+/tas-editor-cs/**/publish
+/tas-editor-cs/**/dist
 /out
 .env
 .qwen/

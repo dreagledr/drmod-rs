@@ -45,10 +45,33 @@
             self-contained build path requires a concrete RID.
         -->
         <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' And ('$(Platform)' == '' Or '$(Platform)' == 'AnyCPU' Or '$(Platform)' == 'Any CPU')">$(NETCoreSdkPortableRuntimeIdentifier)</RuntimeIdentifier>
-        <PublishAot>true</PublishAot>
+        <!--
+            Globalization mode, not a code-generation switch: it does not touch the
+            metadata updater, so it is safe for every configuration — and Debug then
+            behaves like the shipped build instead of quietly differing in culture
+            handling. The template pairs it with AOT below.
+        -->
         <InvariantGlobalization>true</InvariantGlobalization>
     </PropertyGroup>
     <!-- </snippet:template-shape> -->
+
+    <!--
+        NativeAOT, Release only. The publish output is a native x64 exe that carries no .NET
+        runtime dependency; together with WindowsAppSDKSelfContained above, the whole app is
+        xcopy-deployable.
+        The template's AOT switch sets PublishAot unconditionally. Measured 2026-09-21,
+        that leaks the AOT feature switches into ordinary Debug builds: the Debug
+        runtimeconfig then carries
+        `"System.Reflection.Metadata.MetadataUpdater.IsSupported": false`, which kills hot
+        reload — `dotnet watch run` and the reload supervision inside `mur devtools` have no
+        migration subsystem left to use.
+        The cost of gating it on Release: the trim/AOT analyzers no longer run in the Debug
+        dev loop, so they need a Release build before shipping instead of never — the exact
+        command is in the Verification section of `QWEN.md`.
+    -->
+    <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+        <PublishAot>true</PublishAot>
+    </PropertyGroup>
 
     <!--
         Publish the XAML compiler's merged app resource index ($(TargetName).pri, written
@@ -78,7 +101,24 @@
     </ItemGroup>
 
     <ItemGroup>
+        <!--
+            The components and the script model stay internal — a public surface that only
+            the tests would ever call is not worth having. The test assembly gets a window
+            into the app instead.
+        -->
+        <InternalsVisibleTo Include="TasEditorCs.Tests" />
+    </ItemGroup>
+
+    <ItemGroup>
         <PackageReference Include="Microsoft.UI.Reactor" Version="0.1.0-preview.15" />
+        <!--
+            Docking (DockManager / DockSplit and its drag-resize splitters) ships in the
+            Advanced package, not in the base one. It is the one place the packaging guide
+            warns about: Advanced roots its WinRT activation chain for the AOT trimmer, and
+            it drags in Win2D (~1 MB managed + ~3 MB native interop) even though docking
+            does not need it. Take that trade knowingly — the window shell is built on it.
+        -->
+        <PackageReference Include="Microsoft.UI.Reactor.Advanced" Version="0.1.0-preview.15" />
         <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
     </ItemGroup>
 

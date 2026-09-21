@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="TasEditorCs/TasEditorCs.csproj" />
+  <Project Path="TasEditorCs.Tests/TasEditorCs.Tests.csproj" />
+</Solution>

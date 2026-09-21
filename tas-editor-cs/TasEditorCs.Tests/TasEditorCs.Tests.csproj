@@ -1,0 +1,32 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Same TFM as the app: a net10.0 project cannot reference a net10.0-windows one. -->
+    <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+    <!--
+        RID-pinned on purpose. The app pulls in Reactor.Advanced, and thus Win2D, whose
+        build targets refuse to wire up the native `Microsoft.Graphics.Canvas.dll` for an
+        AnyCPU consumer (WIN2D0001). A RID is also what the app itself ends up with.
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\TasEditorCs\TasEditorCs.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+</Project>
