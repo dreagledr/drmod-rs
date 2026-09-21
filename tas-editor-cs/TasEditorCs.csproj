@@ -1,0 +1,101 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <!-- <snippet:template-shape> -->
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net10.0-windows10.0.22621.0</TargetFramework>
+        <!--
+            x64 first so an unqualified `dotnet build` / F5 picks the right default on the
+            majority of dev machines. ARM64 second for Snapdragon X. X86 retained for parity
+            with the WinUI 3 templates even though Reactor itself is only tested on x64 / ARM64.
+        -->
+        <Platforms>x64;ARM64;X86</Platforms>
+        <UseWinUI>true</UseWinUI>
+        <WindowsPackageType>None</WindowsPackageType>
+        <!--
+            WindowsAppSDKSelfContained bundles the Windows App SDK runtime alongside the
+            published exe so the app:
+              (a) runs from any folder without a separate Windows App Runtime install, and
+              (b) survives `dotnet watch run` hot reload (used by the Reactor Visual Studio
+                  embedded-preview extension — spec 056). Incremental rebuilds otherwise
+                  double-count transitive Microsoft.WindowsAppSDK.* references and trip
+                  Microsoft.WindowsAppSDK.ComponentReference.targets' strict version check
+                  ("version 2.0.20;2.0.20 was referenced"). Self-contained bundling
+                  sidesteps that check.
+            Tradeoff: ~30 MB extra in the publish output. To ship framework-dependent
+            (smaller publish, requires the user to install Microsoft.WindowsAppRuntime
+            separately) flip this to false and ensure your install instructions tell users
+            to install the runtime first.
+        -->
+        <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+        <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+        <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+        <Nullable>enable</Nullable>
+        <!--
+            Embeds the app icon in the .exe so File Explorer and shortcuts show it.
+            The ReactorApp.Run(icon:) call in App.cs sets the *window* icon (taskbar /
+            Alt-Tab / Task Manager); without either, Reactor falls back to
+            Assets\AppIcon.ico and then to this embedded icon.
+        -->
+        <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
+        <!--
+            Auto-resolve RuntimeIdentifier from the host SDK when the caller hasn't pinned
+            Platform / RuntimeIdentifier explicitly. Lets `dotnet build` / `dotnet run`
+            succeed without forcing -p:Platform=x64 on every invocation — WindowsAppSDK's
+            self-contained build path requires a concrete RID.
+        -->
+        <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' And ('$(Platform)' == '' Or '$(Platform)' == 'AnyCPU' Or '$(Platform)' == 'Any CPU')">$(NETCoreSdkPortableRuntimeIdentifier)</RuntimeIdentifier>
+        <PublishAot>true</PublishAot>
+        <InvariantGlobalization>true</InvariantGlobalization>
+    </PropertyGroup>
+    <!-- </snippet:template-shape> -->
+
+    <!--
+        Publish the XAML compiler's merged app resource index ($(TargetName).pri, written
+        next to the exe by the Windows App SDK's MrtCore.PriGen targets).
+        It never reaches the publish output on its own: the SDK feeds @(ProjectPriFile) to
+        its own MSIX packaging pipeline only, and a plain unpackaged publish computes its
+        file list from the project output groups, which do not carry it. Without this file
+        the published app starts and dies with a stowed exception (0xC000027B) inside XAML
+        before the first frame — the merged WinUI control resources are missing. Verified
+        against the stock scaffold from `dotnet new reactorapp`, so it is not something
+        the template or the debug loop would have caught.
+    -->
+    <Target Name="_PublishAppPri"
+            AfterTargets="ComputeResolvedFilesToPublishList"
+            BeforeTargets="CopyFilesToPublishDirectory">
+        <ItemGroup>
+            <ResolvedFileToPublish Include="$(TargetDir)$(TargetName).pri"
+                                    Condition="Exists('$(TargetDir)$(TargetName).pri')">
+                <RelativePath>$(TargetName).pri</RelativePath>
+                <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+            </ResolvedFileToPublish>
+        </ItemGroup>
+    </Target>
+
+    <ItemGroup>
+        <Content Include="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <PackageReference Include="Microsoft.UI.Reactor" Version="0.1.0-preview.15" />
+        <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    </ItemGroup>
+
+    <!--
+        Debug-only: enable the Reactor devtools surface so the *devtools* flag
+        (from Properties/launchSettings.json's default F5 args) lights up the
+        devtools menu, and so the Visual Studio embedded-preview extension's
+        embed-host activation (which requires devtools support) succeeds.
+        Release / Publish builds drop both the package and the host-config
+        switch so the trim / AOT analyzers stay happy (see
+        docs/guide/packaging.md, section "Keep Reactor.DevtoolsSupport out of
+        retail"). To enable devtools in Release as well, move these into the
+        unconditioned ItemGroup above.
+    -->
+    <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+        <PackageReference Include="Microsoft.UI.Reactor.Devtools" Version="0.1.0-preview.15" />
+        <RuntimeHostConfigurationOption Include="Reactor.DevtoolsSupport" Value="true" Trim="true" />
+    </ItemGroup>
+
+</Project>
