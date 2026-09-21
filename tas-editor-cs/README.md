@@ -118,15 +118,57 @@ How the gapless look is put together:
   theme-aware through the same `Theme.Ref` path, so the toggle keeps working.
 - `placeholderCellTemplate:` gives not-yet-loaded rows the same block geometry — the grid's own
   shimmer is a translucent fill at 50 % opacity, which all but disappears on a dark table.
-- 31 columns come to 684 DIP, so on the default 1100-DIP window the table scrolls sideways (the pane
-  gets ~590 of them). Widths live in `CommandTable.cs` as `AngleWidth` / `AmountWidth` /
-  `FlagWidth` and the frame column's literal.
+- Flag columns are **square**: `FlagWidth` is `RowHeight` (32), so the matrix keeps reading as a
+  matrix when either number moves. The numeric columns stay wider than tall — `270.00` needs the
+  room. 31 columns come to 1048 DIP, so the default 1100-DIP window shows ~13 of them and the rest is
+  a sideways scroll (the pane gets ~590); all 31 fit once the pane is ~1050 DIP wide.
 - ⚠️ `pin: PinPosition.Left` on the frame column is **metadata only** in this preview:
   `GetPinnedColumnGroups()` exists on `DataGridState` but nothing in `DataGridComponent` reads it, so
   the column does not stay put under a horizontal scroll.
-- The table is read-only (`editable` stays off, no `onRowChanged`), and rows are memoized in
-  `Render()` with `UseMemo` on the script — the grid keys its mount off the source's identity, so a
-  source rebuilt per render would remount it and drop the scroll position.
+- Rows are memoized in `Render()` with `UseMemo` on the script — the grid keys its mount off the
+  source's identity, so a source rebuilt per render would remount it and drop the scroll position.
+
+### Editing
+
+Inline editing is the grid's own (`editable: true`, `EditMode.Cell`): a tap on a cell opens that
+column's editor in place, Enter or a tap elsewhere commits, Esc cancels. What it took to wire:
+
+- ⚠️ **Every editable column needs its own `Editor`.** With an empty `TypeRegistry` (the default — the
+  grid builds `new TypeRegistry()`) the fallback is a plain `TextBox` whose value arrives as a
+  *string*, so a commit into a `bool` or `double` field throws. The `Editors.*` catalog wraps the
+  stock controls, which is a starting point but not a fit (below).
+- ⚠️ **Stock editors do not fit a cell.** `Editors.CheckBox()` is a WinUI `CheckBox` with a 120 DIP
+  minimum width — four square flag columns' worth. So the flag editor is the same control with
+  `MinWidth(0)` / `MinHeight(0)` (measured: 24×20 in a 32 DIP cell).
+- ⚠️ **The stick columns edit in a plain `TextBox`, not a `NumberBox`.** A number box hosts its own
+  text box, and the stock 32 DIP minimum height *of that inner box* is out of reach of the outer
+  `MinHeight(0)` — measured on the live tree, the control overflowed the 32 DIP row and its clear
+  button took the right half of a 46 DIP cell. The `TextBox` carries an explicit `.Height(RowHeight - 6)`
+  instead, and the *buffer is the raw text*: the setter parses and clamps it (`ReadNumber`), because
+  parsing per keystroke would reformat the text under the caret. Garbage or an out-of-range value
+  leaves the field as it was.
+- **The setters are hand-wired.** A column builder derives its setter by reflection from a property
+  named after the column; these columns are named after the script's `input` keys, so `Editable(…)`
+  in `CommandTable.cs` supplies `SetValue` itself — `row.With(bit, held)` for the flags, `ReadNumber(…)`
+  for the stick values.
+- **Both editors carry an `.AutomationName(…)`**: a bare checkbox or text box has no caption of its
+  own and the header next to it is a 1-2 letter label (`REACTOR_A11Y_003`).
+- ⚠️ **A commit only reaches the grid's optimism overlay, not the source.** `onRowChanged` is where the
+  row has to be written back (`ListDataSource.UpdateAsync`), or the next fetch brings the old value
+  back. The grid may call it off the UI thread (its own contract says so); `ListDataSource` locks.
+  A throwing commit is not lost silently: `FailAsyncCommit` reverts the overlay and the row shows an
+  error bar with a Dismiss button.
+- `RowHeight` is 32, not the 18 the matrix reads best at: the editors are what has to fit. The height
+  is a knob — with the shrunk editors above, ~24 should still fit an open editor, at ~6 visible rows
+  instead of 4.
+- The headless tests pin what is reachable without a window: the editors' *shape* (a `TextBox` pinned
+  to 26 DIP showing the cell's format, a `CheckBox` with the stock minimum width removed), the
+  setters' round-trips including clamping and unreadable input, and the commit reaching the source.
+  What a `NumberBox`/`TextBox` *is* at runtime — commit-on-blur, its inner minimum height — is not
+  something a headless test can reach; those were measured on the live tree instead.
+- The frame column stays read-only: no editor, no setter.
+- Dropdown-style flows (validators, `EditMode.Row`) are not wired — the clamp lives in `ReadNumber`
+  and an unreadable value is simply ignored.
 
 ### Theme
 
@@ -188,6 +230,12 @@ mur devtools tree --window main --view summary
 
 The verbs drive UIA, and there is no pointer-drag verb among them: that a splitter renders can be
 checked from here, moving it cannot — a drag-resize splitter stays a by-hand check.
+
+⚠️ The same limit covers the table's click-to-edit: a cell is a plain `Border` with no UIA pattern, so
+`mur devtools click` errors with `no-pattern` (only `Invoke` / `Toggle` / `SelectionItem` are tried,
+and no pointer event is synthesized). The edit path is therefore pinned by the headless tests —
+`SetValue` round-trips, the commit reaching the source, the editors being present — while "tap a cell
+and watch an editor appear" stays a by-hand check.
 
 The endpoint is HTTP at `http://127.0.0.1:<port>/mcp`, and it is **locked with a per-launch bearer
 token**: the server generates a fresh one on every start and writes it — with the endpoint, the pid

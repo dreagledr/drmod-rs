@@ -18,6 +18,10 @@ sealed record CommandRow(
     /// Whether the input at `bit` — an index into <see cref="CommandKeys.All"/> — is held on
     /// this frame.
     internal bool Holds(int bit) => (Buttons & (1u << bit)) != 0;
+
+    /// The same frame with that input held or cleared: what a flag column's inline edit commits.
+    internal CommandRow With(int bit, bool held) =>
+        this with { Buttons = held ? Buttons | 1u << bit : Buttons & ~(1u << bit) };
 }
 
 /// The boolean inputs a frame can hold, in column order. `Key` is the script's `input` key

@@ -101,8 +101,10 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   buttons are placeholders), the right pane stacks three regions — script controls, command table,
   script text — with the docking splitters between them. The title bar carries the dark / light
   toggle.
-- The command table is real: a read-only `DataGrid` over generated frames (`CommandTable.cs`), one
-  column per script input, 20 000-frame scripts included. The other two region bodies are still a
-  note.
-- Next: inline editing in the table, then the remaining two region bodies and the on-disk workspace.
+- The command table is real: a `DataGrid` over generated frames (`CommandTable.cs`), one column per
+  script input, 20 000-frame scripts included. Its cells are edited inline through the grid's own
+  editing (`editable: true`, click to open an editor, commit written back to the source). The other
+  two region bodies are still a note.
+- Next: the remaining two region bodies and the on-disk workspace — frames are generated, not parsed,
+  and an edited row lives only in memory.
 - The Rust version (`../tas-editor/`) is left untouched; this project is the candidate replacement.
