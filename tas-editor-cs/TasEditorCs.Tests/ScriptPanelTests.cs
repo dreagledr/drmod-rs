@@ -32,6 +32,16 @@ public class ScriptPanelTests
     }
 
     [Fact]
+    public void The_command_table_region_hosts_the_table_for_the_selected_script()
+    {
+        var script = new ScriptEntry("s1", "blade-run", 42);
+        var table = Assert.IsType<ComponentElement<CommandTableProps>>(
+            Regions(Split(script)).ElementAt(1).Content);
+
+        Assert.Equal(script, table.Props.Script);
+    }
+
+    [Fact]
     public void Says_so_when_nothing_is_selected()
     {
         var children = Assert.IsType<FlexElement>(ScriptPanel.View(null)).Children;

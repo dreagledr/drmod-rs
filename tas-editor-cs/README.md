@@ -4,11 +4,12 @@ Desktop TAS editor for Metal Gear Rising: Revengeance on **WinUI 3** through
 [`Microsoft.UI.Reactor`](https://microsoft.github.io/microsoft-ui-reactor/) — a declarative
 React-style component model (components, hooks, keyed lists), no XAML, no bindings, no ViewModels.
 
-Status: **two-pane shell with stub panes.** The window is split by a draggable divider — the left
-pane lists the workspace scripts (the selection is live, the management buttons are placeholders),
-the right pane stacks three regions — script controls, command table, script text — with the same
-drag-resize splitters between them, each region still a one-line note. The three region bodies and
-the on-disk workspace are the next passes.
+Status: **two-pane shell with a live command table.** The window is split by a draggable divider —
+the left pane lists the workspace scripts (the selection is live, the management buttons are
+placeholders), the right pane stacks three regions — script controls, command table, script text —
+with the same drag-resize splitters between them. The command table region is filled in (read-only,
+over mock frames); the other two regions are still a one-line note, and the on-disk workspace is the
+next pass.
 
 This is the C# version living next to the Rust one (`../tas-editor/`); that one is left untouched.
 Folder conventions — language, component layout, what to run before calling something done —
@@ -24,7 +25,9 @@ tas-editor-cs/
 │   ├── Editor.cs           # window shell: owns the split and the selection
 │   ├── WorkspacePanel.cs   # left pane — the script list and its management
 │   ├── ScriptPanel.cs      # right pane — the three stacked regions
+│   ├── CommandTable.cs     #   the command table region (read-only DataGrid)
 │   ├── ScriptEntry.cs      # the script model
+│   ├── CommandRow.cs       #   one script frame + the generated mock frames
 │   ├── Assets/ Properties/
 │   └── TasEditorCs.csproj
 └── TasEditorCs.Tests/      # xUnit, headless unit layer
@@ -87,6 +90,43 @@ Bare panes come with no chrome at all: the title stays on the pane as identity a
 nowhere. The panes are also pinned shut (`CanClose`, `CanFloat`, `CanMove`, `CanDockAsToolWindow`
 off) for the same reason as the workspace tool window above — a region that can be dragged out
 reaches the docking states this shell does not survive.
+
+### The command table
+
+`CommandTable.cs` fills the middle region: a `DataGrid<CommandRow>` from
+`Microsoft.UI.Reactor.Advanced` (already referenced for docking), one row per script frame, one
+column per script input — the frame number, each stick's direction and deflection, and the 26
+booleans of the script format (`docs/API.md` §4.2 in the Rust repo, which is where the column names
+come from). Frames are generated, not parsed: `CommandRow.cs` expands a phase table into a
+deterministic mock script, so the 20 000-frame case the workspace is expected to hold can be
+exercised before the real parser exists.
+
+How the gapless look is put together:
+
+- **The grid does not draw the gaps** — its cell padding is a fixed `CellPadLeft 8 / CellPadRight 12`
+  in `DataGridComponent` (a deliberate gutter, per its own comment). Both `cellTemplate:` and
+  `headerTemplate:` bypass it entirely, so a cell is one `Border` that stretches to its column and is
+  exactly `RowHeight` tall. Measured on the live tree: cells of 44 / 46 / 46 / 40 / 40 and 26 × 18
+  DIP, 18 tall, `margin 0`, `Stretch`, 31 children per row grid — no gap anywhere.
+- **The checkerboard is the cell surface**, alternating on `(frame ^ columnIndex) & 1`, with the held
+  inputs painted in the accent color.
+- ⚠️ **Translucent theme fills are useless for this.** `Theme.LayerFill` / `Theme.CardBackground`
+  resolve to `#80FFFFFF` / `#B3FFFFFF` in the light theme — two translucent whites 2 RGB steps apart
+  over a light pane, i.e. an invisible checkerboard (measured with `mur devtools properties
+  <cell> --name Background`). The table uses the *opaque* `SolidBackgroundFillColor*` family instead:
+  `Base` / `BaseAlt` are `#F3F3F3` / `#DADADA` in light and `#202020` / `#0A0A0A` in dark, still
+  theme-aware through the same `Theme.Ref` path, so the toggle keeps working.
+- `placeholderCellTemplate:` gives not-yet-loaded rows the same block geometry — the grid's own
+  shimmer is a translucent fill at 50 % opacity, which all but disappears on a dark table.
+- 31 columns come to 684 DIP, so on the default 1100-DIP window the table scrolls sideways (the pane
+  gets ~590 of them). Widths live in `CommandTable.cs` as `AngleWidth` / `AmountWidth` /
+  `FlagWidth` and the frame column's literal.
+- ⚠️ `pin: PinPosition.Left` on the frame column is **metadata only** in this preview:
+  `GetPinnedColumnGroups()` exists on `DataGridState` but nothing in `DataGridComponent` reads it, so
+  the column does not stay put under a horizontal scroll.
+- The table is read-only (`editable` stays off, no `onRowChanged`), and rows are memoized in
+  `Render()` with `UseMemo` on the script — the grid keys its mount off the source's identity, so a
+  source rebuilt per render would remount it and drop the scroll position.
 
 ### Theme
 

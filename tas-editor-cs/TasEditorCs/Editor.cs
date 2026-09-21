@@ -16,11 +16,13 @@ using static Microsoft.UI.Reactor.Factories;
 sealed class Editor : Component
 {
     // Stub data. Real scripts come from the on-disk workspace, which is not wired up yet.
+    // The last one is deliberately heavy — 20 000 frames is the size the command table has to
+    // stay usable at, so the stub has to include one.
     static readonly IReadOnlyList<ScriptEntry> StubScripts =
     [
         new ScriptEntry("s1", "blade-run", 42),
         new ScriptEntry("s2", "barrier-flight", 198),
-        new ScriptEntry("s3", "lightning-strike", 7),
+        new ScriptEntry("s3", "lightning-strike", 20_000),
     ];
 
     public override Element Render()

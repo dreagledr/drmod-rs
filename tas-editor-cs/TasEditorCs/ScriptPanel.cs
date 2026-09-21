@@ -9,10 +9,10 @@ sealed record ScriptPanelProps(ScriptEntry? Script);
 /// Right pane: the one selected script.
 ///
 /// The body is three regions stacked top to bottom — script controls, command table,
-/// script text — separated by the docking host's drag-resize splitters. Stub: each region
-/// carries only a note, and the three bodies are the next passes. The set of panes is
-/// fixed, so the host keeps its own split ratios across renders and the selection only
-/// decides what the regions will read.
+/// script text — separated by the docking host's drag-resize splitters. The command table is
+/// real (read-only, on mock frames); the other two still carry a note, and the set of panes is
+/// fixed, so the host keeps its own split ratios across renders and the selection only decides
+/// what the regions read.
 sealed class ScriptPanel : Component<ScriptPanelProps>
 {
     public override Element Render() => View(Props.Script);
@@ -37,7 +37,7 @@ sealed class ScriptPanel : Component<ScriptPanelProps>
             Region(ScriptControlsKey, "Script controls", 180,
                 Placeholder($"{script.Frames} frames — name, trigger and restart policy come next.")),
             Region(CommandTableKey, "Command table", 320,
-                Placeholder("The frame × action grid comes next.")),
+                Component<CommandTable, CommandTableProps>(new CommandTableProps(script))),
             Region(ScriptTextKey, "Script text", null,
                 Placeholder("The JSON view of the script comes next.")),
         });
