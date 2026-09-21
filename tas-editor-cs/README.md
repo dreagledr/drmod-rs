@@ -88,6 +88,19 @@ nowhere. The panes are also pinned shut (`CanClose`, `CanFloat`, `CanMove`, `Can
 off) for the same reason as the workspace tool window above — a region that can be dragged out
 reaches the docking states this shell does not survive.
 
+### Theme
+
+The title bar carries a `ToggleSwitch` (`onContent` / `offContent` = `Dark` / `Light`), and the shell
+holds the choice in one `ElementTheme?`: `null` follows the system, an explicit `Dark` / `Light` is
+what the user pinned. The value lands as `.RequestedTheme(...)` on the shell root — the region that
+wraps every pane — so one pass re-themes the lot: WinUI resolves every `ThemeResource` brush against
+it, the Mica backdrop follows, and the host re-renders so our own `Theme.*` tokens are re-resolved.
+
+`UseIsDarkTheme()` reads the **app-global** scheme and does not observe that per-element override, so
+it only decides where the toggle starts; after a click the pinned value is the truth. It also has to
+run unconditionally: calling the hook inside the `??` that folds it into the choice is a hook-order
+violation, and `REACTOR_HOOKS_001` flags it (`mur check`).
+
 ## Publish
 
 ```bash

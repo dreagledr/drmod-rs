@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using Microsoft.UI.Reactor;
 using Microsoft.UI.Reactor.Core;    // BackdropKind
 using Microsoft.UI.Reactor.Docking; // DockManager, DockSplit, DockTabGroup, DockGroupRole
+using Microsoft.UI.Xaml;            // ElementTheme
 using Microsoft.UI.Xaml.Controls;   // Orientation
 using static Microsoft.UI.Reactor.Factories;
 
@@ -26,6 +27,17 @@ sealed class Editor : Component
     {
         var (selectedId, setSelectedId) = UseState<string?>(StubScripts[0].Id);
         var selected = Find(StubScripts, selectedId);
+
+        // Hooks run on every render before anything else, so the app scheme is read
+        // unconditionally and only then folded into the decision below.
+        var appSchemeIsDark = UseIsDarkTheme();
+
+        // null = follow the system. `UseIsDarkTheme` reports the app-global scheme, so it
+        // only decides where the toggle starts: once the user pins a scheme, that value is
+        // the truth, because the hook does not observe the per-element override below.
+        var (pinnedTheme, setPinnedTheme) = UseState<ElementTheme?>(null);
+        var isDark = (pinnedTheme ?? (appSchemeIsDark ? ElementTheme.Dark : ElementTheme.Light))
+            == ElementTheme.Dark;
 
         var workspacePane = new ToolWindow
         {
@@ -66,12 +78,23 @@ sealed class Editor : Component
                 Role: DockGroupRole.DocumentArea),
         });
 
-        var titleBar = TitleBar("TAS Editor").Flex(shrink: 0);
+        var titleBar = TitleBar("TAS Editor")
+            .RightHeader(ToggleSwitch(
+                isDark,
+                dark => setPinnedTheme(dark ? ElementTheme.Dark : ElementTheme.Light),
+                onContent: "Dark",
+                offContent: "Light"))
+            .Flex(shrink: 0);
 
+        // The theme override sits on the shell root — the region that wraps every pane — so
+        // one value re-themes the lot. WinUI resolves every `ThemeResource` brush against
+        // `RequestedTheme`, and the host listens for the change to re-resolve our own
+        // `Theme.*` tokens as well.
         return FlexColumn(
             titleBar,
             new DockManager { Layout = layout }.Flex(grow: 1, basis: 0)
-        ).Backdrop(BackdropKind.Mica);
+        ).Backdrop(BackdropKind.Mica)
+         .RequestedTheme(pinnedTheme ?? ElementTheme.Default);
     }
 
     const string WorkspacePaneKey = "tool:workspace";
