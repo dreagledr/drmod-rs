@@ -103,8 +103,17 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   toggle.
 - The command table is real: a `DataGrid` over generated frames (`CommandTable.cs`), one column per
   script input, 20 000-frame scripts included. Its cells are edited inline through the grid's own
-  editing (`editable: true`, click to open an editor, commit written back to the source). The other
-  two region bodies are still a note.
+  editing (`editable: true`, click to open an editor, commit written back to the source).
+- The script text region is real too (`ScriptTextEditor.cs`): the selected script's `.tas` text in a
+  multiline monospaced `TextBox`, re-read on every keystroke, with what the text parses to — or the
+  line the parser refused — as the line above it (`ScriptTextStatus`). A draft per script lives in
+  the pane's own state (`ScriptDrafts`), so switching scripts keeps what was typed; `MockScriptText`
+  is what an unedited script opens with (two hand-written texts and one generated from the table's
+  own mock frames, clipped at the mod's 3600-frame limit). ⚠️ Three measured traps are in
+  `README.md` (*The script text region*): a `TextBox` reports its lines with a lone `\r`; it fills
+  the region only from a `Grid` star row, not from a flex slot; and its scrollbars have to be turned
+  on through `.Set` (the font rides there for the same reason). The script controls region is still a
+  note.
 - The three script representations round-trip through `Script/`: the API JSON (`ScriptJson`), the
   `.tas` text (`ScriptDsl`) and the table's frames (`ScriptFrames`), around the `ScriptDocument` hub.
   Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and they
@@ -116,6 +125,7 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   in `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in
   `../docs/SCRIPT_DSL.md` and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha
   there before trusting a property initializer to survive deserialization.
-- Next: the remaining two region bodies (wiring the converter into them) and the on-disk workspace —
-  frames are generated, not parsed, and an edited row lives only in memory.
+- Next: the script controls region, the table↔text link (an edit in one seen by the other), and the
+  on-disk workspace — frames are generated, not parsed, and an edited row or draft lives only in
+  memory.
 - The Rust version (`../tas-editor/`) is left untouched; this project is the candidate replacement.

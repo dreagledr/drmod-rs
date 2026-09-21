@@ -7,10 +7,11 @@ React-style component model (components, hooks, keyed lists), no XAML, no bindin
 Status: **two-pane shell with a live command table and the script formats wired.** The window is split
 by a draggable divider — the left pane lists the workspace scripts (the selection is live, the
 management buttons are placeholders), the right pane stacks three regions — script controls, command
-table, script text — with the same drag-resize splitters between them. The command table region is
-filled in (read-only, over mock frames); the other two regions are still a one-line note, and the
-on-disk workspace is the next pass. The three representations of a script — the API JSON, the `.tas`
-text and the table's frames — round-trip through `Script/` (see *Script formats* below).
+table, script text — with the same drag-resize splitters between them. The command table region and
+the script text region are both filled in (editable, over mock data); the script controls region is
+still a one-line note, and the on-disk workspace is the next pass. The three representations of a
+script — the API JSON, the `.tas` text and the table's frames — round-trip through `Script/` (see
+*Script formats* below).
 
 This is the C# version living next to the Rust one (`../tas-editor/`); that one is left untouched.
 Folder conventions — language, component layout, what to run before calling something done —
@@ -25,9 +26,13 @@ tas-editor-cs/
 │   ├── App.cs              # entry point: ReactorApp.Run + docking registration
 │   ├── Editor.cs           # window shell: owns the split and the selection
 │   ├── WorkspacePanel.cs   # left pane — the script list and its management
-│   ├── ScriptPanel.cs      # right pane — the three stacked regions
-│   ├── CommandTable.cs     #   the command table region (read-only DataGrid)
+│   ├── ScriptPanel.cs      # right pane — the three stacked regions, and the drafts
+│   ├── CommandTable.cs     #   the command table region (editable DataGrid)
+│   ├── ScriptTextEditor.cs #   the script text region (`.tas` text + its status line)
+│   ├── ScriptTextStatus.cs #     what a text parses to, or why it does not
 │   ├── ScriptEntry.cs      # the script model
+│   ├── ScriptDrafts.cs     #   the text each script is being edited into
+│   ├── MockScriptText.cs   #   the text a script opens with, while the workspace is not wired
 │   ├── CommandRow.cs       #   one script frame + the generated mock frames
 │   ├── Script/             #   the script formats: model, JSON, DSL text, frames
 │   ├── Assets/ Properties/
@@ -93,6 +98,13 @@ Bare panes come with no chrome at all: the title stays on the pane as identity a
 nowhere. The panes are also pinned shut (`CanClose`, `CanFloat`, `CanMove`, `CanDockAsToolWindow`
 off) for the same reason as the workspace tool window above — a region that can be dragged out
 reaches the docking states this shell does not survive.
+
+The three initial heights are a knob (`180`, `320`, and the last one left open), but the host is what
+resolves them against a window, and it weighs what each pane's *content* asks for. The text region is
+the one that changes its mind — its content is as tall as the script — so a long script pulls height
+away from the table region: measured with the 819-line mock selected, the regions came out ~180 /
+~124 / ~440 DIP, i.e. the table sat at its minimum. That is the host's distribution over content the
+user can see; the splitter is the fix, and there is nothing to hard-code here.
 
 ### The command table
 
@@ -172,6 +184,58 @@ column's editor in place, Enter or a tap elsewhere commits, Esc cancels. What it
 - The frame column stays read-only: no editor, no setter.
 - Dropdown-style flows (validators, `EditMode.Row`) are not wired — the clamp lives in `ReadNumber`
   and an unreadable value is simply ignored.
+
+### The script text region
+
+The bottom region is the `.tas` text of the selected script (`ScriptTextEditor.cs`), edited in place,
+with a status line above it and nothing else. The format and its tokens are in `../docs/SCRIPT_DSL.md`;
+what is here is the editing surface:
+
+- **Typing is the whole editor.** The box is a multiline `TextBox` (`AcceptsReturn`, monospaced, no
+  wrap, spell-check off) — one line is one frame, so a wrapped line would read as two. No Format
+  button, no line numbers, no reset: the text is the source and the converter reads it back.
+- **The status line is a live parse.** Every keystroke re-reads the text (`ScriptTextStatus.Of` →
+  `ScriptDsl.Parse` + the mod's own cross-field limits), and the caption is either the document's
+  summary — `name · N commands · last frame M` — or the converter's message as it stands, in the
+  error color. A 3600-line text re-reads in ~1 ms, so there is nothing to debounce.
+- ⚠️ **The box reports its lines separated by a lone `\r`** (a WinUI `TextBox` normalises its text
+  that way, measured), while the format is `\n`. `ScriptTextEditor.Lines` puts the separator back on
+  the way *into* the parser — never into the stored draft: the draft keeps exactly the bytes the
+  control reported, which is what stops the reconciler writing the text back on every keystroke. The
+  draft is the editor's buffer, not the file; anything written out goes through the converter, which
+  spells the format's own `\n`.
+- **A draft per script, owned by the pane** (`ScriptPanel.Render`, `ScriptDrafts`): switching to
+  another script and back keeps what was typed, because the pane is where the regions that read one
+  script meet — the table will be the second of them. The shell still only decides which script is
+  selected.
+- ⚠️ **The editor takes its height from a `Grid` star row, not from a flex slot.** A `TextBox` hands
+  a `FlexPanel` its *content* height, and Reactor arranges the child at its own WinUI size inside the
+  slot it was given, so `Flex(grow: 1, basis: 0)` leaves the rest of the region empty — measured
+  live: a 92.67 DIP box in a 116.75 DIP slot. `Grid([Star()], [Auto, Star()], …)` with the text in
+  row 1 is what fills it (the Rust sibling's `Grid` with an Auto/STAR pair does the same). Measured
+  after the change: the region 440 DIP, the box 368 of the 408 DIP content area, the remainder the
+  caption row and the padding.
+- ⚠️ **A `TextBox` keeps both scrollbars hidden until told otherwise** — a text taller than the box
+  scrolls (the wheel works) with nothing on screen to say so. The attached `ScrollViewer` properties
+  are the way in, and they land on the `ScrollViewer` inside the template (measured: `Auto`, local,
+  12 DIP wide once the 20 000-frame script's text was in). They ride in a `.Set`, together with the
+  monospace font — see the two notes below.
+- ⚠️ **The font and the scrollbars are set through `.Set`, not modifiers.** `.FontFamily(…)` resolves
+  the name into a `FontFamily` WinRT object while the element is *built*, which throws `COMException`
+  in the headless unit layer — the `.SemiBold()` trap, measured again here. A setter runs against the
+  mounted control instead, which only the app has. The cost is the usual one for `.Set`: what it
+  writes is not something the headless tests can assert, so the scrollbar and the font are pinned by
+  the live measurements above, not by a test.
+- **The text a script opens with is a mock** (`MockScriptText`): `blade-run` and `barrier-flight` are
+  hand-written, in the fixture style, and deliberately inside the frame counts the list shows. The
+  20 000-frame `lightning-strike` is generated — its own table frames, collapsed to commands and
+  written by the DSL, clipped at the mod's 3600-frame limit (`ScriptJson.MaxFrames`), with the clip
+  spelled out as a `#` comment in the text. Measured on that stub: 15 191 characters, 819 lines, 816
+  commands. The list's 20 000 and the text's ≤3600 are two mocks of different sizes meeting in one
+  row — the grid keeps its 20 000-row load test, the text its real limit.
+- Frames for the *table* and text for the *editor* come from the same mock frames, and neither reads
+  the other at render time: the two regions are still unlinked, so an edit in one is not seen by the
+  other. That wiring, and the on-disk workspace behind it, is the next pass.
 
 ### Theme
 

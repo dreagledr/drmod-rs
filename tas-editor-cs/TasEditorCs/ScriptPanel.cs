@@ -1,5 +1,7 @@
+using System;
+using System.Collections.Generic;
 using Microsoft.UI.Reactor;
-using Microsoft.UI.Reactor.Core;
+using Microsoft.UI.Reactor.Core;    // UseReducer
 using Microsoft.UI.Reactor.Docking; // DockManager, DockSplit, Document, DockNode
 using Microsoft.UI.Xaml.Controls;   // Orientation
 using static Microsoft.UI.Reactor.Factories;
@@ -8,19 +10,34 @@ sealed record ScriptPanelProps(ScriptEntry? Script);
 
 /// Right pane: the one selected script.
 ///
-/// The body is three regions stacked top to bottom — script controls, command table,
-/// script text — separated by the docking host's drag-resize splitters. The command table is
-/// real (read-only, on mock frames); the other two still carry a note, and the set of panes is
-/// fixed, so the host keeps its own split ratios across renders and the selection only decides
-/// what the regions read.
+/// The body is three regions stacked top to bottom — script controls, command table, script text
+/// — separated by the docking host's drag-resize splitters. The table is real (editable, over
+/// mock frames) and so is the text region (the `.tas` text, read back on every keystroke); the
+/// controls region still carries a note, and the set of panes is fixed, so the host keeps its own
+/// split ratios across renders and the selection only decides what the regions read.
+///
+/// The drafts a script is edited into are this pane's own state: they belong to the regions that
+/// read the same script — the text now, the table once it is wired to it — while the shell keeps
+/// deciding no more than which script is selected.
 sealed class ScriptPanel : Component<ScriptPanelProps>
 {
-    public override Element Render() => View(Props.Script);
+    public override Element Render()
+    {
+        var script = Props.Script;
+        var (drafts, updateDrafts) = UseReducer<IReadOnlyDictionary<string, string>>(ScriptDrafts.Empty);
+
+        return View(
+            script,
+            script is null ? string.Empty : ScriptDrafts.Resolve(drafts, script),
+            // A keystroke can only come from the text region, which exists only while a script is
+            // selected, so the id is the selected script's by construction.
+            typed => updateDrafts(current => ScriptDrafts.With(current, script!.Id, typed)));
+    }
 
     /// The pane body. Split out of the component because `Component<TProps>.Props` is
     /// read-only and set by the host, so a headless unit test has no way to render the
     /// component itself — it asserts on this instead.
-    internal static Element View(ScriptEntry? script)
+    internal static Element View(ScriptEntry? script, string text, Action<string> textChanged)
     {
         if (script is null)
         {
@@ -39,7 +56,7 @@ sealed class ScriptPanel : Component<ScriptPanelProps>
             Region(CommandTableKey, "Command table", 320,
                 Component<CommandTable, CommandTableProps>(new CommandTableProps(script))),
             Region(ScriptTextKey, "Script text", null,
-                Placeholder("The JSON view of the script comes next.")),
+                Component<ScriptTextEditor, ScriptTextEditorProps>(new ScriptTextEditorProps(text, textChanged))),
         });
 
         // A docked pane body is content-sized unless it is told to grow — the wrapper is

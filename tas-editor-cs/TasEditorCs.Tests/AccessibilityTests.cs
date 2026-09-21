@@ -18,8 +18,18 @@ public class AccessibilityTests
     [Fact]
     public void The_script_pane_has_no_unnamed_icon_only_button()
     {
-        var view = ScriptPanel.View(new ScriptEntry("s1", "blade-run", 42));
+        var view = ScriptPanel.View(new ScriptEntry("s1", "blade-run", 42), string.Empty, _ => { });
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
+    }
+
+    [Fact]
+    public void The_script_text_region_names_its_editor()
+    {
+        // A bare text box has no caption of its own, and the line above it is a status message
+        // rather than a label — so the automation name is what names the field.
+        var view = ScriptTextEditor.View("0 a\n", _ => { }, ScriptTextStatus.Of("0 a\n"));
+
+        Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_003");
     }
 }

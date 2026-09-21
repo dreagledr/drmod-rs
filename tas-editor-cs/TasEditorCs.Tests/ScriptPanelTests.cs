@@ -42,20 +42,29 @@ public class ScriptPanelTests
     }
 
     [Fact]
+    public void The_script_text_region_hosts_the_editor_on_the_text_it_was_given()
+    {
+        // The pane is handed the text rather than reading the mock itself: which drafts exist and
+        // which one a script opens with is the pane component's state, and that is what the
+        // headless layer cannot render.
+        var editor = Assert.IsType<ComponentElement<ScriptTextEditorProps>>(
+            Regions(Split(new ScriptEntry("s1", "blade-run", 42), "0 a\n")).ElementAt(2).Content);
+
+        Assert.Equal("0 a\n", editor.Props.Text);
+    }
+
+    [Fact]
     public void Says_so_when_nothing_is_selected()
     {
-        var children = Assert.IsType<FlexElement>(ScriptPanel.View(null)).Children;
+        var children = Assert.IsType<FlexElement>(ScriptPanel.View(null, string.Empty, _ => { })).Children;
 
         Assert.Single(children);
         Assert.Equal("No script selected.", Text(children[0]));
     }
 
-    static DockSplit Split(ScriptEntry? script)
-    {
-        var root = Assert.IsType<FlexElement>(ScriptPanel.View(script));
-        var manager = Assert.IsType<DockManager>(Assert.Single(root.Children));
-        return Assert.IsType<DockSplit>(manager.Layout);
-    }
+    static DockSplit Split(ScriptEntry? script, string text = "") =>
+        Assert.IsType<DockSplit>(Assert.IsType<DockManager>(
+            Assert.Single(Assert.IsType<FlexElement>(ScriptPanel.View(script, text, _ => { })).Children)).Layout);
 
     static IEnumerable<Document> Regions(DockSplit split) => split.Children.OfType<Document>();
 
