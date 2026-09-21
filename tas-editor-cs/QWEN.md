@@ -98,6 +98,7 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
 ## Status
 
 - Two-pane window shell: the left pane lists the workspace scripts (selection live, management
-  buttons are placeholders), the right pane shows the selected script.
-- Next: the frame timeline, the per-frame properties strip, the JSON editor, the on-disk workspace.
+  buttons are placeholders), the right pane stacks three regions — script controls, command table,
+  script text — with the docking splitters between them (every region body is still a note).
+- Next: the three region bodies, the on-disk workspace.
 - The Rust version (`../tas-editor/`) is left untouched; this project is the candidate replacement.

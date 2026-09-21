@@ -6,8 +6,9 @@ React-style component model (components, hooks, keyed lists), no XAML, no bindin
 
 Status: **two-pane shell with stub panes.** The window is split by a draggable divider — the left
 pane lists the workspace scripts (the selection is live, the management buttons are placeholders),
-the right pane shows the selected script. The frame timeline, the per-frame properties strip, the
-JSON editor and the on-disk workspace are the next passes.
+the right pane stacks three regions — script controls, command table, script text — with the same
+drag-resize splitters between them, each region still a one-line note. The three region bodies and
+the on-disk workspace are the next passes.
 
 This is the C# version living next to the Rust one (`../tas-editor/`); that one is left untouched.
 Folder conventions — language, component layout, what to run before calling something done —
@@ -22,7 +23,7 @@ tas-editor-cs/
 │   ├── App.cs              # entry point: ReactorApp.Run + docking registration
 │   ├── Editor.cs           # window shell: owns the split and the selection
 │   ├── WorkspacePanel.cs   # left pane — the script list and its management
-│   ├── ScriptPanel.cs      # right pane — the selected script
+│   ├── ScriptPanel.cs      # right pane — the three stacked regions
 │   ├── ScriptEntry.cs      # the script model
 │   ├── Assets/ Properties/
 │   └── TasEditorCs.csproj
@@ -72,6 +73,21 @@ own state every render. Shape is the arrangement the user dragged into existence
 and matches the two by pane `Key`. Feeding the host's live layout back into our own state
 double-owns the shape and breaks re-docking, tab switching and splitter drags.
 
+### The three regions inside the right pane
+
+`ScriptPanel.cs` is a second `DockManager` nested inside the shell's document pane: a
+`DockSplit(Orientation.Vertical, …)` of three panes, one per region. `Orientation.Vertical` is what
+makes the bars between the children horizontal, and it is the same framework splitter as the
+divider between the shell's two panes.
+
+A `DockSplit` child may be a **bare pane** (`Document` / `ToolWindow`), not just a `DockTabGroup` —
+that is what the regions are. A group always renders a tab strip whose captions are the pane
+titles, so a group would put a `Script controls` label above a region that only wanted a splitter.
+Bare panes come with no chrome at all: the title stays on the pane as identity and is painted
+nowhere. The panes are also pinned shut (`CanClose`, `CanFloat`, `CanMove`, `CanDockAsToolWindow`
+off) for the same reason as the workspace tool window above — a region that can be dragged out
+reaches the docking states this shell does not survive.
+
 ## Publish
 
 ```bash
@@ -116,6 +132,9 @@ layout was checked while building it:
 mur devtools screenshot --window main --out shot.png
 mur devtools tree --window main --view summary
 ```
+
+The verbs drive UIA, and there is no pointer-drag verb among them: that a splitter renders can be
+checked from here, moving it cannot — a drag-resize splitter stays a by-hand check.
 
 The endpoint is HTTP at `http://127.0.0.1:<port>/mcp`, and it is **locked with a per-launch bearer
 token**: the server generates a fresh one on every start and writes it — with the endpoint, the pid

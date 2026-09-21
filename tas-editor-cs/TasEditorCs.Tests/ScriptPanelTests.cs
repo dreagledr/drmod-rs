@@ -1,4 +1,6 @@
 using Microsoft.UI.Reactor.Core;
+using Microsoft.UI.Reactor.Docking;
+using Microsoft.UI.Xaml.Controls;
 
 namespace TasEditorCs.Tests;
 
@@ -8,25 +10,47 @@ namespace TasEditorCs.Tests;
 public class ScriptPanelTests
 {
     [Fact]
-    public void Shows_the_selected_script()
+    public void Stacks_three_bare_panes_top_to_bottom()
     {
-        var children = Children(new ScriptEntry("s1", "blade-run", 42));
+        var split = Split(new ScriptEntry("s1", "blade-run", 42));
 
-        Assert.Equal("blade-run", Text(children[0]));
-        Assert.Equal("42 frames", Text(children[1]));
+        Assert.Equal(Orientation.Vertical, split.Orientation);
+        // Bare panes, never tab groups: a group would render a tab strip around the region.
+        Assert.Equal(
+            new object[] { "script:controls", "script:table", "script:text" },
+            Regions(split).Select(region => region.Key));
+        // The first two carry an initial height; the last one takes what is left of the pane.
+        Assert.Equal(new double?[] { 180, 320, null }, Regions(split).Select(region => region.Height));
+    }
+
+    [Fact]
+    public void The_script_controls_region_names_the_selected_script()
+    {
+        var split = Split(new ScriptEntry("s1", "blade-run", 42));
+
+        Assert.Contains("42 frames", Text(RegionBody(split, 0).Children[0]));
     }
 
     [Fact]
     public void Says_so_when_nothing_is_selected()
     {
-        var children = Children(null);
+        var children = Assert.IsType<FlexElement>(ScriptPanel.View(null)).Children;
 
         Assert.Single(children);
         Assert.Equal("No script selected.", Text(children[0]));
     }
 
-    static Element[] Children(ScriptEntry? script) =>
-        Assert.IsType<FlexElement>(ScriptPanel.View(script)).Children;
+    static DockSplit Split(ScriptEntry? script)
+    {
+        var root = Assert.IsType<FlexElement>(ScriptPanel.View(script));
+        var manager = Assert.IsType<DockManager>(Assert.Single(root.Children));
+        return Assert.IsType<DockSplit>(manager.Layout);
+    }
+
+    static IEnumerable<Document> Regions(DockSplit split) => split.Children.OfType<Document>();
+
+    static FlexElement RegionBody(DockSplit split, int index) =>
+        Assert.IsType<FlexElement>(Regions(split).ElementAt(index).Content);
 
     static string? Text(Element element) => Assert.IsType<TextBlockElement>(element).Content;
 }

@@ -1,14 +1,18 @@
 using Microsoft.UI.Reactor;
 using Microsoft.UI.Reactor.Core;
+using Microsoft.UI.Reactor.Docking; // DockManager, DockSplit, Document, DockNode
+using Microsoft.UI.Xaml.Controls;   // Orientation
 using static Microsoft.UI.Reactor.Factories;
 
 sealed record ScriptPanelProps(ScriptEntry? Script);
 
-/// Right pane: information about, and controls for, the one selected script.
+/// Right pane: the one selected script.
 ///
-/// Stub — name and size only. The frame timeline, the per-frame properties strip and the
-/// JSON editor are the next passes; this pane exists so the split has something real on
-/// the right-hand side.
+/// The body is three regions stacked top to bottom — script controls, command table,
+/// script text — separated by the docking host's drag-resize splitters. Stub: each region
+/// carries only a note, and the three bodies are the next passes. The set of panes is
+/// fixed, so the host keeps its own split ratios across renders and the selection only
+/// decides what the regions will read.
 sealed class ScriptPanel : Component<ScriptPanelProps>
 {
     public override Element Render() => View(Props.Script);
@@ -25,15 +29,52 @@ sealed class ScriptPanel : Component<ScriptPanelProps>
                 .Flex(grow: 1);
         }
 
-        return (FlexColumn(
-            Heading(script.Name),
-            Caption($"{script.Frames} frames"),
-            Border(Caption("Timeline, properties and JSON editor come next."))
-                .Padding(12)
-                .CornerRadius(4)
-                .Background(Theme.CardBackground)
-        ) with { RowGap = 12 })
-        .FlexPadding(16)
-        .Flex(grow: 1);
+        // Orientation.Vertical means the splitters between the children are horizontal
+        // bars. Initial heights belong on the panes — the split's direct children — and
+        // only the last one is left open so it takes what the others do not.
+        var regions = new DockSplit(Orientation.Vertical, new DockNode[]
+        {
+            Region(ScriptControlsKey, "Script controls", 180,
+                Placeholder($"{script.Frames} frames — name, trigger and restart policy come next.")),
+            Region(CommandTableKey, "Command table", 320,
+                Placeholder("The frame × action grid comes next.")),
+            Region(ScriptTextKey, "Script text", null,
+                Placeholder("The JSON view of the script comes next.")),
+        });
+
+        // A docked pane body is content-sized unless it is told to grow — the wrapper is
+        // what makes the three regions fill the pane instead of collapsing to their
+        // desired height at the top of it.
+        return FlexColumn(
+            new DockManager { Layout = regions }.Flex(grow: 1, basis: 0)
+        ).Flex(grow: 1);
     }
+
+    const string ScriptControlsKey = "script:controls";
+    const string CommandTableKey = "script:table";
+    const string ScriptTextKey = "script:text";
+
+    /// One region of the body: a bare pane rather than a tab group, because a group always
+    /// carries a tab strip and the only thing we want around a region is its splitter.
+    ///
+    /// Nothing here closes, floats or drags either — the regions are fixed and only the
+    /// splitters between them move, which keeps the pane out of the docking states the
+    /// shell does not survive (see `Editor.cs` and `README.md`).
+    static DockNode Region(string key, string title, double? height, Element body) =>
+        new Document
+        {
+            Title = title,
+            Key = key,
+            Content = body,
+            Height = height,
+            CanClose = false,
+            CanFloat = false,
+            CanMove = false,
+            CanDockAsToolWindow = false,
+        };
+
+    static Element Placeholder(string note) =>
+        FlexColumn(Caption(note))
+            .FlexPadding(12)
+            .Flex(grow: 1);
 }
