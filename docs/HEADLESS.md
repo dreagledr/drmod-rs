@@ -109,6 +109,12 @@ py -3 tools/disasm/disasm.py --rva 0x64F560 --len 0x100   # тик симуля�
 `skip_draw`: патчить пролог функции из HTTP-потока нельзя — она может исполняться
 прямо в этот момент.
 
+**Тесты.** `cargo test --lib` (6 тестов) — в том числе
+`render_hooks::tests::slots_match_disassembly` (индексы слотов vtable сверяются с
+дизассемблером: `Present` `+0x44`, `EndScene` `+0xA8`) и
+`skip_flags_round_trip`. Оффлайн-проверка перед живой: `cargo build`
+(debug + release) и `cargo clippy --all-targets` без новых замечаний.
+
 ## 3. Как пользоваться
 
 ```powershell

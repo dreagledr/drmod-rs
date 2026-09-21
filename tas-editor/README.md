@@ -137,7 +137,7 @@ pwsh -File pack.ps1 -Build -Zip
 | `Microsoft.Web.WebView2.Core.dll` | нужен только приложениям с XAML-контролом WebView2 (`-IncludeWebView2`) |
 | языковые каталоги не из `-KeepCultures` | по умолчанию остаются `en-us`, `ru-RU`; `-KeepCultures all` — все (~3.5 МБ) |
 
-Итог — **~56 МБ** вместо ~117 МБ. Флаги: `-Profile debug|release`, `-OutDir DIR`,
+Итог — **~56 МБ** вместо ~117 МБ (zip — ≈20 МБ). Флаги: `-Profile debug|release`, `-OutDir DIR`,
 `-KeepCultures en-us,ru-RU|all`, `-IncludeWebView2`, `-Build`, `-Zip`.
 
 Скрипт идемпотентен и падает с ненулевым кодом, если нет exe или в поставке не оказалось обязательного ядра
@@ -152,6 +152,33 @@ pwsh -File pack.ps1 -Build -Zip
 Файл фиксирует `x86_64-pc-windows-msvc`: корневой конфиг drmod-rs задаёт `i686-pc-windows-msvc` (32-битная
 игра), а WinUI 3 / Windows App SDK под i686 не собирается. Крейт — собственный `[workspace]`, в корневой
 workspace не входит (как `mods/cutscene_skip`).
+
+## Грабли Reactor (найдены при отладке, 2026-09-20)
+
+- **Дети `Grid` без явного `grid_row`/`grid_column` схлопываются в (0,0)** и
+  накладываются друг на друга — проставлять всем. Методы-расширения (`grid_row`,
+  `grid_column`, `width`/`height`, `tooltip`) есть только у контролов
+  (`LayoutControl`), не у `View`: `View` позиционируется через
+  `Border::new().grid_row(n).content(view)`.
+- `content()`/`slot()`/`collection_slot()`/`tooltip()` возвращают `View` и
+  **завершают цепочку** (`.content(x).on_click(..)` не скомпилируется); для
+  нескольких слотов — `.slots([SlotView::new(..)])`; `slot()` перезаписывает
+  предыдущий.
+- `Vec<View>` **не** реализует `IntoViews` (поддерживаются `()`, `[T; N]` и
+  кортежи до 15): строки таблицы с переменным числом ячеек — через
+  `std::array::from_fn` → `[View; N]`.
+- `Grid`/`StackPanel` не имеют `padding` (он у `Border`); `Thickness` — не
+  структура с полями, а кортеж: `Thickness::new(l, t, r, b)`/`uniform`/`xy`.
+- `TextBox` с `accepts_return(true)` **остаётся однострочным** (виден только первый
+  фрагмент до `\n`) → для многострочного JSON брать `RichEditBox`.
+  `RichEditBox` отвечает событием на каждую программную установку текста и всегда
+  дописывает завершающий CR: помнить форму, которую вернул контрол
+  (`text_for_control`), подавать ровно её и не трогать модель, если
+  нормализованный текст не изменился (иначе ввод затирается).
+- Перетаскивание требует `capture_pointer_on_press(true)`: без захвата указателя
+  `PointerMoved` приходит только пока курсор над элементом, и драг «отваливается»
+  на первом же смещении.
+- `GridLength::Pixel`/`Star(f64)`/`Auto` доступны; `GridLength::STAR` = `Star(1.0)`.
 
 ## Что читать по Reactor
 
