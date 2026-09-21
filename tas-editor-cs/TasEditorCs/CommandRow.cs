@@ -25,37 +25,44 @@ sealed record CommandRow(
 }
 
 /// The boolean inputs a frame can hold, in column order. `Key` is the script's `input` key
-/// (`docs/API.md` §4.2), `Label` the 1-2 letter column header that fits an 18 px column.
+/// (`docs/API.md` §4.2 in the sibling repo), `Label` the column header.
+///
+/// The header **is** the token the script DSL spells that input with (`docs/SCRIPT_DSL.md`), so
+/// the table doubles as the text format's legend. Two consequences worth knowing: the four
+/// movement flags (`fu`/`fd`/`fl`/`fr`) have a header but no token of their own — the DSL carries
+/// movement as the stick — and the names follow the console pad that the mod emulates (`a` jump,
+/// `b` zandatsu, `x` light attack, `y` heavy attack, triggers as `lt`/`rt`, the D-pad as
+/// `du`/`dd`/`dl` and its menu twin as `mu`/`md`/`ml`/`mr`).
 internal static class CommandKeys
 {
     internal static readonly (string Key, string Label)[] All =
     [
-        ("forward", "F"),
-        ("backward", "B"),
-        ("left", "L"),
-        ("right", "R"),
-        ("jump", "J"),
-        ("light_attack", "A"),
-        ("heavy_attack", "H"),
-        ("ripper", "RP"),
-        ("blade", "BL"),
-        ("ninja_run", "NR"),
-        ("walk", "WK"),
-        ("dodge", "DG"),
-        ("lock_on", "LK"),
-        ("subweapon", "SW"),
-        ("item", "IT"),
-        ("ar_mode", "AR"),
-        ("weapon_select", "WS"),
-        ("codec", "CD"),
-        ("zandatsu", "ZD"),
-        ("camera_reset", "CR"),
-        ("pause", "PS"),
-        ("confirm", "OK"),
-        ("menu_up", "MU"),
-        ("menu_down", "MD"),
-        ("menu_left", "ML"),
-        ("menu_right", "MR"),
+        ("forward", "fu"),
+        ("backward", "fd"),
+        ("left", "fl"),
+        ("right", "fr"),
+        ("jump", "a"),
+        ("light_attack", "x"),
+        ("heavy_attack", "y"),
+        ("ripper", "lr"),
+        ("blade", "lt"),
+        ("ninja_run", "rt"),
+        ("walk", "wk"),
+        ("dodge", "ax"),
+        ("lock_on", "rb"),
+        ("subweapon", "lb"),
+        ("item", "dd"),
+        ("ar_mode", "du"),
+        ("weapon_select", "dl"),
+        ("codec", "cd"),
+        ("zandatsu", "b"),
+        ("camera_reset", "r"),
+        ("pause", "esc"),
+        ("confirm", "ok"),
+        ("menu_up", "mu"),
+        ("menu_down", "md"),
+        ("menu_left", "ml"),
+        ("menu_right", "mr"),
     ];
 
     /// The bit mask for a set of `input` keys, e.g. `Mask("forward", "ninja_run")`. Throws on

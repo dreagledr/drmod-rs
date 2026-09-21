@@ -1,0 +1,12 @@
+[package]
+name = "drmod-script-gen"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "script_gen"
+path = "src/main.rs"
+
+[dependencies]
+drmod-replay-types = { path = "../../replay-types" }
+serde_json = "1"

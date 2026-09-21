@@ -8,10 +8,11 @@ A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**
 - **Library (`drmod_rs_lib`)**: DX9 hook + ImGui overlay, reads game memory live
 - **Server (`server/`)**: multiplayer relay (axum 0.8 + tokio, Docker, 64-bit)
 - **Protocol (`protocol/`)**: shared TCP (JSON) and UDP (binary `PositionPacket`) types
-- **Replay-types (`replay-types/`)**: shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout of replay BLOBs; `input_bits` — action bits in `InputUnit`; `key_codes` — encoding of game key codes in `m_aKeysDown` words (bit order reversed: `0x8000_0000 >> (code & 31)`)
+- **Replay-types (`replay-types/`)**: shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout of replay BLOBs; `input_bits` — action bits in `InputUnit`; `key_codes` — encoding of game key codes in `m_aKeysDown` words (bit order reversed: `0x8000_0000 >> (code & 31)`); `script` — DTO of the `POST /script/run` body (`ScriptRequest`/`ScriptCommand`/`ScriptInput`/`ScriptTrigger`/`RestartSpec`/`EnemyCondition` + `MAX_SCRIPT_FRAMES`), shared by the mod and `tools/script_gen`
 - **dbdump (`tools/dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script)
+- **script_gen (`tools/script_gen/`)**: generates the JSON script fixtures for the editor's round-trip tests out of the shared DTOs (`replay-types::script`) and accepts the editor's own JSON back — `tools/script_gen/README.md`
 - **TAS Editor (`tas-editor/`)**: desktop TAS editor on WinUI 3 (`windows-reactor`, Rust, self-contained x64) — UI mock for now
-- **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT; two-pane shell with a virtualized command table over mock frames, edited inline. ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
+- **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT; two-pane shell with a virtualized command table over mock frames, edited inline, and the script converter (API JSON ⇄ `.tas` text ⇄ table frames). ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
 - **Mod `mods/cutscene_skip/`**: standalone crate — in-engine cutscene skip (launcher + embedded DLL, no imgui/networking)
 
 Features:
@@ -37,6 +38,7 @@ Deep dives and chronicles live in `docs/` and the tool READMEs — this file onl
 | Verified input hypotheses and pitfalls | `docs/REPLAY_FINDINGS.md` |
 | What the record write breakpoint found | `docs/REPLAY_CROSS_REVIEW.md` |
 | API input status (what is ✅, what is open) | `docs/INPUT_STATUS.md` |
+| Script DSL (`.tas` text ⇄ JSON ⇄ frames) | `docs/SCRIPT_DSL.md` |
 | Record→Playback desync | `docs/DESYNC_ANALYSIS.md` |
 | Enemies: addresses, part hierarchy, AI and RNG | `docs/ENEMY_TRACKING.md` |
 | Phases/subphases, console menu with Skip | `docs/PHASE.md` |
@@ -44,10 +46,11 @@ Deep dives and chronicles live in `docs/` and the tool READMEs — this file onl
 | Core-script tuning (chronicle, dead ends) | `docs/SCRIPT_TUNING.md` |
 | Project-wide "what does not work" summary | `docs/PITFALLS.md` |
 | dbdump: columns, `--script` | `tools/dbdump/README.md` |
+| script_gen: script fixtures for the editor, order of format changes | `tools/script_gen/README.md` |
 | script_tuning: tools, reference recipe | `tools/script_tuning/README.md` |
 | cutscene_skip mod: launcher, flags, status | `mods/cutscene_skip/README.md` |
 | TAS Editor: UI, packaging, Reactor gotchas | `tas-editor/README.md` |
-| TAS Editor (C#): local conventions, language, one-component-per-file, PRI publish gotcha | `tas-editor-cs/QWEN.md`, `tas-editor-cs/README.md` |
+| TAS Editor (C#): local conventions, language, one-component-per-file, script converter, PRI publish gotcha | `tas-editor-cs/QWEN.md`, `tas-editor-cs/README.md` |
 
 ## Architecture
 
@@ -80,10 +83,11 @@ src/
 │   └── types.rs     #   Re-export of replay-types DTOs + ReplayFrame/internal types
 server/              # Multiplayer server (axum 0.8 + tokio, 64-bit, Docker)
 protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPacket)
-replay-types/        # Shared replay DTOs + to_bytes/from_bytes + input_bits
+replay-types/        # Shared replay DTOs + to_bytes/from_bytes + input_bits + script DTOs
 tools/
 ├── demo/            # TAS demo: demo_r03_tas.py — runs the first R-03 segment 3 times (`--headless`/`--uncapped`)
 ├── dbdump/          # Replay frames → CSV/Parquet + --script (HTTP API JSON) (x64, own .cargo/config.toml)
+├── script_gen/      # Script JSON fixtures for tas-editor-cs round-trip tests (x64, own .cargo/config.toml)
 ├── desync_analysis/ # pandas scripts analyzing Record→Playback desync (CSV from dbdump)
 ├── script_tuning/   # Core-script timing and cutscene-skip scripts (python) — see tools/script_tuning/README.md
 └── disasm/          # Disassembly scripts: scan_srm, disasm (llvm-objdump by RVA), find_vtable, find_strings, peek, mem_find_u32
@@ -261,9 +265,9 @@ cargo run --release -- -n "Custom Window Name.exe"
 | `chrono` (0.4.45) | Time formatting for run timestamps |
 | `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol and HTTP API |
 | `drmod-protocol` | Shared types for client-server communication |
-| `drmod-replay-types` | Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) + `to_bytes`/`from_bytes` + `input_bits` (`InputUnit` bits) |
+| `drmod-replay-types` | Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) + `to_bytes`/`from_bytes` + `input_bits` (`InputUnit` bits) + `script` (the `POST /script/run` DTO, shared with `tools/script_gen`) |
 
-`tools/dbdump` additionally pulls (for itself only, x64): `rusqlite`, `csv`, `arrow` + `parquet` (59.x) — CSV/Parquet export; `serde` + `serde_json` — `--script` mode (JSON for the HTTP API).
+`tools/dbdump` additionally pulls (for itself only, x64): `rusqlite`, `csv`, `arrow` + `parquet` (59.x) — CSV/Parquet export; `serde` + `serde_json` — `--script` mode (JSON for the HTTP API). `tools/script_gen` pulls (x64): `drmod-replay-types` + `serde_json` — script fixtures for the editor.
 
 ### Notes
 
@@ -276,6 +280,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 - **Record→Playback desync** (`docs/DESYNC_ANALYSIS.md`): the main source is a **one-frame input feed lag** — a render(K) override lands on tick K+1 — plus Present↔tick phase uncertainty. Fixed by feeding frames from the `updateInputUnit` detour (`replay::PLAYBACK_FEED`) plus heading compensation (`rsx_correction`) → **record 110 → 111/112/113/114: 4/4 success, |Δpos| 0.7–1.0 m, |Δyaw| median 0.12–0.26°**.
 - **Two game copies on one machine do not work**: the second MGR:R copy dies with exit code 0 ~100 ms after `steam_api.dll` loads; saves are Steam Cloud, one file per (steamid, appid) pair. `docs/PITFALLS.md`.
 - **dbdump** (`tools/dbdump/`): Record/Playback frames → CSV/Parquet (90 flat columns, incl. the nearest enemy as `enemy_*`) and `--script` (recording → JSON for `POST /script/run`). x64-only and self-contained in its directory (arrow-rs is 64-bit; the root `cargo build` skips it) — `tools/dbdump/README.md`.
+- **Script DSL and the converter** (`docs/SCRIPT_DSL.md`): a script has three representations — the API JSON (`POST /script/run`), the `.tas` text (one line per frame; tokens are console pad names — `a`/`x`/`y`/`b`, `lt`/`rt`/`lb`/`rb`, `lr`, `ax`, `du`…`mr`, `ok`, `esc`, `cd`, `wk` — which are also the command table's column headers, and movement is the stick: `ls:<angle>` on the compass, `lsx`/`lsy` exact values, `wk` halving) and the command table's frames. JSON is the only complete one: `raw_key`, `dik_key` and `when_enemy` have no text spelling and no column, so writing them out as text is an error rather than a silent loss, and a `forward` flag is written as the stick it stands for. The DTO lives in `replay-types/src/script.rs` (shared by the mod and the tool, so the generated JSON is accepted by construction); `tools/script_gen` (Rust) writes the JSON fixtures into `tas-editor-cs/TasEditorCs.Tests/Fixtures/`, the editor writes `.expected.json`/`.expected.tas` goldens next to them, and a Rust test deserializes the editor's JSON with the mod's own types. Order of changes and commands — `tools/script_gen/README.md`.
 - **script_tuning** (`tools/script_tuning/`, python): core-script timings for the `P310_RESTART` barrier flight, run speedup (`/dt` + `/fps`), restart/menu/fail-recovery automation, cutscene skip — `tools/script_tuning/README.md`, `docs/SCRIPT_TUNING.md`, `docs/PITFALLS.md`.
 - **`mods/cutscene_skip/`** (standalone crate, not in the root workspace): cutscene-skip port without imgui/hudhook-dx9/API/networking — launcher `cutscene_skip.exe` + embedded DLL, per-frame entry point is a MinHook on `updateFrameTime` (`0xA03970`). `mods/cutscene_skip/README.md`.
 - **`tas-editor/`** (standalone crate: own `[workspace]`, `target/` and x64 `.cargo/config.toml` — the root forces i686, which WinUI 3 does not build for; lives at the repo root, not `tools/`): WinUI 3 via `windows-reactor` **0.100**, declarative, no XAML, **self-contained** via `windows-reactor-setup` in `build.rs`. `cargo run --release` to run, `pwsh -File pack.ps1 -Build -Zip` to ship (~56 MB, zip ≈20 MB). Status: UI mock; the on-disk workspace (`src/workspace.rs`) is not wired up. ⚠️ Self-contained gotchas (a truncated `.nupkg` = "green" build with no runtime) and Reactor rendering — `tas-editor/README.md`.

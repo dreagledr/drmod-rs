@@ -7,6 +7,10 @@
 
 use serde::Serialize;
 
+/// DTO скрипта ввода (`POST /script/run`) — общие для мода и инструментов:
+/// мод десериализует запрос, `tools/script_gen` генерирует фикстуры.
+pub mod script;
+
 /// Нормализованный ввод игрока (cInput::InputUnit).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Serialize)]

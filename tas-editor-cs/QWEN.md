@@ -105,6 +105,17 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   script input, 20 000-frame scripts included. Its cells are edited inline through the grid's own
   editing (`editable: true`, click to open an editor, commit written back to the source). The other
   two region bodies are still a note.
-- Next: the remaining two region bodies and the on-disk workspace — frames are generated, not parsed,
-  and an edited row lives only in memory.
+- The three script representations round-trip through `Script/`: the API JSON (`ScriptJson`), the
+  `.tas` text (`ScriptDsl`) and the table's frames (`ScriptFrames`), around the `ScriptDocument` hub.
+  Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and they
+  are exactly what the command table heads its columns with — so **a column, its JSON key and its
+  token have to be renamed together**. Movement is the stick there (`ls:<angle>` on the compass,
+  `lsx`/`lsy` exact values, `wk` halving); a direction flag from a JSON script is written as the stick
+  it stands for, and the table's four movement columns therefore light up only for JSON-sourced
+  frames. Fixtures come from the Rust tool `tools/script_gen`, the editor's goldens sit next to them
+  in `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in
+  `../docs/SCRIPT_DSL.md` and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha
+  there before trusting a property initializer to survive deserialization.
+- Next: the remaining two region bodies (wiring the converter into them) and the on-disk workspace —
+  frames are generated, not parsed, and an edited row lives only in memory.
 - The Rust version (`../tas-editor/`) is left untouched; this project is the candidate replacement.

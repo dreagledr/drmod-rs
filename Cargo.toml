@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace]
-members = ["protocol", "server", "replay-types", "tools/dbdump"]
+members = ["protocol", "server", "replay-types", "tools/dbdump", "tools/script_gen"]
 
 [dependencies]
 drmod-protocol = { path = "protocol" }

@@ -4,12 +4,13 @@ Desktop TAS editor for Metal Gear Rising: Revengeance on **WinUI 3** through
 [`Microsoft.UI.Reactor`](https://microsoft.github.io/microsoft-ui-reactor/) — a declarative
 React-style component model (components, hooks, keyed lists), no XAML, no bindings, no ViewModels.
 
-Status: **two-pane shell with a live command table.** The window is split by a draggable divider —
-the left pane lists the workspace scripts (the selection is live, the management buttons are
-placeholders), the right pane stacks three regions — script controls, command table, script text —
-with the same drag-resize splitters between them. The command table region is filled in (read-only,
-over mock frames); the other two regions are still a one-line note, and the on-disk workspace is the
-next pass.
+Status: **two-pane shell with a live command table and the script formats wired.** The window is split
+by a draggable divider — the left pane lists the workspace scripts (the selection is live, the
+management buttons are placeholders), the right pane stacks three regions — script controls, command
+table, script text — with the same drag-resize splitters between them. The command table region is
+filled in (read-only, over mock frames); the other two regions are still a one-line note, and the
+on-disk workspace is the next pass. The three representations of a script — the API JSON, the `.tas`
+text and the table's frames — round-trip through `Script/` (see *Script formats* below).
 
 This is the C# version living next to the Rust one (`../tas-editor/`); that one is left untouched.
 Folder conventions — language, component layout, what to run before calling something done —
@@ -28,9 +29,11 @@ tas-editor-cs/
 │   ├── CommandTable.cs     #   the command table region (read-only DataGrid)
 │   ├── ScriptEntry.cs      # the script model
 │   ├── CommandRow.cs       #   one script frame + the generated mock frames
+│   ├── Script/             #   the script formats: model, JSON, DSL text, frames
 │   ├── Assets/ Properties/
 │   └── TasEditorCs.csproj
 └── TasEditorCs.Tests/      # xUnit, headless unit layer
+    └── Fixtures/           # JSON from the Rust tool + the editor's goldens
 ```
 
 ## Build, run, test
@@ -182,6 +185,77 @@ it, the Mica backdrop follows, and the host re-renders so our own `Theme.*` toke
 it only decides where the toggle starts; after a click the pinned value is the truth. It also has to
 run unconditionally: calling the hook inside the `??` that folds it into the choice is a hook-order
 violation, and `REACTOR_HOOKS_001` flags it (`mur check`).
+
+## Script formats
+
+A script has three representations, and `Script/` is where they meet:
+
+```
+.tas text  ⇄  ScriptDocument  ⇄  API JSON      (the mod's POST /script/run body)
+                    ⇅
+              CommandRow frames                (the command table's view)
+```
+
+- **`ScriptDocument` is the hub, and the JSON is the source of truth.** It is the only representation
+  that carries the whole format: `raw_key`, `dik_key` and `when_enemy` (the adaptive enemy condition)
+  have no text spelling and no table column, so writing such a command out as a `.tas` file is an
+  error naming the command rather than a silent loss. The text format itself is specified in
+  `../docs/SCRIPT_DSL.md`.
+- **`ScriptJson.cs`** — `Read`/`Write` plus the mod's own cross-field limits (`docs/API.md` §4.4 in
+  the Rust repo), so the editor refuses a script the game would answer `400` on. Serialization goes
+  through the source-generated `ScriptJsonContext`: the app is published with NativeAOT, where
+  reflection-based `JsonSerializer` does not work. Unknown keys are refused at the type level
+  (`JsonUnmappedMemberHandling.Disallow`), mirroring the mod's `deny_unknown_fields`. What is unset
+  stays out of the written JSON — a `false` flag and a `null` field mean the same to the mod as an
+  absent key — so the editor writes the same readable shape the fixtures use. Only `t` and `duration`
+  opt out of that rule: `"t": 0` is a real frame number.
+- **`ScriptDsl.cs`** — the `.tas` text: one line per frame, tokens are console pad names (`a` jump,
+  `x` light attack, `lt` blade, `du` augment …) plus `ls`/`rs` for the sticks — and they are the
+  same names the command table heads its columns with, so the grid doubles as the format's legend.
+  **Movement is the stick**, not a direction flag: `ls:<angle>` is a full press on the compass
+  (0 forward, 90 right), `lsx`/`lsy`/`rsx`/`rsy` carry exact axis values, `wk` halves the left
+  stick, and a direction flag a JSON script holds is written as the stick it stands for — the stick
+  alone drives the character (`docs/API.md` §10.2). `Write` is canonical (fixed token order, a
+  one-frame duration left out, invariant numbers, `y`+`b` folded into `by`), so `Write(Parse(text))`
+  is the same text again; `Parse` names the line it refuses.
+- **`ScriptFrames.cs`** — `Expand`/`Collapse` for the table. Its bits are the same order as
+  `CommandKeys.All`, so a column, its JSON key and its DSL token cannot drift apart — a test walks the
+  list and asserts each field lights its own bit.
+
+### Fixtures and goldens
+
+The JSON fixtures are **generated by the Rust tool** `tools/script_gen` in the sibling repo, from the
+mod's own DTOs (`replay-types/src/script.rs`) — so "would the mod accept this JSON" is answered by the
+shared type rather than by comparing text. The editor writes its goldens next to them, and a Rust test
+reads those back:
+
+```
+Fixtures/all_inputs.json           # from Rust: every input of §4.2, all keys
+Fixtures/all_inputs.expected.json  # from the editor: its own write of the same script
+Fixtures/all_inputs.expected.tas   # from the editor: the same script as text
+```
+
+- `dotnet test TasEditorCs.slnx` compares the goldens;
+  `set TAS_REGEN_GOLDENS=1 && dotnet test TasEditorCs.slnx` rewrites them — the way to bless a
+  deliberate format change.
+- `cd ../tools/script_gen && cargo test` (re)generates the fixtures and accepts the editor's JSON:
+  `expected_json_is_accepted.rs` deserializes every `*.expected.json` with the mod's own types and
+  asserts it equals the fixture it came from.
+- Fixtures are read from the **source** directory (`CallerFilePath`), not from the build output, so
+  nothing has to be copied and a new fixture is picked up without touching the csproj.
+
+### ⚠️ The source-generated deserializer writes `default` over absent properties
+
+Measured on .NET 10: a JSON without `name` deserializes into a document whose `Name` is `null` — the
+property initializer is not what survives. That reaches the numbers too: with a plain
+`uint Hold { get; init; } = 6`, an absent `hold` inside `restart` arrives as a literal 0, i.e. "hold
+the arrow for no frames at all". Two consequences, both deliberate:
+
+- `RestartPolicy` parameters are nullable, and `null` means *the mod's default* — `ScriptDsl` compares
+  against a fresh instance when it decides which parameters it has to write.
+- `ScriptJson.Read` restores the mod's fallbacks explicitly (`Name ?? DefaultName`, `Commands ?? []`)
+  rather than trusting the declarations, and a test pins that down so a framework change cannot
+  quietly turn `hold` into 0.
 
 ## Publish
 

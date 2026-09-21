@@ -23,11 +23,13 @@ public class CommandTableTests
     }
 
     [Fact]
-    public void Heads_every_input_column_with_a_one_or_two_letter_label()
+    public void Heads_every_input_column_with_the_token_the_script_text_uses()
     {
         var inputs = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!.Skip(5).ToList();
 
-        Assert.All(inputs, column => Assert.InRange(column.DisplayName!.Length, 1, 2));
+        // The header is the DSL's own spelling of that input, so the table doubles as the text
+        // format's legend — short, but words are allowed (`esc`, `start` is not a key on PC).
+        Assert.All(inputs, column => Assert.InRange(column.DisplayName!.Length, 1, 3));
         Assert.Equal(CommandKeys.All.Select(key => key.Label), inputs.Select(column => column.DisplayName));
     }
 

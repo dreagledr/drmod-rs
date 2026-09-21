@@ -1,0 +1,67 @@
+{
+  "name": "edge-inputs",
+  "commands": [
+    {
+      "t": 0,
+      "duration": 1,
+      "input": {
+        "raw_key": 139
+      }
+    },
+    {
+      "t": 2,
+      "duration": 2,
+      "input": {
+        "dik_key": 208
+      }
+    },
+    {
+      "t": 5,
+      "duration": 1,
+      "input": {
+        "ripper": true,
+        "left_stick": [
+          1000,
+          1000
+        ]
+      }
+    },
+    {
+      "t": 9,
+      "duration": 24,
+      "input": {
+        "forward": true,
+        "heavy_attack": true
+      },
+      "when_enemy": {
+        "anim": [
+          65545
+        ],
+        "player_y_min": 0.3,
+        "player_y_max": 0.8,
+        "player_vy_max": 0
+      }
+    },
+    {
+      "t": 40,
+      "duration": 30,
+      "input": {
+        "heavy_attack": true
+      },
+      "when_enemy": {
+        "anim": [
+          19,
+          24
+        ],
+        "frame_min": 5,
+        "frame_max": 60,
+        "dist_max": 2.5,
+        "blade_dy_min": 0.3,
+        "player_y_min": -1,
+        "player_y_max": 3,
+        "player_vy_max": 1.5,
+        "repeat": true
+      }
+    }
+  ]
+}

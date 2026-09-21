@@ -1,0 +1,11 @@
+{
+  "commands": [
+    {
+      "duration": 1,
+      "input": {
+        "jump": true
+      },
+      "t": 0
+    }
+  ]
+}

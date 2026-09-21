@@ -594,6 +594,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "drmod-script-gen"
+version = "0.1.0"
+dependencies = [
+ "drmod-replay-types",
+ "serde_json",
+]
+
+[[package]]
 name = "drmod-server"
 version = "0.1.0"
 dependencies = [
