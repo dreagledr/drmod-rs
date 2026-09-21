@@ -4,14 +4,15 @@
 
 A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**.
 
-- **Binary (`drmod`)**: инжектит DLL в запущенный процесс игры
-- **Library (`drmod_rs_lib`)**: DX9-хук + overlay на ImGui, читает память игры в реальном времени
-- **Server (`server/`)**: мультиплеерный relay (axum 0.8 + tokio, Docker, 64-bit)
-- **Protocol (`protocol/`)**: общие типы TCP (JSON) и UDP (бинарный `PositionPacket`)
-- **Replay-types (`replay-types/`)**: общие replay-DTO (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout replay-BLOB'ов; `input_bits` — биты действий в `InputUnit`; `key_codes` — кодировка игровых кодов клавиш в словах `m_aKeysDown` (порядок бит обратный: `0x8000_0000 >> (code & 31)`)
-- **dbdump (`tools/dbdump/`)**: CLI-экспорт кадров Record/Replay из `runs.db` в CSV/Parquet (90 плоских колонок) + режим `--script` (запись → JSON-скрипт HTTP API)
-- **TAS Editor (`tas-editor/`)**: десктопный TAS-редактор на WinUI 3 (`windows-reactor`, Rust, self-contained x64) — пока мок интерфейса
-- **Мод `mods/cutscene_skip/`**: самостоятельный крейт — скип in-engine катсцены (лаунчер + встроенная DLL, без imgui/сети)
+- **Binary (`drmod`)**: injects the DLL into a running game process
+- **Library (`drmod_rs_lib`)**: DX9 hook + ImGui overlay, reads game memory live
+- **Server (`server/`)**: multiplayer relay (axum 0.8 + tokio, Docker, 64-bit)
+- **Protocol (`protocol/`)**: shared TCP (JSON) and UDP (binary `PositionPacket`) types
+- **Replay-types (`replay-types/`)**: shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout of replay BLOBs; `input_bits` — action bits in `InputUnit`; `key_codes` — encoding of game key codes in `m_aKeysDown` words (bit order reversed: `0x8000_0000 >> (code & 31)`)
+- **dbdump (`tools/dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script)
+- **TAS Editor (`tas-editor/`)**: desktop TAS editor on WinUI 3 (`windows-reactor`, Rust, self-contained x64) — UI mock for now
+- **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT, hello world. ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
+- **Mod `mods/cutscene_skip/`**: standalone crate — in-engine cutscene skip (launcher + embedded DLL, no imgui/networking)
 
 Features:
 - Segment-based autosplitter with SQLite persistence and ghost replay
@@ -19,75 +20,77 @@ Features:
 - World-to-screen projection (camera matrix, D3D viewport)
 - Debug panel with live game state (debug builds only)
 - HTTP automation API (`127.0.0.1:5223`): input scripts, game state, ring-buffer logs
-- Headless-прогон (`POST /render`) — снять отрисовку (overlay/Present/геометрия игры), сохранив всю логику кадра
-- TAS-рычаги воспроизводимости: фиксированный шаг времени (`POST /dt`), пин RNG решений ИИ (`POST /rng`), кап кадров (`POST /fps`)
+- Headless runs (`POST /render`) — disable rendering (overlay/Present/game geometry) while keeping the whole frame logic
+- TAS reproducibility levers: fixed time step (`POST /dt`), AI decision RNG pin (`POST /rng`), frame cap (`POST /fps`)
 
 Built with [hudhook](https://github.com/veeenu/hudhook) for DirectX hooking and [imgui-rs](https://github.com/imgui-rs/imgui-rs) for the UI.
 
-## Карта документации
+## Documentation Map
 
-Разборы и хроники живут в `docs/` и README тулов — здесь только сводка и адреса.
+Deep dives and chronicles live in `docs/` and the tool READMEs — this file only summarizes and points.
 
-| Тема | Где разобрано |
-|------|---------------|
-| HTTP API, пацер, кап кадров, скрипты, окно Settings | `docs/API.md` |
-| Headless-прогон (`POST /render`), замеры ускорения | `docs/HEADLESS.md` |
-| Record/Playback: механика ввода, этапы реализации | `docs/REPLAY.md` |
-| Проверенные гипотезы ввода и грабли | `docs/REPLAY_FINDINGS.md` |
-| Что найдено точкой останова на запись | `docs/REPLAY_CROSS_REVIEW.md` |
-| Статус входов API (что ✅, что открыто) | `docs/INPUT_STATUS.md` |
-| Десинк Record→Playback | `docs/DESYNC_ANALYSIS.md` |
-| Враги: адреса, иерархия частей, ИИ и RNG | `docs/ENEMY_TRACKING.md` |
-| Фазы/подфазы, консольное меню со Skip | `docs/PHASE.md` |
-| Lightning strike (`вперёд-вперёд-хэви`, `anim 110`) | `docs/LIGHTNING_STRIKE.md` |
-| Тюнинг core-скрипта (хроника, «что не сработало») | `docs/SCRIPT_TUNING.md` |
-| Сводка «что не работает» по проекту | `docs/PITFALLS.md` |
-| dbdump: колонки, `--script` | `tools/dbdump/README.md` |
-| script_tuning: инструменты, эталонный рецепт | `tools/script_tuning/README.md` |
-| Мод cutscene_skip: лаунчер, флаги, статус | `mods/cutscene_skip/README.md` |
-| TAS Editor: интерфейс, поставка, грабли Reactor | `tas-editor/README.md` |
+| Topic | Where |
+|-------|-------|
+| HTTP API, pacer, frame cap, scripts, Settings window | `docs/API.md` |
+| Headless runs (`POST /render`), speedup measurements | `docs/HEADLESS.md` |
+| Record/Playback: input mechanics, implementation stages | `docs/REPLAY.md` |
+| Verified input hypotheses and pitfalls | `docs/REPLAY_FINDINGS.md` |
+| What the record write breakpoint found | `docs/REPLAY_CROSS_REVIEW.md` |
+| API input status (what is ✅, what is open) | `docs/INPUT_STATUS.md` |
+| Record→Playback desync | `docs/DESYNC_ANALYSIS.md` |
+| Enemies: addresses, part hierarchy, AI and RNG | `docs/ENEMY_TRACKING.md` |
+| Phases/subphases, console menu with Skip | `docs/PHASE.md` |
+| Lightning strike (`forward-forward-heavy`, `anim 110`) | `docs/LIGHTNING_STRIKE.md` |
+| Core-script tuning (chronicle, dead ends) | `docs/SCRIPT_TUNING.md` |
+| Project-wide "what does not work" summary | `docs/PITFALLS.md` |
+| dbdump: columns, `--script` | `tools/dbdump/README.md` |
+| script_tuning: tools, reference recipe | `tools/script_tuning/README.md` |
+| cutscene_skip mod: launcher, flags, status | `mods/cutscene_skip/README.md` |
+| TAS Editor: UI, packaging, Reactor gotchas | `tas-editor/README.md` |
+| TAS Editor (C#): local conventions, language, one-component-per-file, PRI publish gotcha | `tas-editor-cs/QWEN.md`, `tas-editor-cs/README.md` |
 
 ## Architecture
 
 ```
 src/
-├── main.rs          # Injector binary — finds game process, injects DLL
+├── main.rs          # Injector binary — finds the game process, injects the DLL
 ├── lib.rs           # HUD library — DX9 hook, ImGui overlay, game memory, main loop
 ├── api.rs           # HTTP API (127.0.0.1:5223) — scripts, state, ring-buffer logs
 ├── segment.rs       # Segment tracking — start conditions, ASL-based finish triggers, DB cleanup
 ├── ui.rs            # ImGui windows — debug panel (debug only), multiplayer, settings
-├── game/            # Сущности игры — игрок (Pl0000), камера (cCameraGame), статус меню, фазы, скип катсцены
-│   ├── mod.rs       #   GameMenuStatus enum, is_readable_ptr, re-export Player/Camera/phase/cutscene_skip
-│   ├── player.rs    #   Player — кэш объекта игрока, read_player_state/read_current_input/read_pl_input/read_enemies/read_skeleton
+├── game/            # Game entities — player (Pl0000), camera (cCameraGame), menu status, phases, cutscene skip
+│   ├── mod.rs       #   GameMenuStatus enum, is_readable_ptr, re-exports Player/Camera/phase/cutscene_skip
+│   ├── player.rs    #   Player object cache, read_player_state/read_current_input/read_pl_input/read_enemies/read_skeleton
 │   ├── camera.rs    #   Camera — read_camera_state/view_proj/pos
-│   ├── phase.rs     #   Фазы/подфазы: hash_name + order_subphase (заказ смены подфазы = скип катсцены)
-│   └── cutscene_skip.rs #  Скип in-engine катсцены «как на консоли» (кадровый автомат в render-цикле)
+│   ├── phase.rs     #   Phases/subphases: hash_name + order_subphase (requesting a subphase change = cutscene skip)
+│   └── cutscene_skip.rs #  Console-style in-engine cutscene skip (per-frame state machine in the render loop)
 ├── net.rs           # TCP + UDP client for multiplayer
 ├── overlay.rs       # world_to_screen projection, draw_world_pos
-├── render_hooks.rs  # Headless-режим (`POST /render`): флаги скипа overlay/Present/геометрии игры + MinHook-заглушки DrawPrimitive* на vtable устройства
+├── render_hooks.rs  # Headless mode (`POST /render`): overlay/Present/game-geometry skip flags + MinHook stubs on the live device vtable
 ├── settings.rs      # User settings (ghost opacity, show ghost toggle, cutscene skip toggle)
 ├── d3d_render.rs    # CylinderRenderer, SphereRenderer for 3D overlays
 ├── skeleton.rs      # Bone/skeleton data structures
 ├── logger.rs        # Logging to %LOCALAPPDATA%\drmod\ (debug.log + buffered state.log)
 ├── tas/             # TAS (tool-assisted speedrun) — input record/replay
 │   ├── addresses.rs #   Input memory addresses/constants
-│   ├── db.rs        #   Replay SQLite tables, миграция колонок + bulk insert
+│   ├── db.rs        #   Replay SQLite tables, column migration + bulk insert
 │   ├── replay.rs    #   Record/playback logic, input override
-│   ├── hooks.rs     #   MinHook input hooks (updateInputUnit/isKeybindPressed/isKeybindDown), обновитель кадра, randRange/randFloat, ripper/blade emulation, raw input readers
-│   ├── watch.rs     #   (debug) аппаратная точка останова на запись: DR0 на все потоки + VEH, стек-чейн писателя
-│   └── types.rs     #   Re-export DTO из replay-types + ReplayFrame/внутренние типы
+│   ├── hooks.rs     #   MinHook input hooks (updateInputUnit/isKeybindPressed/isKeybindDown), frame updater, randRange/randFloat, ripper/blade emulation, raw input readers
+│   ├── watch.rs     #   (debug) hardware write breakpoint: DR0 on all threads + VEH, writer stack chain
+│   └── types.rs     #   Re-export of replay-types DTOs + ReplayFrame/internal types
 server/              # Multiplayer server (axum 0.8 + tokio, 64-bit, Docker)
 protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPacket)
-replay-types/        # Общие replay-DTO (InputUnit/PlayerState/CameraState/EnemyState) + to_bytes/from_bytes + input_bits
+replay-types/        # Shared replay DTOs + to_bytes/from_bytes + input_bits
 tools/
-├── demo/            # Демонстрация TAS: demo_r03_tas.py — прогон первого сегмента R-03 3 раза подряд (флаги `--headless`/`--uncapped`)
-├── dbdump/          # Экспорт replay-кадров в CSV/Parquet + --script (JSON для HTTP API) (x64, отдельный .cargo/config.toml)
-├── desync_analysis/ # pandas-скрипты анализа десинка Record→Playback (CSV от dbdump)
-├── script_tuning/   # Тайминги core-скрипта 117 (+ timing_tune.py, blade_tap_tune.py, lightning_strike.py, r03_baseline.py, headless_bench.py) и скип катсцен (cutscene_skip.py, order.py, order_on_event.py, subphase_now.py) (python)
-└── disasm/          # Дизассемблирование: scan_srm.py (PE + поиск обращений к SRM), disasm.py (обёртка llvm-objdump по RVA), find_vtable.py (RTTI→vtable), find_strings.py, peek.py, mem_find_u32.py
+├── demo/            # TAS demo: demo_r03_tas.py — runs the first R-03 segment 3 times (`--headless`/`--uncapped`)
+├── dbdump/          # Replay frames → CSV/Parquet + --script (HTTP API JSON) (x64, own .cargo/config.toml)
+├── desync_analysis/ # pandas scripts analyzing Record→Playback desync (CSV from dbdump)
+├── script_tuning/   # Core-script timing and cutscene-skip scripts (python) — see tools/script_tuning/README.md
+└── disasm/          # Disassembly scripts: scan_srm, disasm (llvm-objdump by RVA), find_vtable, find_strings, peek, mem_find_u32
 mods/
-└── cutscene_skip/   # Самостоятельный мод: скип in-engine катсцены (лаунчер + встроенная DLL, без imgui); свой [workspace]
-tas-editor/          # TAS Editor: десктопный редактор на WinUI 3 (windows-reactor), self-contained; свой [workspace] и x64-конфиг
+└── cutscene_skip/   # Standalone mod: in-engine cutscene skip (launcher + embedded DLL, no imgui); own [workspace]
+tas-editor/          # TAS Editor: desktop editor on WinUI 3 (windows-reactor), self-contained; own [workspace] and x64 config
+tas-editor-cs/       # TAS Editor in C#: WinUI 3 via Microsoft.UI.Reactor, self-contained + NativeAOT; own QWEN.md (English-only)
 ref/                 # Git submodules — read-only reference projects
 ```
 
@@ -122,29 +125,29 @@ Static pointer: `base + 0x17EA100`.
 
 | Address | Type | Field |
 |---------|------|-------|
-| `base + 0x17E9F9C` | `i32` | GameMenuStatus (enum 0–18; 1 = InGame, 3 = PauseMenu, 6 = CutscenePause (`cEventPauseMenu`, консольное меню со Skip), 8 = Mission Fail, 12 = Pause1 (сразу ставит 1 = InGame, обработчика нет), 18 = ProcessOutOfPause; таблица статусов и разбор — `docs/PHASE.md`) |
+| `base + 0x17E9F9C` | `i32` | GameMenuStatus (enum 0–18; 1 = InGame, 3 = PauseMenu, 6 = CutscenePause (`cEventPauseMenu`, the console menu with Skip), 8 = Mission Fail, 12 = Pause1 (immediately sets 1 = InGame, no handler), 18 = ProcessOutOfPause; status table and analysis — `docs/PHASE.md`) |
 | `base + 0x1764670` | `i32` | Current mission ID |
 | `base + 0x1764674` | `*const i8` | Current mission name string |
 | `base + 0x14B9181` | `*const i8` | gStr — game location string |
 | `base + 0x14B91AD` | `*const i8` | gStr2 — game location string 2 |
 | `base + 0x14B91A8` | `*const i8` | gStr4 — mission identifier ("P118", "EV60", etc.) |
-| `base + 0x19D0814` | `u32` | Состояние глобального LCG решений ИИ (`randRange` `0x9DE2A0` / signed `0x9DE2D0` / `randFloat` `0x9DE300`; `state = state*214013 + 2531011`, берётся `state>>16`) — рычаг воспроизводимости, `POST /rng` |
+| `base + 0x19D0814` | `u32` | Global AI-decision LCG state (`randRange` `0x9DE2A0` / signed `0x9DE2D0` / `randFloat` `0x9DE300`; `state = state*214013 + 2531011`, output is `state>>16`) — reproducibility lever, `POST /rng` |
 
-### Frame pacer (кап кадров, `POST /fps`)
+### Frame pacer (frame cap, `POST /fps`)
 
-FPS держит **софтовый пацер**, а не vsync. Описание механизма, замеры ускорения и режимы — `docs/API.md` §3.13.
+FPS is held by a **software pacer**, not vsync. Mechanism, speedup measurements and modes — `docs/API.md` §3.13.
 
-| Адрес | Тип | Field |
-|-------|-----|-------|
-| `base + 0x1B206EC` | `u32` | **Период кадра пацера** в единицах 3·мс: `3000·period_с` → `50` = 1/60 с (60 FPS, геймплей), `100` = 1/30 с (30 FPS, меню/ролики). `0` → пацер не ждёт |
-| `base + 0x1B206F0` | `u32` | Метка прошлого кадра (те же 3·мс) |
-| `base + 0x1B206D0` | `u32` | Режим кадра: `1` = 30 FPS, `0` = 60 FPS |
-| `base + 0x1B206D4` | `*mut` | Живое `IDirect3DDevice9` (vtable — цель заглушек `skip_draw`); `IDirect3D9` — `base + 0x1B206D8`; оконные `D3DPRESENT_PARAMETERS` — `base + 0x1B20620`, фуллскрин — `base + 0x1B205E8` |
-| `0xB98070` | fn | **Пацер** (зовётся из главного цикла `0xB9D650`); `Present` — `0xB97F90` (vtable `+0x44`) |
-| `0xB98AD0` | fn | Сеттер периода (тот же код — `0xB98140`): `mode 1` → 1/30, иначе 1/60 |
-| `.rdata` | const | `0.016666667` (1/60), `0.033333335` (1/30); `[0x16B6980]` = `3.0`, `[0x16C5358]` = `1000.0` — множители «сек → 3·мс» |
+| Address | Type | Field |
+|---------|------|-------|
+| `base + 0x1B206EC` | `u32` | **Pacer frame period** in 3 ms units: `3000·period_s` → `50` = 1/60 s (60 FPS, gameplay), `100` = 1/30 s (30 FPS, menus/cutscenes). `0` → the pacer does not wait |
+| `base + 0x1B206F0` | `u32` | Previous frame stamp (same 3 ms units) |
+| `base + 0x1B206D0` | `u32` | Frame mode: `1` = 30 FPS, `0` = 60 FPS |
+| `base + 0x1B206D4` | `*mut` | Live `IDirect3DDevice9` (vtable is the target of the `skip_draw` stubs); `IDirect3D9` — `base + 0x1B206D8`; windowed `D3DPRESENT_PARAMETERS` — `base + 0x1B20620`, fullscreen — `base + 0x1B205E8` |
+| `0xB98070` | fn | **Pacer** (called from the main loop `0xB9D650`); `Present` — `0xB97F90` (vtable `+0x44`) |
+| `0xB98AD0` | fn | Period setter (same code as `0xB98140`): `mode 1` → 1/30, otherwise 1/60 |
+| `.rdata` | const | `0.016666667` (1/60), `0.033333335` (1/30); `[0x16B6980]` = `3.0`, `[0x16C5358]` = `1000.0` — "seconds → 3 ms" multipliers |
 
-Мод (`api::apply_fps_cap`, вызов в начале render) перезаписывает `[0x1B206EC]` **каждый кадр**: render идёт внутри `Present`, то есть после сеттера и до ожидания пацера. Вместе с `POST /dt {"fixed":true}` снятый кап даёт ускорение прогонов (замер 2026-09-13: `period=0` → 238 кадров движка в секунду, 3.96× реального времени; кап игры → 58.9 и 0.98×).
+The mod (`api::apply_fps_cap`, called at the start of render) rewrites `[0x1B206EC]` **every frame**: render runs inside `Present`, i.e. after the setter and before the pacer waits. Together with `POST /dt {"fixed":true}`, a lifted cap speeds runs up (measured 2026-09-13: `period=0` → 238 engine frames per second, 3.96× real time; game cap → 58.9 and 0.98×).
 
 ### Camera
 
@@ -154,11 +157,11 @@ Static pointer: `base + 0x17EA1D0` (cCameraGame::Instance).
 |--------|------|-------|
 | `0x200` | `[f32; 16]` | View-projection matrix |
 
-### Enemies (debug-панель, `read_enemies`)
+### Enemies (debug panel, `read_enemies`)
 
-Сущности сцены — из `EntitySystem`: `ms_Instance` = `base + 0x17E9A98`, список `m_EntityList` на `+0x38` (size `+0x0C`, первый узел `+0x14`, обход по `+0x08`). У `Entity`: имя `+0x04`, Behavior (m_pSceneModel) `+0x3C`, m_pInstance `+0x48`; у Behavior: позиция `+0x50`, HP `+0x870`, анимация `+0x618`, номер кадра анимации `+0x8B4`. Фильтр врагов: имена `Em*`/`Ba*`/`Pl001*` (без игрока), позиция не (0,0,0), HP 1..1 000 000.
+Scene entities come from `EntitySystem`: `ms_Instance` = `base + 0x17E9A98`, list `m_EntityList` at `+0x38` (size `+0x0C`, first node `+0x14`, iterate via `+0x08`). On `Entity`: name `+0x04`, Behavior (m_pSceneModel) `+0x3C`, m_pInstance `+0x48`; on Behavior: position `+0x50`, HP `+0x870`, animation `+0x618`, animation frame number `+0x8B4`. Enemy filter: names `Em*`/`Ba*`/`Pl001*` (player excluded), position not (0,0,0), HP 1..1 000 000.
 
-Анимацию врага пишет сеттер `0x68CAF0`, его зовёт стейт-машина действия `0x739F00` (селектор `0x745C60`, диспетчер `0x740880`); единой «функции решения об атаке» нет, выбор действия случаен — глобальный LCG, состояние `base + 0x19D0814` (`POST /rng`). Полный разбор (иерархия частей, bladeY, сайты RNG, отсутствие vtable-геттера) — `docs/ENEMY_TRACKING.md`.
+Enemy animation is written by the setter `0x68CAF0`, called by the action state machine `0x739F00` (selector `0x745C60`, dispatcher `0x740880`); there is no single "attack decision function" — the action is chosen randomly, via the global LCG at `base + 0x19D0814` (`POST /rng`). Full analysis (part hierarchy, bladeY, RNG sites, no vtable getter) — `docs/ENEMY_TRACKING.md`.
 
 ### Animation (Raiden)
 
@@ -191,11 +194,11 @@ Derived from [livesplit_asl_mgrr](https://github.com/hau5test/livesplit_asl_mgrr
 
 ### Database
 
-SQLite at `%LOCALAPPDATA%\drmod\runs.db` (схемы и миграции — `src/tas/db.rs`).
+SQLite at `%LOCALAPPDATA%\drmod\runs.db` (schemas and migrations — `src/tas/db.rs`).
 
-- **Сегменты:** `runs` → `segments` (`mission_id`, `mission_name`, `started_at`, `duration_ms`) → `segment_positions` (позиция на кадр). При flush на `mission_id` остаётся только лучший (минимальный `duration_ms`) сегмент; ghost читает его через `load_best_ghost()`. WAL + NORMAL synchronous для быстрой bulk-вставки.
-- **Record/Playback:** `replay_runs` (`kind` = `record`/`playback`, `source_replay_id` для playback) → `replay_record_frames` / `replay_playback_frames` (по кадру: `input_unit` BLOB 48 Б, `state` 88 Б, `camera` 92 Б, `enemy` 32 Б, `blade_down`, `ripper_pressed`, `raw_down`, `raw_pressed`). BLOB'ы — сырые байты структур `replay-types/`, layout версионируется размером (camera 76 Б = legacy до 2026-08-18, не читается dbdump). Миграция старых БД — `ensure_replay_frame_columns` (`ALTER TABLE`).
-- Мод БД не читает (воспроизведение идёт из памяти сессии) — таблицы только для истории/аналитики; экспорт — `tools/dbdump`.
+- **Segments:** `runs` → `segments` (`mission_id`, `mission_name`, `started_at`, `duration_ms`) → `segment_positions` (position per frame). On flush, only the best (lowest `duration_ms`) segment per `mission_id` is kept; the ghost reads it via `load_best_ghost()`. WAL + NORMAL synchronous for fast bulk inserts.
+- **Record/Playback:** `replay_runs` (`kind` = `record`/`playback`, `source_replay_id` for playback) → `replay_record_frames` / `replay_playback_frames` (per frame: `input_unit` BLOB 48 B, `state` 88 B, `camera` 92 B, `enemy` 32 B, `blade_down`, `ripper_pressed`, `raw_down`, `raw_pressed`). BLOBs are raw bytes of the `replay-types/` structs; layout is versioned by size (camera 76 B = legacy before 2026-08-18, not read by dbdump). Old databases are migrated by `ensure_replay_frame_columns` (`ALTER TABLE`).
+- The mod never reads the DB (playback comes from session memory) — the tables are for history/analytics only; export goes through `tools/dbdump`.
 
 ## Building and Running
 
@@ -237,45 +240,46 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 ### Commit Rules
 
-- **Перед каждым коммитом** проверять актуальность `QWEN.md`: если изменения затрагивают архитектуру, зависимости, новые модули, референсы, или любую информацию из этого файла — обновить соответствующие секции (детали — в `docs/`, сюда добавлять только сводку и ссылку).
+- **Before every commit** check that `QWEN.md` is up to date: if the change touches architecture, dependencies, new modules, references, or anything else this file covers — update the relevant sections (details belong in `docs/`; keep only a summary and a pointer here).
 
 ### Language & Edition
 
 - Rust 2024 edition
 - UI messages are in Russian
+- `QWEN.md` is written in English
+- ⚠️ Exception: `tas-editor-cs/` (C#, not Rust) keeps **everything** in English — in-app text, code comments, identifiers, its own `QWEN.md`. Its conventions are local to that folder and override the two lines above.
 
 ### Dependencies
 
 | Crate | Purpose |
 |-------|---------|
-| `hudhook` (0.9.0, вендоренный форк — `vendor/hudhook`) | DirectX hooking and injection |
+| `hudhook` (0.9.0, vendored fork — `vendor/hudhook`) | DirectX hooking and injection |
 | `imgui` (0.12.0) | ImGui bindings for UI rendering |
 | `windows` (0.62.2) | Windows API (UI windows, module loading) |
-| `windows-numerics` (0.3) | Векторная/матричная математика для D3D-проекций |
+| `windows-numerics` (0.3) | Vector/matrix math for D3D projections |
 | `rusqlite` (0.40.1, bundled) | SQLite for persisting run data |
 | `chrono` (0.4.45) | Time formatting for run timestamps |
 | `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol and HTTP API |
 | `drmod-protocol` | Shared types for client-server communication |
-| `drmod-replay-types` | Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) + `to_bytes`/`from_bytes` + `input_bits` (биты InputUnit) |
+| `drmod-replay-types` | Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) + `to_bytes`/`from_bytes` + `input_bits` (`InputUnit` bits) |
 
-Тул `tools/dbdump` дополнительно тянет (только для него, x64): `rusqlite`, `csv`, `arrow` + `parquet` (59.x) — экспорт в CSV/Parquet; `serde` + `serde_json` — режим `--script` (JSON для HTTP API).
+`tools/dbdump` additionally pulls (for itself only, x64): `rusqlite`, `csv`, `arrow` + `parquet` (59.x) — CSV/Parquet export; `serde` + `serde_json` — `--script` mode (JSON for the HTTP API).
 
 ### Notes
 
-- **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` because hudhook requires it for the render loop. This is safe since addresses are computed once in `new()` and never mutated. Все статические адреса считаются один раз при init, не покадрово.
-- **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window (record/playback status, segment timer, mission/menu status, compact player state), `Actions` window (numpad hotkey reference), numpad-хоткеи, saved position. Release builds keep only Multiplayer and Settings windows.
-- **Окно Settings как пульт TAS-настроек** (`src/ui.rs` → `render_tas_controls`, обе сборки): фиксированный `dt`, пин RNG, кап кадров и три чекбокса headless — прямо в окне настроек. Контролы пишут тот же runtime-стейт, что и HTTP-ручки, через общие сеттеры (`api::set_fixed_dt`/`set_fixed_dt_ms`/`set_rng_pin`/`set_fps_cap`, `render_hooks::set_skip`), поэтому с API не рассинхронизируются. Детали — `docs/API.md` §2.
-- **Headless-прогон** (`src/render_hooks.rs`, `POST /render`): три независимых выключателя — `skip_overlay`, `skip_present`, `skip_draw` (MinHook-заглушки `DrawPrimitive*` на vtable живого устройства). Боевой режим = `skip_overlay` + `skip_draw` + снятый кап; ⚠️ `skip_present` в него не входит — выигрыша не даёт, а со `skip_draw` роняет игру (AV в `d3d9.dll`). Заглушки дают ≈×1.25 к снятому капу и ≈×1.5 к обычному прогону, дальше упор в симуляцию (~9.7 мс/тик). ⚠️ При `skip_overlay` скрыто и окно Settings — вернуть отрисовку только `POST /render {"reset": true}`. Дизайн, падение и изоляция — `docs/HEADLESS.md`.
-- **HTTP API** (`src/api.rs`, debug + release): собственный минимальный HTTP-сервер (raw `TcpListener`, без tiny_http) на `127.0.0.1:5223` — однопоточный, non-blocking accept, таймауты 1 с, `shutdown()` завершается за ограниченное время (eject не виснет). Ручки: `/script/run`, `/script/stop`, `/script/{id}`, `/state`, `/logs`, `/health`, `/eject`, `/order`, `/phase`, `/dt`, `/fps`, `/rng`, `/render`, `/watch`. Ring buffer 3600 кадров (60 с). **Кадр скрипта = тик симуляции** (подача из детура `updateInputUnit`, `api::feed_tick`). Полная спецификация — `docs/API.md`.
-- **Скип катсцены «как на консоли»** (`src/game/cutscene_skip.rs`; включён по умолчанию, выключается галочкой в Settings): в сценах `P370_RESTART`/`P370_IN` держит в `staFlags` (`base + 0x17EA060`) флаги консольного меню, читает решение по объекту меню (`base + 0x17EA140`), убирает меню штатным путём движка (статус 6 + шаг `base + 0x17EA118` = 6), снимает `STA_PAUSE` и по подтверждённому SKIP заказывает `P370_EVENT`. ⚠️ Заказ подфазы грузит сцену только без паузы; ⚠️ пока флаги держатся, обычное меню паузы в сцене не откроется. Этап виден в `GET /state` → `cutscene_skip` (`off`/`armed`/`closing`/`skipped`). Разбор — `docs/PHASE.md`, порт — `mods/cutscene_skip/`.
-- **Десинк Record→Playback** (`docs/DESYNC_ANALYSIS.md`): главный источник — **лаг подачи ввода на 1 кадр** (override из render(K) применяется тиком K+1, `play[fi]==rec[fi-1]` на 100%) + фазовая неопределённость Present↔тик. Решение: подача кадров из детура `updateInputUnit` (`replay::PLAYBACK_FEED` + `feed_playback`) + компенсация курса (`rsx_correction`) → **record 110 → 111/112/113/114: 4/4 успех, |Δpos| 0.7–1.0 м, |Δyaw| медиана 0.12–0.26°**.
-- **Несколько копий игры на одной машине — нельзя**: вторая копия MGR:R умирает с кодом 0 через ~100 мс после загрузки `steam_api.dll`; сейвы — Steam Cloud, один файл на пару (steamid, appid). Разбор и варианты изоляции — `docs/PITFALLS.md`.
-- **dbdump** (`tools/dbdump/`): экспорт кадров Record/Playback в CSV/Parquet (90 плоских колонок, включая ближайшего врага `enemy_*`) + режим `--script` (запись → JSON-скрипт для `POST /script/run`). Сборка — x64 в своей директории (arrow-rs только 64-bit, корневой `cargo build` тул не собирает). Детали — `tools/dbdump/README.md`.
-- **script_tuning** (`tools/script_tuning/`, python): тайминги core-скрипта для перелёта барьера в `P310_RESTART`, ускорение прогонов (`/dt`+`/fps`), автоматика рестарта/меню/fail-recovery, скип катсцен. Инструменты и эталонный рецепт — `tools/script_tuning/README.md`; хроника и «что не сработало» — `docs/SCRIPT_TUNING.md`; грабли (креши DLL, фокус окна, UTF-8, «две копии игры») — `docs/PITFALLS.md`.
-- **Мод `mods/cutscene_skip/`** (самостоятельный крейт: свой `[workspace]` и `target/`, в корневой workspace не входит): порт скипа катсцены без imgui/hudhook-dx9/API/сети. Лаунчер `cutscene_skip.exe` (ищет игру, инжектит или стартует; флаги `--kill-first`, `--no-launch`, `--follow`, `--timeout`) + встроенная DLL; пер-кадровая точка — MinHook на `updateFrameTime` (`0xA03970`). Детали, статус и вынос в отдельный репозиторий — `mods/cutscene_skip/README.md`.
-- **TAS Editor `tas-editor/`** (самостоятельный крейт: свой `[workspace]`, `target/` и `.cargo/config.toml` с `x86_64-pc-windows-msvc` — корневой форсит i686, а WinUI 3 под него не собирается; лежит на уровне репо, не в `tools/`): WinUI 3 через `windows-reactor` **0.100**, декларативные компоненты без XAML, **self-contained** через `windows-reactor-setup` в `build.rs`. Запуск — `cd tas-editor && cargo run --release`; поставка — `pwsh -File pack.ps1 -Build -Zip` (~56 МБ, zip ≈20 МБ). Статус — мок интерфейса (список скриптов, полоса свойств, таймлайн-матрица, JSON-редактор); рабочая область на диске (`tas-editor/src/workspace.rs`) не подключена. ⚠️ Грабли self-contained (обрезанный `.nupkg` = «зелёная» сборка без runtime) и рендера Reactor — `tas-editor/README.md`.
-- Error handling uses Windows `MessageBoxW` for user-facing errors.
-- Library is compiled as both `cdylib` (for injection) and `rlib` (for the binary to link against).
+- **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` for hudhook's render loop; safe because all static addresses are computed once in `new()`, never per frame.
+- **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window (record/playback status, segment timer, mission/menu status, compact player state), `Actions` window (numpad hotkey reference), numpad hotkeys, saved position. Release builds keep only Multiplayer and Settings.
+- **Settings window is also the TAS control panel** (`src/ui.rs` → `render_tas_controls`, both builds): fixed `dt`, RNG pin, frame cap, the three headless checkboxes. It writes the same runtime state as the HTTP handlers through shared setters, so it cannot drift from the API — `docs/API.md` §2.
+- **Headless runs** (`src/render_hooks.rs`, `POST /render`): three independent switches — `skip_overlay`, `skip_present`, `skip_draw` (MinHook stubs on the live device's `DrawPrimitive*` vtable entries). Production mode = `skip_overlay` + `skip_draw` with the cap lifted; ⚠️ `skip_present` is not part of it — no gain, and combined with `skip_draw` it crashes the game (AV in `d3d9.dll`). ≈×1.25 over a lifted cap, ≈×1.5 over a normal run; beyond that the limit is simulation (~9.7 ms/tick). ⚠️ `skip_overlay` also hides the Settings window — only `POST /render {"reset": true}` brings rendering back. `docs/HEADLESS.md`.
+- **HTTP API** (`src/api.rs`, both builds): hand-rolled single-threaded server on `127.0.0.1:5223` (raw `TcpListener`, non-blocking accept, 1 s timeouts, `shutdown()` returns in bounded time so eject does not hang). `GET`-style state: `/state`, `/logs`, `/health`, `/script/{id}`; `POST` actions: `/script/run`, `/script/stop`, `/dt`, `/fps`, `/rng`, `/render`, `/eject`, `/order`, `/phase`, `/watch`. Ring buffer of 3600 frames (60 s). **A script frame is a simulation tick** (fed from the `updateInputUnit` detour, `api::feed_tick`). Full spec — `docs/API.md`.
+- **Console-style cutscene skip** (`src/game/cutscene_skip.rs`; on by default, Settings checkbox turns it off): in the `P370_RESTART`/`P370_IN` scenes it holds the console-menu flags in `staFlags` (`base + 0x17EA060`) and removes the menu through the engine's own path, then requests `P370_EVENT` on a confirmed SKIP. ⚠️ Requesting a subphase loads the scene only while unpaused; ⚠️ while the flags are held, the normal pause menu cannot be opened in that scene. Stage in `GET /state` → `cutscene_skip` (`off`/`armed`/`closing`/`skipped`). `docs/PHASE.md`, `mods/cutscene_skip/`.
+- **Record→Playback desync** (`docs/DESYNC_ANALYSIS.md`): the main source is a **one-frame input feed lag** — a render(K) override lands on tick K+1 — plus Present↔tick phase uncertainty. Fixed by feeding frames from the `updateInputUnit` detour (`replay::PLAYBACK_FEED`) plus heading compensation (`rsx_correction`) → **record 110 → 111/112/113/114: 4/4 success, |Δpos| 0.7–1.0 m, |Δyaw| median 0.12–0.26°**.
+- **Two game copies on one machine do not work**: the second MGR:R copy dies with exit code 0 ~100 ms after `steam_api.dll` loads; saves are Steam Cloud, one file per (steamid, appid) pair. `docs/PITFALLS.md`.
+- **dbdump** (`tools/dbdump/`): Record/Playback frames → CSV/Parquet (90 flat columns, incl. the nearest enemy as `enemy_*`) and `--script` (recording → JSON for `POST /script/run`). x64-only and self-contained in its directory (arrow-rs is 64-bit; the root `cargo build` skips it) — `tools/dbdump/README.md`.
+- **script_tuning** (`tools/script_tuning/`, python): core-script timings for the `P310_RESTART` barrier flight, run speedup (`/dt` + `/fps`), restart/menu/fail-recovery automation, cutscene skip — `tools/script_tuning/README.md`, `docs/SCRIPT_TUNING.md`, `docs/PITFALLS.md`.
+- **`mods/cutscene_skip/`** (standalone crate, not in the root workspace): cutscene-skip port without imgui/hudhook-dx9/API/networking — launcher `cutscene_skip.exe` + embedded DLL, per-frame entry point is a MinHook on `updateFrameTime` (`0xA03970`). `mods/cutscene_skip/README.md`.
+- **`tas-editor/`** (standalone crate: own `[workspace]`, `target/` and x64 `.cargo/config.toml` — the root forces i686, which WinUI 3 does not build for; lives at the repo root, not `tools/`): WinUI 3 via `windows-reactor` **0.100**, declarative, no XAML, **self-contained** via `windows-reactor-setup` in `build.rs`. `cargo run --release` to run, `pwsh -File pack.ps1 -Build -Zip` to ship (~56 MB, zip ≈20 MB). Status: UI mock; the on-disk workspace (`src/workspace.rs`) is not wired up. ⚠️ Self-contained gotchas (a truncated `.nupkg` = "green" build with no runtime) and Reactor rendering — `tas-editor/README.md`.
+- User-facing errors use Windows `MessageBoxW`; the library is built as both `cdylib` (injection) and `rlib`.
 
 ### Reference Projects
 
