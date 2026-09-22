@@ -134,6 +134,34 @@ internal static class ScriptDsl
     static int IndexOf(string key) =>
         Array.FindIndex(Inputs, input => input.Key == key);
 
+    /// Every token a frame line accepts, with the `input` key it sets — the reading side of the
+    /// token table, in the order the writer spells them: the inputs in column order, then the two
+    /// compounds (`by` is Y+B on one line, `dr` the D-pad right the inventory switch shares with
+    /// `dl`).
+    ///
+    /// The editor's command list (<see cref="ScriptCommands"/>) attaches its help to these rather
+    /// than spelling the tokens a second time, so a token cannot reach the text without a help
+    /// line, and the help cannot name a token the parser would refuse. The sticks are not here —
+    /// they are not a flag of <see cref="ScriptInput"/> but the shape of a whole command — so
+    /// <see cref="ScriptCommands"/> carries them itself.
+    internal static readonly IReadOnlyList<(string Token, string Key)> Vocabulary = BuildVocabulary();
+
+    static IReadOnlyList<(string Token, string Key)> BuildVocabulary()
+    {
+        var vocabulary = new List<(string Token, string Key)>();
+        foreach (var input in Inputs)
+        {
+            if (input.Token is { } token)
+            {
+                vocabulary.Add((token, input.Key));
+            }
+        }
+
+        vocabulary.Add(("by", $"{Inputs[Heavy].Key} + {Inputs[Zandatsu].Key}"));
+        vocabulary.Add(("dr", Inputs[IndexOf("weapon_select")].Key));
+        return vocabulary;
+    }
+
     // ── writing ──────────────────────────────────────────────────────────────
 
     /// The canonical text of a document. Ends with a newline.

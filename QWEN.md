@@ -12,7 +12,7 @@ A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**
 - **dbdump (`tools/dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script)
 - **script_gen (`tools/script_gen/`)**: generates the JSON script fixtures for the editor's round-trip tests out of the shared DTOs (`replay-types::script`) and accepts the editor's own JSON back — `tools/script_gen/README.md`
 - **TAS Editor (`tas-editor/`)**: desktop TAS editor on WinUI 3 (`windows-reactor`, Rust, self-contained x64) — UI mock for now
-- **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT; two-pane shell with a virtualized command table over mock frames, edited inline, a `.tas` text region with a live parse, and the script converter (API JSON ⇄ `.tas` text ⇄ table frames). ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
+- **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT; two-pane shell with a virtualized command table over mock frames, edited inline, a `.tas` text region with a live parse and the format's command reference in a pane beside it (the docking host's own splitter), and the script converter (API JSON ⇄ `.tas` text ⇄ table frames). ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
 - **Mod `mods/cutscene_skip/`**: standalone crate — in-engine cutscene skip (launcher + embedded DLL, no imgui/networking)
 
 Features:

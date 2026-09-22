@@ -109,11 +109,16 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   line the parser refused — as the line above it (`ScriptTextStatus`). A draft per script lives in
   the pane's own state (`ScriptDrafts`), so switching scripts keeps what was typed; `MockScriptText`
   is what an unedited script opens with (two hand-written texts and one generated from the table's
-  own mock frames, clipped at the mod's 3600-frame limit). ⚠️ Three measured traps are in
-  `README.md` (*The script text region*): a `TextBox` reports its lines with a lone `\r`; it fills
-  the region only from a `Grid` star row, not from a flex slot; and its scrollbars have to be turned
-  on through `.Set` (the font rides there for the same reason). The script controls region is still a
-  note.
+  own mock frames, clipped at the mod's 3600-frame limit). Its `Commands` button opens the format's
+  command reference (`Script/ScriptCommands.cs`) as a **pane beside the editor**, separated by the
+  docking host's own splitter — the same one the regions use — so the reader can drag the boundary
+  as wide as they want. ⚠️ Measured traps are in `README.md` (*The script text region*): a `TextBox`
+  reports its lines with a lone `\r`; it fills the region only from a `Grid` star row, not from a
+  flex slot; its scrollbars have to be turned on through `.Set` (the font rides there for the same
+  reason); a hand-rolled `OnPan` splitter re-rendered the region per pan event and felt heavier than
+  the host's own, which is why the native one is what shipped; and a help line that outgrows a narrow
+  panel is clipped rather than wrapped (the list's `ScrollViewer` measures unbounded). The script
+  controls region is still a note.
 - The three script representations round-trip through `Script/`: the API JSON (`ScriptJson`), the
   `.tas` text (`ScriptDsl`) and the table's frames (`ScriptFrames`), around the `ScriptDocument` hub.
   Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and they

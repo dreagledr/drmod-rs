@@ -188,12 +188,30 @@ column's editor in place, Enter or a tap elsewhere commits, Esc cancels. What it
 ### The script text region
 
 The bottom region is the `.tas` text of the selected script (`ScriptTextEditor.cs`), edited in place,
-with a status line above it and nothing else. The format and its tokens are in `../docs/SCRIPT_DSL.md`;
-what is here is the editing surface:
+with a status line above it and the format's command reference beside it. The format and its tokens
+are in `../docs/SCRIPT_DSL.md`; what is here is the editing surface:
 
 - **Typing is the whole editor.** The box is a multiline `TextBox` (`AcceptsReturn`, monospaced, no
   wrap, spell-check off) — one line is one frame, so a wrapped line would read as two. No Format
   button, no line numbers, no reset: the text is the source and the converter reads it back.
+- **The reference is a pane beside the editor, not a popup.** The `Commands` button in the status
+  line opens it, and the boundary between the two is the docking host's own splitter — the same one
+  that separates the regions of this pane (`ScriptPanel`) — so the ratio is the host's, survives
+  every re-render, and can be dragged as wide as the reader wants. Which panes exist is still this
+  region's state (`script:text:editor` / `script:text:commands`); the host merges a changed key set
+  into its shape. Panes are bare `Document`s with the guards `ScriptPanel` uses (no close, float or
+  move), which keeps the region out of the docking states the shell does not survive.
+- ⚠️ **A hand-rolled splitter was tried first and taken out again.** `OnPan` on a `Border` went
+  through component state, so every pan event re-rendered the whole region — 39 reference rows and
+  the editor — and the boundary felt heavier than the shell's own splitters (the user's report).
+  The host moves its splitter itself and costs a layout pass; the native one is what shipped.
+- ⚠️ **A help line that outgrows a narrow panel is clipped, not wrapped.** The rows are grids with
+  the spelling in an `Auto` column and the help in a `Star` one, so the help *has* a width to wrap
+  into — but the list's `ScrollViewer` measures its content with unbounded width, which is what the
+  clipping comes from (measured live). The splitter is the answer while it stays that way: drag the
+  boundary and the whole line reads. If the wrap itself is wanted, it is
+  `ScrollViewer.SetHorizontalScrollBarVisibility(list, ScrollBarVisibility.Disabled)` — the attached
+  property, not `HorizontalScrollMode`, which only governs panning.
 - **The status line is a live parse.** Every keystroke re-reads the text (`ScriptTextStatus.Of` →
   `ScriptDsl.Parse` + the mod's own cross-field limits), and the caption is either the document's
   summary — `name · N commands · last frame M` — or the converter's message as it stands, in the
