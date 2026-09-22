@@ -28,11 +28,13 @@ public class ScriptTextStatusTests
     public void Names_the_command_the_mod_would_refuse()
     {
         // The cross-field limits are the mod's own (`ScriptJson.Validate`), so a text breaking
-        // one is refused here rather than handed on to answer a 400.
+        // one is refused here rather than handed on to answer a 400. The frame the text ran up to
+        // rides behind the message (`ScriptFormatException.FrameAware`), which is why this matches
+        // the start rather than the whole of it.
         var status = ScriptTextStatus.Of("3500 a:200\n");
 
         Assert.False(status.IsOk);
-        Assert.Equal("commands[0]: t+duration exceeds max 3600", status.Error);
+        Assert.StartsWith("commands[0]: t+duration exceeds max 3600", status.Error);
     }
 
     [Theory]

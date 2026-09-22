@@ -25,12 +25,13 @@ internal sealed record ScriptTextEditorView(
     Action<string> TextChanged);
 
 /// The script text region: the selected script as `.tas` text, with what that text currently
-/// says above it and the format's command reference beside it.
+/// says above it and the format's command reference in a pane of its own.
 ///
 /// The text is edited in place and read back on every keystroke — the status line is the
 /// converter's own answer, either the document's name, command count and last frame or the line
-/// the parser refused. The parse itself is the pane's: it is the same text the Save button and the
-/// other regions are about, so it is read once there and handed down here.
+/// the parser refused, with the frame the parse had reached behind it (`ScriptFormatException`).
+/// The parse itself is the pane's: it is the same text the Save button and the other regions are
+/// about, so it is read once there and handed down here.
 ///
 /// What is typed stays exactly as the control reported it — the text box is the buffer, and
 /// keeping its own bytes is what stops the reconciler from writing the text back on every
@@ -176,7 +177,7 @@ sealed class ScriptTextEditor : Component<ScriptTextEditorProps>
             .AcceptsReturn()
             .TextWrapping(TextWrapping.NoWrap)
             .IsSpellCheckEnabled(false)
-            .FontSize(12)
+            .FontSize(FontSize)
             .VerticalContentAlignment(VerticalAlignment.Top)
             .AutomationName("Script text")
             .Set(box =>
@@ -275,6 +276,9 @@ sealed class ScriptTextEditor : Component<ScriptTextEditorProps>
 
     /// The floor under the spelling column, so the spellings line up.
     const double SpellingWidth = 96;
+
+    /// The type the text is set in.
+    const double FontSize = 12;
 
     /// Set through `.Set` rather than through the `.FontFamily(…)` modifier on purpose: that
     /// modifier resolves the name into a `FontFamily` WinRT object while the element is *built*,

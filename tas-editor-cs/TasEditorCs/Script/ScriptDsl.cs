@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
 using System.Text;
@@ -439,17 +440,27 @@ internal static class ScriptDsl
         var radians = angle * Math.PI / 180.0;
         return
         [
-            Axis(number, AxisUnit * Math.Sin(radians)),
-            Axis(number, -AxisUnit * Math.Cos(radians)),
+            Axis(number, AxisUnit * Math.Sin(radians), null),
+            Axis(number, -AxisUnit * Math.Cos(radians), null),
         ];
     }
 
     /// One axis value, rounded to what the text keeps and snapped away from `-0`.
-    static float Axis(int number, double value)
+    ///
+    /// The refusal is passed in because the two callers live in different worlds: the whole-angle
+    /// form is the writer's — it computes the axes itself, so a non-finite value there is a bug and
+    /// `null` means the plain `ScriptFormatException` — while the exact-value form comes from a text
+    /// and refuses through the parse's own `Refuse`, which carries the frame.
+    static float Axis(int number, double value, Action<string>? refuse)
     {
         if (!double.IsFinite(value))
         {
-            throw new ScriptFormatException($"line {number}: stick angle or value is not finite");
+            if (refuse is null)
+            {
+                throw new ScriptFormatException($"line {number}: stick angle or value is not finite");
+            }
+
+            Refuse<float>(refuse, $"line {number}: stick angle or value is not finite");
         }
 
         var rounded = Math.Round(value, AxisDecimals);
@@ -495,6 +506,15 @@ internal static class ScriptDsl
         RestartPolicy? restart = null;
         var rulesSeen = false;
 
+        // The frame of the last line that started with a number: what every refusal reports, so a
+        // message carries the `.tas` coordinate and not just the line index. `null` until one is read.
+        uint? lastFrame = null;
+        void Refuse(string message) => throw new ScriptFormatException(message, lastFrame);
+
+        // The same refusal as a delegate: a local function does not convert to `Action<string>` on
+        // its own, and the value readers below take one so that their refusals carry the frame too.
+        var refusal = new Action<string>(Refuse);
+
         var lines = Lines(text).Split('\n');
         for (var index = 0; index < lines.Length; index++)
         {
@@ -509,7 +529,7 @@ internal static class ScriptDsl
             {
                 if (rulesSeen || commands.Count > 0)
                 {
-                    throw new ScriptFormatException($"line {number}: the rules line must come first");
+                    Refuse($"line {number}: the rules line must come first");
                 }
 
                 rulesSeen = true;
@@ -529,7 +549,17 @@ internal static class ScriptDsl
             Restart = restart,
             Commands = commands,
         };
-        ScriptJson.Validate(document);
+        try
+        {
+            ScriptJson.Validate(document);
+        }
+        catch (ScriptFormatException refused)
+        {
+            // The cross-field limits refuse a document rather than a line: there is no line to name,
+            // so the frame the whole text had is what they are re-thrown with.
+            Refuse(refused.Message);
+        }
+
         return document;
 
         void ParseRules(int number, string rest)
@@ -547,28 +577,29 @@ internal static class ScriptDsl
                     case "name":
                         if (name is not null)
                         {
-                            throw new ScriptFormatException($"line {number}: name is given twice");
+                            Refuse($"line {number}: name is given twice");
                         }
 
-                        name = Value(number, key, raw);
+                        name = Value(refusal, number, key, raw);
                         break;
 
                     case "trig":
-                        ParseTrigger(number, Value(number, key, raw));
+                        ParseTrigger(number, Value(refusal, number, key, raw));
                         break;
 
                     case "restart":
                         if (restart is not null)
                         {
-                            throw new ScriptFormatException($"line {number}: restart is given twice");
+                            Refuse($"line {number}: restart is given twice");
                         }
 
                         restart = ParseRestart(number, raw ?? string.Empty);
                         break;
 
                     default:
-                        throw new ScriptFormatException(
+                        Refuse(
                             $"line {number}: unknown attribute '{key}' (name, trig, restart)");
+                        break;
                 }
             }
         }
@@ -583,34 +614,35 @@ internal static class ScriptDsl
                 case "pos":
                     if (triggerPosition is not null)
                     {
-                        throw new ScriptFormatException($"line {number}: trig=pos is given twice");
+                        Refuse($"line {number}: trig=pos is given twice");
                     }
 
                     var parts = argument.Split(',');
                     if (parts.Length != 3)
                     {
-                        throw new ScriptFormatException($"line {number}: trig=pos needs three numbers");
+                        Refuse($"line {number}: trig=pos needs three numbers");
                     }
 
                     triggerPosition =
                     [
-                        Float(number, "trig=pos", parts[0]),
-                        Float(number, "trig=pos", parts[1]),
-                        Float(number, "trig=pos", parts[2]),
+                        Float(refusal, number, "trig=pos", parts[0]),
+                        Float(refusal, number, "trig=pos", parts[1]),
+                        Float(refusal, number, "trig=pos", parts[2]),
                     ];
                     break;
 
                 case "ticks":
                     if (triggerTicks is not null)
                     {
-                        throw new ScriptFormatException($"line {number}: trig=ticks is given twice");
+                        Refuse($"line {number}: trig=ticks is given twice");
                     }
 
-                    triggerTicks = ULong(number, "trig=ticks", argument);
+                    triggerTicks = ULong(refusal, number, "trig=ticks", argument);
                     break;
 
                 default:
-                    throw new ScriptFormatException($"line {number}: trig must be pos or ticks, got '{kind}'");
+                    Refuse($"line {number}: trig must be pos or ticks, got '{kind}'");
+                    break;
             }
         }
 
@@ -632,7 +664,7 @@ internal static class ScriptDsl
                 var separator = parameter.IndexOf('=');
                 var key = separator < 0 ? parameter : parameter[..separator];
                 var raw = separator < 0 ? null : parameter[(separator + 1)..];
-                var parsed = UInt(number, $"restart:{key}", Value(number, key, raw));
+                var parsed = UInt(refusal, number, $"restart:{key}", Value(refusal, number, key, raw));
                 policy = key.ToLowerInvariant() switch
                 {
                     "ups" => policy with { Ups = parsed },
@@ -643,7 +675,7 @@ internal static class ScriptDsl
                     "confirms" => policy with { Confirms = parsed },
                     "confirm_gap" => policy with { ConfirmGap = parsed },
                     "tail" => policy with { Tail = parsed },
-                    _ => throw new ScriptFormatException(
+                    _ => Refuse<RestartPolicy>(refusal,
                         $"line {number}: unknown restart parameter '{key}' " +
                         "(ups, downs, hold, open_gap, gap, confirms, confirm_gap, tail)"),
                 };
@@ -655,7 +687,10 @@ internal static class ScriptDsl
         void ParseFrame(int number, string line, List<ScriptCommand> into)
         {
             var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-            var frame = UInt(number, "frame", parts[0]);
+            // The frame of the line is read — and recorded — before its tokens are checked, so a bad
+            // token on frame 132 reports 132: that is the coordinate an author navigates by.
+            var frame = UInt(refusal, number, "frame", parts[0]);
+            lastFrame = frame;
 
             // Tokens of one line become one command per distinct duration: the DSL gives every
             // token its own, and a command holds a single one.
@@ -681,27 +716,27 @@ internal static class ScriptDsl
 
                 if (!Flags.TryGetValue(lower, out var flag))
                 {
-                    throw new ScriptFormatException(
+                    Refuse(
                         $"line {number}: unknown token '{key}' — a pad button, a stick token or `by`");
                 }
 
                 if (arguments.Length > 1)
                 {
-                    throw new ScriptFormatException($"line {number}: '{key}' takes at most one duration");
+                    Refuse($"line {number}: '{key}' takes at most one duration");
                 }
 
                 foreach (var touched in flag.Touched)
                 {
                     if (held[touched])
                     {
-                        throw new ScriptFormatException(
+                        Refuse(
                             $"line {number}: '{Inputs[touched].Key}' is given twice on this frame");
                     }
 
                     held[touched] = true;
                 }
 
-                Hold(arguments.Length == 0 ? 1 : Duration(number, key, arguments[0]), flag.Set);
+                Hold(arguments.Length == 0 ? 1 : Duration(refusal, number, key, arguments[0]), flag.Set);
             }
 
             // The sticks join the line's durations like any other token — a stick held for its own
@@ -743,82 +778,91 @@ internal static class ScriptDsl
 
                 if (arguments.Length is < 1 or > 2)
                 {
-                    throw new ScriptFormatException(
+                    Refuse(
                         $"line {number}: '{lower}' needs a value and an optional duration");
                 }
 
                 var side = isLeft ? 0 : 1;
-                var frames = arguments.Length == 2 ? Duration(number, lower, arguments[1]) : 1;
+                var frames = arguments.Length == 2 ? Duration(refusal, number, lower, arguments[1]) : 1;
                 stickFrames[side] = frames;
 
                 if (lower is LeftStick or RightStick)
                 {
                     if (angleSeen[side])
                     {
-                        throw new ScriptFormatException($"line {number}: '{lower}' is given twice");
+                        Refuse($"line {number}: '{lower}' is given twice");
                     }
 
                     if (axisSeen[side, 0] || axisSeen[side, 1])
                     {
-                        throw new ScriptFormatException(
+                        Refuse(
                             $"line {number}: '{lower}' and an exact stick value on the same line say two different sticks");
                     }
 
                     angleSeen[side] = true;
-                    sticks[side] = FullPress(number, Float(number, lower, arguments[0]));
+                    sticks[side] = FullPress(number, Float(refusal, number, lower, arguments[0]));
                     return true;
                 }
 
                 if (angleSeen[side])
                 {
-                    throw new ScriptFormatException(
+                    Refuse(
                         $"line {number}: '{lower}' and an angle on the same line say two different sticks");
                 }
 
                 var axis = lower is LeftStickX or RightStickX ? 0 : 1;
                 if (axisSeen[side, axis])
                 {
-                    throw new ScriptFormatException($"line {number}: '{lower}' is given twice");
+                    Refuse($"line {number}: '{lower}' is given twice");
                 }
 
                 axisSeen[side, axis] = true;
                 var axes = sticks[side] ?? [0f, 0f];
-                axes[axis] = Axis(number, Float(number, lower, arguments[0]));
+                axes[axis] = Axis(number, Float(refusal, number, lower, arguments[0]), refusal);
                 sticks[side] = axes;
                 return true;
             }
         }
     }
 
-    static string Value(int number, string key, string? value) =>
-        value ?? throw new ScriptFormatException($"line {number}: '{key}' needs a value");
+    /// The value readers below refuse a bad number through the parse's own `Refuse`, so their
+    /// message carries the frame as well as the line. They are static and `Refuse` is local to
+    /// `Parse`, so the refusal is passed in as a delegate — a local function does not convert to
+    /// `Action<string>` on its own, hence the explicit `new`.
+    static string Value(Action<string> refuse, int number, string key, string? value) =>
+        value ?? Refuse<string>(refuse, $"line {number}: '{key}' needs a value");
 
-    static uint Duration(int number, string key, string value)
+    static uint Duration(Action<string> refuse, int number, string key, string value)
     {
-        var frames = UInt(number, key, value);
-        if (frames == 0)
-        {
-            throw new ScriptFormatException($"line {number}: '{key}' duration must be >= 1");
-        }
-
-        return frames;
+        var frames = UInt(refuse, number, key, value);
+        return frames == 0
+            ? Refuse<uint>(refuse, $"line {number}: '{key}' duration must be >= 1")
+            : frames;
     }
 
-    static uint UInt(int number, string field, string value) =>
+    static uint UInt(Action<string> refuse, int number, string field, string value) =>
         uint.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
-            : throw new ScriptFormatException($"line {number}: {field} '{value}' is not a number");
+            : Refuse<uint>(refuse, $"line {number}: {field} '{value}' is not a number");
 
-    static ulong ULong(int number, string field, string value) =>
+    static ulong ULong(Action<string> refuse, int number, string field, string value) =>
         ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var parsed)
             ? parsed
-            : throw new ScriptFormatException($"line {number}: {field} '{value}' is not a number");
+            : Refuse<ulong>(refuse, $"line {number}: {field} '{value}' is not a number");
 
-    static float Float(int number, string field, string value) =>
+    static float Float(Action<string> refuse, int number, string field, string value) =>
         float.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
         && float.IsFinite(parsed)
             ? parsed
-            : throw new ScriptFormatException($"line {number}: {field} '{value}' is not a number");
+            : Refuse<float>(refuse, $"line {number}: {field} '{value}' is not a number");
+
+    /// `Refuse` never returns — it throws — but the compiler needs a value of the reader's own type
+    /// where one is used inside an expression, and this beats every call site casting.
+    static T Refuse<T>(Action<string> refuse, string message)
+    {
+        refuse(message);
+        throw new UnreachableException("Refuse always throws");
+    }
 
     static string StripComment(string line)
     {

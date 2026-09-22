@@ -282,6 +282,32 @@ public class ScriptDslTests
         Assert.Contains(message, Assert.Throws<ScriptFormatException>(() => ScriptDsl.Parse(text)).Message);
 
     [Fact]
+    public void A_refusal_names_the_frame_it_was_on()
+    {
+        // A `.tas` is navigated by frame, so a refusal carries one whenever the parse has read a
+        // frame line: the line says where in the file the text broke and the frame says where in the
+        // script — the frame of the offending line itself, which is the one to look at. Reported from
+        // the editor as `line N: … · up to frame F` (`ScriptFormatException.FrameAware`).
+        var refused = Assert.Throws<ScriptFormatException>(
+            () => ScriptDsl.Parse("! trig=ticks:0\n0 a:2\n132 lsx:997:2 lsy:79:2 lt:2d\n"));
+
+        Assert.Equal(132u, refused.Frame);
+        Assert.Equal("line 3: lt '2d' is not a number", refused.Message);
+        Assert.EndsWith("· up to frame 132", refused.FrameAware());
+    }
+
+    [Fact]
+    public void A_refusal_before_any_frame_line_names_no_frame()
+    {
+        // Nothing has been parsed into a frame yet, so there is none to name — the message stays the
+        // parser's own wording rather than carrying a made-up zero.
+        var refused = Assert.Throws<ScriptFormatException>(() => ScriptDsl.Parse("! nope=1\n0 a\n"));
+
+        Assert.Null(refused.Frame);
+        Assert.DoesNotContain("frame", refused.FrameAware());
+    }
+
+    [Fact]
     public void Refuses_a_script_the_mod_would_not_take()
     {
         // The cross-field limits are the mod's own (`parse_script`): the editor checks them on the

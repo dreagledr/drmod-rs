@@ -14,7 +14,10 @@ internal sealed record ScriptTextStatus(ScriptDocument? Document, string? Error)
         }
         catch (ScriptFormatException refused)
         {
-            return new ScriptTextStatus(null, refused.Message);
+            // `FrameAware` and not `Message`: the line names where in the file the text broke, and the
+            // frame the parse had reached names where in the *script* that was — a frame number is
+            // what a `.tas` is navigated by, and the two together are what makes a typo findable.
+            return new ScriptTextStatus(null, refused.FrameAware());
         }
     }
 

@@ -64,6 +64,52 @@ public class ScriptTextEditorTests
     }
 
     [Fact]
+    public void Names_the_frame_the_refused_line_was_on()
+    {
+        // A `.tas` is navigated by frame, not by line: the line says where in the file the text broke,
+        // and the frame says where in the script that was — which is what makes a typo findable. The
+        // frame of the line itself is read before its tokens are, so the number is the one to look at.
+        var refused = ScriptTextStatus.Of("! trig=ticks:0\n0 a:4\n4 x:2\n20 zz\n");
+
+        Assert.StartsWith("line 4: unknown token 'zz'", refused.Error);
+        Assert.EndsWith("· up to frame 20", refused.Error);
+    }
+
+    [Fact]
+    public void Names_the_frame_of_a_line_whose_own_frame_number_is_malformed()
+    {
+        // The frame number is read before the tokens are checked, so even a line that fails on its
+        // very first token reports the frame it named: `lt` is a stick, and `lt:2d` is its bad value.
+        var refused = ScriptTextStatus.Of("! trig=ticks:0\n0 a:2\n132 lsx:997:2 lsy:79:2 lt:2d\n");
+
+        Assert.StartsWith("line 3: lt '2d' is not a number", refused.Error);
+        Assert.EndsWith("· up to frame 132", refused.Error);
+    }
+
+    [Fact]
+    public void Names_no_frame_while_the_parse_has_not_reached_one()
+    {
+        // A broken rules line comes before any frame exists — there is no frame to name, and a
+        // made-up zero would read as one.
+        var refused = ScriptTextStatus.Of("! name=script\n! name=twice\n");
+
+        Assert.StartsWith("line 2: the rules line must come first", refused.Error);
+        Assert.DoesNotContain("frame", refused.Error);
+    }
+
+    [Fact]
+    public void Names_the_last_frame_of_the_text_when_the_limits_refuse_the_document()
+    {
+        // The cross-field limits (`ScriptJson.Validate`) refuse a document, not a line: the frame is
+        // the last one the whole text had — the command starting at 3600 is the one that is too long,
+        // and the text ran up to 3600.
+        var refused = ScriptTextStatus.Of($"! trig=ticks:0\n3500 a:1\n3600 x:2\n");
+
+        Assert.StartsWith("commands[1]: t+duration exceeds max 3600", refused.Error);
+        Assert.EndsWith("· up to frame 3600", refused.Error);
+    }
+
+    [Fact]
     public void Reads_a_draft_the_way_the_text_box_reports_it()
     {
         // Measured live: a WinUI `TextBox` hands its text back with a lone `\r`, and the pane puts
@@ -225,6 +271,11 @@ public class ScriptTextEditorTests
 
     /// The region as another test builds it — the scanner in `AccessibilityTests` walks the same
     /// element tree the pane would mount.
+    ///
+    /// The three holders are the region's own wiring (`Mirror`): it is the mounted controls that know
+    /// where the text has scrolled, and `OnMount` is what fills the first two, so a test that only
+    /// renders the tree gets fresh, empty ones — what a headless test cannot do is make them follow
+    /// each other.
     internal static ScriptTextEditorView RegionFor(
         ScriptTextStatus status,
         string text = Draft,
