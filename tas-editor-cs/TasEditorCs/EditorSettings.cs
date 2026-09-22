@@ -41,6 +41,20 @@ internal static class EditorSettings
     /// which is how the old, single-line format is recognised (`Load`).
     static readonly string[] Keys = ["folder", "dt", "cap", "cap_fps", "pin_seed", "seed", "headless"];
 
+    /// The folder the workspace opens on when nothing was ever picked: `examples` next to the exe,
+    /// the scripts shipped in the distribution.
+    ///
+    /// `AppContext.BaseDirectory`, not `Assembly.Location` — the latter is empty in a single-file
+    /// publish (the Reactor packaging guide calls this out). `null` when the folder is not there,
+    /// which is the case in the dev loop and in a build that did not copy it: the editor then opens
+    /// on no workspace and says so, exactly as before. `Open folder…` stays the answer either way,
+    /// and a folder the user picks is remembered and wins from then on.
+    internal static string? FirstFolder(string? baseDirectory = null)
+    {
+        var path = Path.Combine(baseDirectory ?? AppContext.BaseDirectory, "examples");
+        return Directory.Exists(path) ? path : null;
+    }
+
     /// The remembered settings. A file that cannot be read, is empty, or holds values nobody can
     /// parse, answers with the defaults: an editor that opens on an empty workspace beats one that
     /// refuses to start over its own settings. `null` comes back in the `Folder`, which is also a

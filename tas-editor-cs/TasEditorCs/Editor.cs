@@ -38,8 +38,10 @@ sealed class Editor : Component
     {
         // The remembered folder and run rules, read from the settings file once: `UseMemo` answers
         // with the same value for every later render, so a re-render never touches the disk again.
+        // A first launch has no remembered folder, and opens on the example scripts shipped next to
+        // the exe instead of on nothing — a picked folder is remembered and takes over from then on.
         var remembered = UseMemo(() => EditorSettings.Load(), []);
-        var (folder, setFolder) = UseState<string?>(remembered.Folder);
+        var (folder, setFolder) = UseState<string?>(remembered.Folder ?? EditorSettings.FirstFolder());
 
         // The rules a run is configured by. They are the mod's state for one run and not part of the
         // script — the text format says so itself (`docs/SCRIPT_DSL.md` §6) — so they live here and in

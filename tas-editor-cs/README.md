@@ -44,6 +44,7 @@ tas-editor-cs/
 │   ├── ScriptBuffers.cs    #   the text each script is being edited into, and what is unsaved
 │   ├── CommandRow.cs       #   one frame in the converter's angle + deflection shape
 │   ├── Script/             #   the script formats: model, JSON, DSL text, frames
+│   ├── examples/           #   example `.tas` scripts shipped with the app (a copy of tools/demo)
 │   ├── Assets/ Properties/
 │   └── TasEditorCs.csproj
 └── TasEditorCs.Tests/      # xUnit, headless unit layer
@@ -102,6 +103,21 @@ branch, though it holds no hook slot), and the folder is then read as a **listin
 `.tas` files, by name, each one read and parsed (`Workspace.List`). Parsing at listing time is what
 puts a frame count in the row — and what lets a file that does not read as a script say so in its own
 row instead of disappearing (`ScriptEntry.Error`).
+
+**A first launch opens on `examples/` next to the exe**, not on an empty pane: the distribution ships
+two scripts there (`r03_tas.tas`, the first R-03 segment's real TAS, and `stress.tas`, the same
+aiming loop swept around the compass at 3482 frames), and `EditorSettings.FirstFolder()` hands the
+editor that path when nothing was ever picked. ⚠️ It is a **default, not a pinned workspace**: the
+folder a user picks is remembered and wins from then on, so the examples never come back once
+somebody has chosen their own. `null` when the directory is not there — the dev loop and a publish
+that skipped copying it open on no workspace and say so, exactly as before. The path is built from
+`AppContext.BaseDirectory`, which is also what the packaging guide prescribes for the single-file
+form (`Assembly.Location` is empty there).
+
+⚠️ **These examples are copies, not links into the repo's `tools/demo/`.** The editor is
+self-contained — its own workspace, its own build — and a `Link` into a Rust tool directory would
+break the moment `tas-editor-cs/` is built on its own, which is exactly how CI builds it. The price
+is that the copies drift if the originals change; the csproj comment says so too.
 
 ⚠️ **The listing is built inside a render.** `Editor` memoizes it on `(folder, revision)`, and every
 write to the folder — a save, a new file, a delete — bumps the revision, so the rows re-read the

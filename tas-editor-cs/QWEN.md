@@ -113,8 +113,10 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   store, and a file from before the rules existed reads as the folder), and the folder read as a
   listing —
   the top-level `.tas` files by name, each read and parsed, so a row carries its frame count and a
-  file that does not read as a script says so in its own row instead of vanishing. **New** writes an
-  empty `script.tas` (`-2`, `-3` …), **Duplicate** copies to `<name>-copy.tas`, **Rename** moves the
+  file that does not read as a script says so in its own row instead of vanishing. **A first launch
+  with nothing remembered opens on `examples/` next to the exe** (`EditorSettings.FirstFolder()`) —
+  two scripts copied from the repo's `tools/demo/` into `TasEditorCs/examples/` — and a picked folder
+  wins from then on. **New** writes an empty `script.tas` (`-2`, `-3` …), **Duplicate** copies to `<name>-copy.tas`, **Rename** moves the
   file to the name that was typed — a taken name is refused with a message rather than suffixed, and
   the buffer travels with the file — **Delete** asks first in a declarative `ContentDialog`. ⚠️ The
   file name is still *not* the script's `name=`, and the text never renames the file. ⚠️ The listing

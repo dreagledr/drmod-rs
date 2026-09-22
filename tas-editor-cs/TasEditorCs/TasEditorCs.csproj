@@ -104,6 +104,20 @@
 
     <ItemGroup>
         <Content Include="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" />
+        <!--
+            Example scripts ship next to the exe so a fresh install has something to open:
+            the editor starts on an empty folder, and the `Open folder…` picker would
+            otherwise have nothing to point at.
+
+            These are copies, not links to the repo's tools/demo/: the editor is meant to be
+            self-contained (its own workspace, its own build), and a `Link` into a Rust tool
+            directory would break the moment this folder is built on its own.
+
+            `r03_tas.tas` is the first R-03 segment's real TAS; `stress.tas` is the same
+            aiming loop swept around the compass (3482 frames), which is what the command
+            table's scrolling and the text region's live parse get exercised against.
+        -->
+        <Content Include="examples\*.tas" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
 
     <ItemGroup>
