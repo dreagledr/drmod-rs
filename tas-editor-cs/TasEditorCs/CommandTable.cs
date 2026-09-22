@@ -1,44 +1,50 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Threading.Tasks;
 using Microsoft.UI.Reactor;
-using Microsoft.UI.Reactor.Controls;        // CellContext, HeaderContext, ColumnBuilder, SelectionMode
+using Microsoft.UI.Reactor.Controls;        // CellContext, HeaderContext, FieldDescriptor, SelectionMode
 using Microsoft.UI.Reactor.Core;            // Element, ThemeRef, Theme
-using Microsoft.UI.Reactor.Data;            // FieldDescriptor, IDataSource, IMutableDataSource, RowKey
+using Microsoft.UI.Reactor.Data;            // IDataSource, RowKey
 using Microsoft.UI.Reactor.Data.Providers;  // ListDataSource
 using Microsoft.UI.Xaml;                    // HorizontalAlignment, VerticalAlignment
 using static Microsoft.UI.Reactor.Advanced.Factories; // DataGrid, Column
-using static Microsoft.UI.Reactor.Factories;          // Border, CheckBox, TextBox, TextBlock, Empty
+using static Microsoft.UI.Reactor.Factories;          // Border, TextBlock, Empty
 
-sealed record CommandTableProps(ScriptEntry Script);
+sealed record CommandTableProps(ScriptEntry Script, string Text, ScriptTextStatus Status);
 
-/// The command table: one row per script frame, one column per stick value and per boolean
-/// input — the whole script as a matrix, so a timing reads off the shape of the lit cells
-/// instead of a JSON command list.
+/// The command table: one row per frame, one column per DSL token — the whole script as a
+/// matrix, so a timing reads off the shape of the lit cells instead of a JSON command list.
 ///
-/// Rows are generated mock frames until the on-disk workspace is wired up. The grid virtualizes
-/// them, so a 20 000-frame script only ever renders the visible ten.
+/// Read-only. The table visualizes the `.tas` text in the region below it: a row reads as the
+/// line the format would write for that frame, and editing is done in the text, in one place,
+/// rather than in two representations that would have to be kept in step.
 ///
-/// Editing is the grid's own inline editing: a tap on a cell opens that column's editor, and the
-/// commit goes through `onRowChanged`, which writes the new row back into the source.
+/// The frames come from the text on screen, read token by token rather than from the parsed
+/// document: a document has already resolved `ls:<angle>` into axis numbers, so the two spellings
+/// are indistinguishable by then, and the table is meant to show what the script says.
 sealed class CommandTable : Component<CommandTableProps>
 {
     public override Element Render()
     {
-        // Memoized on purpose: DataGrid keys the grid's mount off the source's identity, so a
+        // Memoized on the text: DataGrid keys the grid's mount off the source's identity, so a
         // source rebuilt on every render would remount the grid and drop the scroll position.
         var source = UseMemo(
-            () => new ListDataSource<CommandRow>(CommandRows.For(Props.Script), row => (RowKey)row.Frame),
-            Props.Script);
+            () => new ListDataSource<ScriptFrame>(Frames(Props.Text), row => (RowKey)(int)row.Frame),
+            Props.Text);
 
         return View(source);
     }
 
+    /// The frames the table shows: the text's own, or nothing when it does not parse. The text
+    /// region carries the parser's message, so the table stays silent rather than saying the same
+    /// thing a third way.
+    internal static IReadOnlyList<ScriptFrame> Frames(string text) =>
+        ScriptTextStatus.Of(text).Document is not null ? ScriptFrameProjection.Project(text) : [];
+
     /// The pane body. Split out of the component because `Component<TProps>.Props` is read-only
     /// and set by the host, so a headless unit test has no way to render the component itself —
     /// it asserts on this instead.
-    internal static Element View(IDataSource<CommandRow> source) =>
+    internal static Element View(IDataSource<ScriptFrame> source) =>
         FlexColumn(
             DataGrid(
                 source: source,
@@ -47,35 +53,25 @@ sealed class CommandTable : Component<CommandTableProps>
                 cellTemplate: Cell,
                 headerTemplate: Header,
                 placeholderCellTemplate: PlaceholderCell,
-                editable: true,
-                onRowChanged: (key, row) => Commit(source, key, row)
+                editable: false,
+                selectionMode: SelectionMode.None
             ).Flex(grow: 1, basis: 0)
         ).Flex(grow: 1);
-
-    /// An edit only exists in the grid's own optimism overlay until it is written back here — the
-    /// overlay is dropped on the next fetch, so without this the value would revert. The grid may
-    /// call this off the UI thread, which `ListDataSource.UpdateAsync` takes a lock for.
-    internal static Task Commit(IDataSource<CommandRow> source, RowKey key, CommandRow row) =>
-        source is IMutableDataSource<CommandRow> mutable
-            ? mutable.UpdateAsync(key, row)
-            : Task.CompletedTask;
 
     // The cells butt against each other: no padding, no border, no gap, and the row pitch is
     // exactly the row height. What separates a cell from its neighbour is the surface it is
     // painted with, so neighbouring cells never share one — with the held inputs lit, the whole
     // script reads as a checkerboard of lit and unlit cells.
-    //
-    // The height is set by what has to fit while a cell is open for editing: at 18 — the dense pitch
-    // that reads best as a matrix — the stick editor, a stock `TextBox` with a caret and a selection,
-    // has no usable room. The height is a knob: the shrunk editors above fit at 24.
-    const double RowHeight = 32;
+    const double RowHeight = 24;
     const double HeaderHeight = 20;
     // Flag cells are square: the row height doubles as the width, so one of the two cannot drift
     // away from a matrix that reads as a matrix.
     const double FlagWidth = RowHeight;
-    const double AngleWidth = 46;
-    const double AmountWidth = 40;
     const double FrameWidth = 44;
+    // An angle cell holds up to "359.999" — six characters of the mono face at 10 px.
+    const double AngleWidth = 44;
+    // An axis cell holds up to "-1000" in the same face.
+    const double AxisWidth = 40;
 
     /// Built once: the grid keys its column-layout cache on this list's reference identity, so
     /// a list rebuilt per render would rebuild every row's column definitions with it.
@@ -83,131 +79,63 @@ sealed class CommandTable : Component<CommandTableProps>
 
     static IReadOnlyList<FieldDescriptor> BuildColumns()
     {
-        var columns = new List<FieldDescriptor>(CommandKeys.All.Length + 5)
+        var columns = new List<FieldDescriptor>(FlagKeys.All.Length + 7)
         {
             // The frame number is the row's identity: not editable, and pinned so it stays put
-            // when the table is scrolled sideways.
-            Column<CommandRow>("Frame", row => row.Frame, displayName: "#",
-                width: FrameWidth, pin: PinPosition.Left).NotSortable(),
-
-            // Each stick is two columns: where it points, and how far it is pushed.
-            Editable(
-                Column<CommandRow>("left_stick_angle", row => row.LeftStickAngle,
-                    displayName: "LD", width: AngleWidth).NotSortable(),
-                (row, value) => row with { LeftStickAngle = ReadNumber(value, row.LeftStickAngle, 360) },
-                NumberEditor("Left stick direction in degrees")),
-            Editable(
-                Column<CommandRow>("right_stick_angle", row => row.RightStickAngle,
-                    displayName: "RD", width: AngleWidth).NotSortable(),
-                (row, value) => row with { RightStickAngle = ReadNumber(value, row.RightStickAngle, 360) },
-                NumberEditor("Right stick direction in degrees")),
-            Editable(
-                Column<CommandRow>("left_stick_amount", row => row.LeftStickAmount,
-                    displayName: "LM", width: AmountWidth).NotSortable(),
-                (row, value) => row with { LeftStickAmount = ReadNumber(value, row.LeftStickAmount, 1) },
-                NumberEditor("Left stick deflection")),
-            Editable(
-                Column<CommandRow>("right_stick_amount", row => row.RightStickAmount,
-                    displayName: "RM", width: AmountWidth).NotSortable(),
-                (row, value) => row with { RightStickAmount = ReadNumber(value, row.RightStickAmount, 1) },
-                NumberEditor("Right stick deflection")),
+            // when the table is scrolled sideways. Its header is not a DSL token — the format
+            // spells a frame as the bare number at the start of the line, which is what "#" says.
+            Column<ScriptFrame>("Frame", row => row.Frame, displayName: "#", width: FrameWidth, pin: PinPosition.Left).NotSortable(),
         };
 
-        // Named after the script's `input` keys so the columns line up with the format the
-        // script is written in; the header is the 1-2 letter label that fits the column width.
-        for (var bit = 0; bit < CommandKeys.All.Length; bit++)
+        // Each stick is three columns, named and headed by the three tokens the DSL gives it: the
+        // angle `ls`/`rs`, and the two axes `lsx`/`lsy` and `rsx`/`rsy`. A line writes one form or
+        // the other, so exactly one of the three carries a value and the rest are blank — the table
+        // never invents the form the text did not write.
+        Stick(columns, "ls");
+        Stick(columns, "rs");
+
+        // The flag columns, in the DSL's token order, named and headed by the token itself.
+        for (var bit = 0; bit < FlagKeys.All.Length; bit++)
         {
             var captured = bit;
-            var (key, label) = CommandKeys.All[bit];
-            columns.Add(Editable(
-                Column<CommandRow>(key, row => row.Holds(captured),
-                    displayName: label, width: FlagWidth).NotSortable(),
-                (row, value) => row.With(captured, (bool)value!),
-                FlagEditor(key)));
+            columns.Add(
+                Column<ScriptFrame>(FlagKeys.All[bit].Token, row => row.Holds(captured),
+                    displayName: FlagKeys.All[bit].Token, width: FlagWidth).NotSortable());
         }
 
         return columns;
     }
 
-    /// Wires a column for inline editing. The setter has to be supplied by hand: the column
-    /// builder derives it from a property named after the column, and these columns are named
-    /// after the script's input keys — the frame has no such property, and the flags live in one
-    /// bit field.
-    static FieldDescriptor Editable(
-        ColumnBuilder<CommandRow> column,
-        Func<CommandRow, object?, CommandRow> setValue,
-        Func<object, Action<object>, Element> editor) =>
-        column.Build() with
-        {
-            SetValue = (owner, value) => setValue((CommandRow)owner, value),
-            IsReadOnly = false,
-            Editor = editor,
-        };
-
-    // The flag editor is shrunk to the cell: a stock WinUI checkbox keeps a 120 DIP minimum width,
-    // which would paint over four of the square flag columns. Not `Editors.CheckBox()` — that wraps
-    // this same control without the shrinking.
-    //
-    // It carries an automation name because a bare checkbox has no caption of its own and the
-    // column header next to it is a 1-2 letter label (REACTOR_A11Y_003).
-    static Func<object, Action<object>, Element> FlagEditor(string input) => (value, onChange) =>
-        CheckBox((bool)(value ?? false), held => onChange(held))
-            .MinWidth(0)
-            .MinHeight(0)
-            .HAlign(HorizontalAlignment.Center)
-            .AutomationName(input);
-
-    // Stick values edit in a plain `TextBox`, not a `NumberBox`, and it is a fit problem rather than
-    // a taste one: a number box hosts its own text box, whose stock 32 DIP minimum height the outer
-    // `MinHeight(0)` cannot reach — measured, the control overflowed the 32 DIP row — and it brings
-    // a clear button that eats a 46 DIP wide cell. The explicit height pins the fit.
-    //
-    // The buffer stays the raw text (see `EditorText`), so `SetValue` is where the number is read:
-    // parsing per keystroke would reformat the text under the caret.
-    static Func<object, Action<object>, Element> NumberEditor(string name) => (value, onChange) =>
-        TextBox(EditorText(value), text => onChange(text))
-            .MinHeight(0)
-            .Height(RowHeight - 6)
-            .FontSize(10)
-            .AutomationName(name);
-
-    /// What the editor shows: the row's value formatted like the cell, or — once the user has typed
-    /// — the buffer itself, so a half-typed number survives the re-render each keystroke causes.
-    static string EditorText(object? value) => value switch
+    /// A stick as its three columns, named and headed by the tokens the DSL spells it with: the
+    /// angle token (`ls`, `rs`) and its two axes (`lsx`/`lsy`, `rsx`/`rsy`). The value column
+    /// selector supplies the number for the cell template, which formats it.
+    static void Stick(List<FieldDescriptor> columns, string token)
     {
-        string typed => typed,
-        double number => number.ToString("F2", CultureInfo.InvariantCulture),
-        _ => string.Empty,
-    };
-
-    /// Reads a committed edit back. Unparsable input and values outside the column's range leave the
-    /// field alone rather than throwing or writing nonsense into the row.
-    static double ReadNumber(object? value, double fallback, double max) =>
-        value is string text
-        && double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
-        && double.IsFinite(parsed)
-            ? Math.Clamp(parsed, 0, max)
-            : fallback;
-
-    static readonly Dictionary<string, int> ColumnOrder = BuildColumnOrder();
-
-    static Dictionary<string, int> BuildColumnOrder()
-    {
-        var order = new Dictionary<string, int>(StringComparer.Ordinal);
-        for (var index = 0; index < Columns.Count; index++) order[Columns[index].Name] = index;
-        return order;
+        columns.Add(Column<ScriptFrame>(token, row => Stick(row, token).Angle,
+            displayName: token, width: AngleWidth).NotSortable());
+        columns.Add(Column<ScriptFrame>(token + "x", row => Stick(row, token).X,
+            displayName: token + "x", width: AxisWidth).NotSortable());
+        columns.Add(Column<ScriptFrame>(token + "y", row => Stick(row, token).Y,
+            displayName: token + "y", width: AxisWidth).NotSortable());
     }
+
+    static StickValue Stick(ScriptFrame row, string token) =>
+        token == "ls" ? row.Left : row.Right;
 
     /// One cell: a block that fills its column and its row whole. The grid centres whatever the
     /// template returns and leaves its other modifiers alone, so the block carries its height
     /// explicitly and stretches to the column width on its own.
-    internal static Element Cell(CellContext<CommandRow> cell)
+    ///
+    /// A value the line left out is a blank block rather than a zero: the table shows the tokens
+    /// the text carries, and an axis the text does not mention has no value to show.
+    internal static Element Cell(CellContext<ScriptFrame> cell)
     {
-        var surface = CellSurface(cell.Row.Frame, cell.Column.Name);
+        var surface = CellSurface((int)cell.Row.Frame, cell.Column.Name);
+        var text = Text(cell);
 
         return cell.Value is bool held
             ? Border(Empty()).Background(held ? HeldSurface : surface).Height(RowHeight)
-            : Border(Value(cell.Value)
+            : Border(TextBlock(text)
                     .FontSize(10)
                     .HAlign(HorizontalAlignment.Center)
                     .VAlign(VerticalAlignment.Center))
@@ -215,8 +143,30 @@ sealed class CommandTable : Component<CommandTableProps>
                 .Height(RowHeight);
     }
 
-    /// A header cell is a label and nothing else — at 18 px per column the 1-2 letter header is
-    /// all that fits, so the meaning has to come from the table's own legend.
+    /// What one cell says — every non-flag cell is a stick value the line wrote, keyed by the DSL
+    /// token it came from, and a value the line did not write is blank rather than zero.
+    static string Text(CellContext<ScriptFrame> cell)
+    {
+        var row = cell.Row;
+        return cell.Column.Name switch
+        {
+            "Frame" => row.Frame.ToString(CultureInfo.InvariantCulture),
+            "ls" => Value(row.Left.Angle),
+            "lsx" => Value(row.Left.X),
+            "lsy" => Value(row.Left.Y),
+            "rs" => Value(row.Right.Angle),
+            "rsx" => Value(row.Right.X),
+            "rsy" => Value(row.Right.Y),
+            _ => "",
+        };
+    }
+
+    /// A stick value the way the text wrote it, or blank when the line left it out.
+    static string Value(double? value) =>
+        value is { } number ? number.ToString(CultureInfo.InvariantCulture) : "";
+
+    /// A header cell is a label and nothing else — at 24 px per column the token is all that
+    /// fits, and the token is what the text region's reference spells out.
     internal static Element Header(HeaderContext header) =>
         Border(TextBlock(header.Column.DisplayName ?? header.Column.Name)
                 .FontSize(10)
@@ -225,18 +175,15 @@ sealed class CommandTable : Component<CommandTableProps>
             .Background(HeaderSurface)
             .Height(HeaderHeight);
 
-    static Element Value(object? value) => value switch
-    {
-        double number => TextBlock(number.ToString("F2")),
-        int number => TextBlock(number.ToString()),
-        _ => TextBlock(""),
-    };
-
     /// A row whose block the cache has not fetched yet. Same block geometry as a real cell, but
     /// flat: this callback gets no row index, so it cannot join the checkerboard, and the grid's
     /// own shimmer is a translucent fill that all but disappears on a dark table.
     internal static Element PlaceholderCell(FieldDescriptor column, double width) =>
         Border(Empty()).Background(SurfaceA).Height(RowHeight);
+
+    /// Numbers are written the way the DSL writes them: shortest round-trip, invariant culture,
+    /// so a value in the table is the value the text carries.
+    static string Number(double value) => value.ToString(CultureInfo.InvariantCulture);
 
     // Opaque surfaces from the solid background family, not the translucent layer fills:
     // measured in the light theme, LayerFill/CardBackground resolve to #80FFFFFF and
@@ -255,5 +202,14 @@ sealed class CommandTable : Component<CommandTableProps>
     {
         var index = ColumnOrder.TryGetValue(column, out var found) ? found : 0;
         return ((frame ^ index) & 1) == 0 ? SurfaceA : SurfaceB;
+    }
+
+    static readonly Dictionary<string, int> ColumnOrder = BuildColumnOrder();
+
+    static Dictionary<string, int> BuildColumnOrder()
+    {
+        var order = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var index = 0; index < Columns.Count; index++) order[Columns[index].Name] = index;
+        return order;
     }
 }

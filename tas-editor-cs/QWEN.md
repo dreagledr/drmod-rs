@@ -125,11 +125,16 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   compares *readings*. Before that, the first save wrote the control's text through: 31 `\r` and no
   `\n` in the file (one line to the parser, frames glued: `… y:6` + `22` → `y:622`) while the editor
   showed the script as fine.
-- The command table is real: a `DataGrid` over generated frames (`CommandTable.cs`), one column per
-  script input, 20 000-frame scripts included. Its cells are edited inline through the grid's own
-  editing (`editable: true`, click to open an editor, commit written back to the source). Its frames
-  are still the mock generator's (`CommandRows`, seeded from the file's path and cut to the entry's
-  frame count — the count comes from the text, the content does not).
+- The command table is real and **read-only**: a `DataGrid` over the selected script's own `.tas` text
+  (`CommandTable.cs`), one column per DSL token, 20 000-frame scripts included. It is a picture of the
+  text region, not a second editor — editing lives in the text alone. `Script/ScriptFrameProjection.cs`
+  reads the text token by token (`ls:<angle>` fills the `ls` column, `lsx`/`lsy` fill theirs, a flag
+  lights its own), because a parsed `ScriptCommand` has already resolved the two stick spellings into
+  one and folded the direction flags into a stick. Nothing is converted between the forms: exactly one
+  of a stick's three columns carries a value and the rest are blank. Columns and headers are the DSL
+  tokens themselves (`# | ls | lsx | lsy | rs | rsx | rsy | a | x | … mr`), so the table doubles as the
+  format's legend; a token's `:N` duration lights the whole run, frames run 0..last, and a text that
+  does not parse leaves the table empty with the message staying in the text region.
 - The script text region is real too (`ScriptTextEditor.cs`): the selected script's `.tas` text in a
   multiline monospaced `TextBox`, re-read on every keystroke, with what the text parses to — or the
   line the parser refused — as the line above it (`ScriptTextStatus`; the parse itself is the pane's,
@@ -148,17 +153,17 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   contradicted the status line one region below). The name, the trigger and the restart policy come
   next.
 - The three script representations round-trip through `Script/`: the API JSON (`ScriptJson`), the
-  `.tas` text (`ScriptDsl`) and the table's frames (`ScriptFrames`), around the `ScriptDocument` hub.
-  Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and they
-  are exactly what the command table heads its columns with — so **a column, its JSON key and its
+  `.tas` text (`ScriptDsl`) and the converter's frames (`ScriptFrames`), around the `ScriptDocument`
+  hub. Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and
+  they are exactly what the command table heads its columns with — so **a column, its JSON key and its
   token have to be renamed together**. Movement is the stick there (`ls:<angle>` on the compass,
   `lsx`/`lsy` exact values, `wk` halving); a direction flag from a JSON script is written as the stick
-  it stands for, and the table's four movement columns therefore light up only for JSON-sourced
-  frames. Fixtures come from the Rust tool `tools/script_gen`, the editor's goldens sit next to them
-  in `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in
-  `../docs/SCRIPT_DSL.md` and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha
-  there before trusting a property initializer to survive deserialization.
-- Next: the script controls region's remaining fields, the table↔text link (an edit in one seen by
-  the other), and a close guard for unsaved buffers (today they live in the process's memory only —
-  an explicit save is the whole of the save UX).
+  it stands for, which is why the text has no direction tokens and the table no direction columns.
+  Fixtures come from the Rust tool `tools/script_gen`, the editor's goldens sit next to them in
+  `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in `../docs/SCRIPT_DSL.md`
+  and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha there before trusting a
+  property initializer to survive deserialization.
+- Next: the script controls region's remaining fields (name, trigger, restart policy), and a close
+  guard for unsaved buffers (today they live in the process's memory only — an explicit save is the
+  whole of the save UX).
 - The Rust version (`../tas-editor/`) is left untouched; this project is the candidate replacement.

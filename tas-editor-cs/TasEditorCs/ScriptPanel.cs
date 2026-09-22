@@ -77,7 +77,8 @@ sealed class ScriptPanel : Component<ScriptPanelProps>
         {
             Region(ScriptControlsKey, "Script controls", 180, Controls(view, save)),
             Region(CommandTableKey, "Command table", 320,
-                Component<CommandTable, CommandTableProps>(new CommandTableProps(view.Script))),
+                Component<CommandTable, CommandTableProps>(
+                    new CommandTableProps(view.Script, view.Text, view.Status))),
             Region(ScriptTextKey, "Script text", null,
                 Component<ScriptTextEditor, ScriptTextEditorProps>(
                     new ScriptTextEditorProps(view.Text, view.Status, view.TextChanged))),

@@ -8,10 +8,10 @@ Status: **two-pane shell over a real workspace.** The window is split by a dragg
 left pane holds the `.tas` files of a folder the user picks (the list and the file actions are real),
 the right pane stacks three regions — script controls, command table, script text — with the same
 drag-resize splitters between them. The command table region and the script text region are both
-filled in; the table still builds its frames from a mock generator, the text is the file's, and the
-script controls region is Save plus a one-line note. The three representations of a script — the API
-JSON, the `.tas` text and the table's frames — round-trip through `Script/` (see *Script formats*
-below).
+filled in; the table is a **read-only** picture of the text on screen (one column per DSL token, no
+editing), the text is the file's, and the script controls region is Save plus a one-line note. The
+three representations of a script — the API JSON, the `.tas` text and the table's frames — round-trip
+through `Script/` (see *Script formats* below).
 
 This is the C# version living next to the Rust one (`../tas-editor/`); that one is left untouched.
 Folder conventions — language, component layout, what to run before calling something done —
@@ -29,12 +29,12 @@ tas-editor-cs/
 │   ├── EditorSettings.cs   #   what survives a restart (the workspace folder)
 │   ├── WorkspacePanel.cs   # left pane — the script list and its management
 │   ├── ScriptPanel.cs      # right pane — the three stacked regions
-│   ├── CommandTable.cs     #   the command table region (editable DataGrid)
+│   ├── CommandTable.cs     #   the command table region (read-only DataGrid over the text)
 │   ├── ScriptTextEditor.cs #   the script text region (`.tas` text + its status line)
 │   ├── ScriptTextStatus.cs #     what a text parses to, or why it does not
 │   ├── ScriptEntry.cs      # the script model — one `.tas` file
 │   ├── ScriptBuffers.cs    #   the text each script is being edited into, and what is unsaved
-│   ├── CommandRow.cs       #   one script frame + the generated mock frames
+│   ├── CommandRow.cs       #   one frame in the converter's angle + deflection shape
 │   ├── Script/             #   the script formats: model, JSON, DSL text, frames
 │   ├── Assets/ Properties/
 │   └── TasEditorCs.csproj
@@ -150,27 +150,52 @@ reaches the docking states this shell does not survive.
 The three initial heights are a knob (`180`, `320`, and the last one left open), but the host is what
 resolves them against a window, and it weighs what each pane's *content* asks for. The text region is
 the one that changes its mind — its content is as tall as the script — so a long script pulls height
-away from the table region: measured with the 819-line mock selected, the regions came out ~180 /
+away from the table region: measured with an 819-line script selected, the regions came out ~180 /
 ~124 / ~440 DIP, i.e. the table sat at its minimum. That is the host's distribution over content the
 user can see; the splitter is the fix, and there is nothing to hard-code here.
 
 ### The command table
 
-`CommandTable.cs` fills the middle region: a `DataGrid<CommandRow>` from
-`Microsoft.UI.Reactor.Advanced` (already referenced for docking), one row per script frame, one
-column per script input — the frame number, each stick's direction and deflection, and the 26
-booleans of the script format (`docs/API.md` §4.2 in the Rust repo, which is where the column names
-come from). Frames are generated, not parsed: `CommandRow.cs` expands a phase table into a
-deterministic mock script, so the 20 000-frame case the workspace is expected to hold can be
-exercised before the real parser exists.
+`CommandTable.cs` fills the middle region: a `DataGrid<ScriptFrame>` from
+`Microsoft.UI.Reactor.Advanced` (already referenced for docking), one row per script frame, one column
+per **DSL token** — read-only, and a picture of the text region's own `.tas` text.
+
+What "a picture of the text" means is the whole design:
+
+- **The frames are read out of the text, token by token, not from the parsed document.**
+  `Script/ScriptFrameProjection.cs` walks the lines, and each token becomes the column it spells:
+  `ls:<angle>` fills the `ls` column, `lsx`/`lsy` fill `lsx`/`lsy`, a flag lights its own column. A
+  `ScriptCommand` is no use here — by the time a document exists, `ls:0` has been resolved into the
+  axes `(0, -1000)` and the four movement flags have been folded into a stick, so the two spellings
+  are indistinguishable. The table is meant to show what the script *says*, so it reads the saying.
+- **Nothing is converted between the two stick forms.** A line writes `ls:0` *or* `lsx`/`lsy`, never
+  both (the parser refuses it), so exactly one of a stick's three columns carries a value and the
+  other two are blank — never a resolved `0` standing in for a token the line did not write.
+- **Columns are the DSL's own tokens, headers included**: `# | ls | lsx | lsy | rs | rsx | rsy | a |
+  x | y | lr | lt | rt | wk | ax | rb | lb | dd | du | dl | cd | b | r | esc | ok | mu | md | ml |
+  mr` (29 columns). The flag columns are named and headed by the token itself, so the table doubles as
+  the text format's legend; only the frame column needs a header that is not a token (`#`, because the
+  format spells a frame as the bare number at the start of the line). `FlagKeys.All` is that list,
+  in the order a line writes its tokens.
+- **A token's `:N` duration lights the whole run.** `4 lt:3` covers frames 4, 5 and 6 — three rows
+  with `lt` lit — which is the run the text says. Two tokens on one frame both stand (the format ORs
+  its bits, and the table keeps the longer run).
+- **Frames run 0 .. last**, so a gap the text writes nothing for is a blank row rather than a missing
+  one — again what the format says by omitting it.
+- **A text that does not parse leaves the table empty.** The text region carries the parser's own
+  message; the table does not repeat it a third way. Verified live: with a broken fixture selected the
+  table reads *No data to display* while the region above it names the line.
+- ⚠️ **Read-only is a code path, not a flag.** `editable: false`, `selectionMode: None`, and no
+  `Editor`/`SetValue`/`onRowChanged` at all — plus a test asserting every column is read-only and the
+  grid has no `OnRowChanged`, so the capability cannot creep back in unnoticed. Editing is the text's,
+  in one place, instead of two representations that would have to be kept in step.
 
 How the gapless look is put together:
 
 - **The grid does not draw the gaps** — its cell padding is a fixed `CellPadLeft 8 / CellPadRight 12`
   in `DataGridComponent` (a deliberate gutter, per its own comment). Both `cellTemplate:` and
   `headerTemplate:` bypass it entirely, so a cell is one `Border` that stretches to its column and is
-  exactly `RowHeight` tall. Measured on the live tree: cells of 44 / 46 / 46 / 40 / 40 and 26 × 18
-  DIP, 18 tall, `margin 0`, `Stretch`, 31 children per row grid — no gap anywhere.
+  exactly `RowHeight` tall.
 - **The checkerboard is the cell surface**, alternating on `(frame ^ columnIndex) & 1`, with the held
   inputs painted in the accent color.
 - ⚠️ **Translucent theme fills are useless for this.** `Theme.LayerFill` / `Theme.CardBackground`
@@ -181,57 +206,39 @@ How the gapless look is put together:
   theme-aware through the same `Theme.Ref` path, so the toggle keeps working.
 - `placeholderCellTemplate:` gives not-yet-loaded rows the same block geometry — the grid's own
   shimmer is a translucent fill at 50 % opacity, which all but disappears on a dark table.
-- Flag columns are **square**: `FlagWidth` is `RowHeight` (32), so the matrix keeps reading as a
-  matrix when either number moves. The numeric columns stay wider than tall — `270.00` needs the
-  room. 31 columns come to 1048 DIP, so the default 1100-DIP window shows ~13 of them and the rest is
-  a sideways scroll (the pane gets ~590); all 31 fit once the pane is ~1050 DIP wide.
+- Flag columns are **square**: `FlagWidth` is `RowHeight` (24), so the matrix keeps reading as a
+  matrix when either number moves. The angle and axis columns are wider (`44` / `40`) to hold
+  `359.999` / `-1000` in the mono face at 10 px.
 - ⚠️ `pin: PinPosition.Left` on the frame column is **metadata only** in this preview:
   `GetPinnedColumnGroups()` exists on `DataGridState` but nothing in `DataGridComponent` reads it, so
   the column does not stay put under a horizontal scroll.
-- Rows are memoized in `Render()` with `UseMemo` on the script — the grid keys its mount off the
+- Rows are memoized in `Render()` with `UseMemo` on the **text** — the grid keys its mount off the
   source's identity, so a source rebuilt per render would remount it and drop the scroll position.
+  The text is the right key because it is what the frames are derived from.
 
 ### Editing
 
-Inline editing is the grid's own (`editable: true`, `EditMode.Cell`): a tap on a cell opens that
-column's editor in place, Enter or a tap elsewhere commits, Esc cancels. What it took to wire:
+There is none in the table — it is the text region's job, and that is deliberate: two editable
+representations of one script would have to be kept in step, and the frame list is lossy in the
+directions that matter (see *Script formats*). The grid's own inline editing (`editable: true`,
+`EditMode.Cell`, per-column `Editor`/`SetValue`, `onRowChanged` written back through
+`ListDataSource.UpdateAsync`) was built here first and then removed; what it taught is kept below in
+case it comes back for another surface:
 
 - ⚠️ **Every editable column needs its own `Editor`.** With an empty `TypeRegistry` (the default — the
   grid builds `new TypeRegistry()`) the fallback is a plain `TextBox` whose value arrives as a
-  *string*, so a commit into a `bool` or `double` field throws. The `Editors.*` catalog wraps the
-  stock controls, which is a starting point but not a fit (below).
+  *string*, so a commit into a `bool` or `double` field throws.
 - ⚠️ **Stock editors do not fit a cell.** `Editors.CheckBox()` is a WinUI `CheckBox` with a 120 DIP
-  minimum width — four square flag columns' worth. So the flag editor is the same control with
-  `MinWidth(0)` / `MinHeight(0)` (measured: 24×20 in a 32 DIP cell).
-- ⚠️ **The stick columns edit in a plain `TextBox`, not a `NumberBox`.** A number box hosts its own
+  minimum width — four square flag columns' worth. The flag editor was that same control with
+  `MinWidth(0)` / `MinHeight(0)`.
+- ⚠️ **A numeric column edits in a plain `TextBox`, not a `NumberBox`.** A number box hosts its own
   text box, and the stock 32 DIP minimum height *of that inner box* is out of reach of the outer
-  `MinHeight(0)` — measured on the live tree, the control overflowed the 32 DIP row and its clear
-  button took the right half of a 46 DIP cell. The `TextBox` carries an explicit `.Height(RowHeight - 6)`
-  instead, and the *buffer is the raw text*: the setter parses and clamps it (`ReadNumber`), because
-  parsing per keystroke would reformat the text under the caret. Garbage or an out-of-range value
-  leaves the field as it was.
-- **The setters are hand-wired.** A column builder derives its setter by reflection from a property
-  named after the column; these columns are named after the script's `input` keys, so `Editable(…)`
-  in `CommandTable.cs` supplies `SetValue` itself — `row.With(bit, held)` for the flags, `ReadNumber(…)`
-  for the stick values.
-- **Both editors carry an `.AutomationName(…)`**: a bare checkbox or text box has no caption of its
-  own and the header next to it is a 1-2 letter label (`REACTOR_A11Y_003`).
+  `MinHeight(0)` — measured on the live tree, the control overflowed the row and its clear button took
+  the right half of the cell. The buffer has to stay the raw text (parsing per keystroke reformats
+  under the caret), with the setter parsing and clamping on commit.
 - ⚠️ **A commit only reaches the grid's optimism overlay, not the source.** `onRowChanged` is where the
-  row has to be written back (`ListDataSource.UpdateAsync`), or the next fetch brings the old value
-  back. The grid may call it off the UI thread (its own contract says so); `ListDataSource` locks.
-  A throwing commit is not lost silently: `FailAsyncCommit` reverts the overlay and the row shows an
-  error bar with a Dismiss button.
-- `RowHeight` is 32, not the 18 the matrix reads best at: the editors are what has to fit. The height
-  is a knob — with the shrunk editors above, ~24 should still fit an open editor, at ~6 visible rows
-  instead of 4.
-- The headless tests pin what is reachable without a window: the editors' *shape* (a `TextBox` pinned
-  to 26 DIP showing the cell's format, a `CheckBox` with the stock minimum width removed), the
-  setters' round-trips including clamping and unreadable input, and the commit reaching the source.
-  What a `NumberBox`/`TextBox` *is* at runtime — commit-on-blur, its inner minimum height — is not
-  something a headless test can reach; those were measured on the live tree instead.
-- The frame column stays read-only: no editor, no setter.
-- Dropdown-style flows (validators, `EditMode.Row`) are not wired — the clamp lives in `ReadNumber`
-  and an unreadable value is simply ignored.
+  row has to be written back, or the next fetch brings the old value back. The grid may call it off the
+  UI thread (its own contract says so); `ListDataSource` locks.
 
 ### The script text region
 
@@ -298,10 +305,10 @@ are in `../docs/SCRIPT_DSL.md`; what is here is the editing surface:
 - **The text the region shows is the file's** — read by the listing, edited in memory, written back by
   Save. There is no mock left on this side: the file is the source, and a text the parser refuses is
   the author's own half-written script, shown with the parser's message rather than hidden.
-- Frames for the *table* are still the mock generator's (`CommandRows`, seeded from the path and cut
-  to the entry's frame count — the count comes from the text, the content does not). Text for the
-  *editor* is the file's, and neither reads the other at render time: the two regions are still
-  unlinked, so an edit in one is not seen by the other. That wiring is the next pass.
+- The table reads the **same text**, on the same render: both regions are handed the pane's one parse
+  of one string (`ScriptPanelView`), so what the table draws is what the editor shows. They are still
+  unlinked in the *other* direction — an edit lands in the text, and the table follows on the next
+  render because the text changed, not because anything pushes to it.
 
 ### Theme
 
@@ -322,8 +329,9 @@ A script has three representations, and `Script/` is where they meet:
 
 ```
 .tas text  ⇄  ScriptDocument  ⇄  API JSON      (the mod's POST /script/run body)
-                    ⇅
-              CommandRow frames                (the command table's view)
+
+CommandRow frames      (the text converter's own intermediate — Expand/Collapse)
+ScriptFrame frames     (the command table's view, read straight off the text)
 ```
 
 - **`ScriptDocument` is the hub, and the JSON is the source of truth.** It is the only representation
@@ -348,9 +356,16 @@ A script has three representations, and `Script/` is where they meet:
   alone drives the character (`docs/API.md` §10.2). `Write` is canonical (fixed token order, a
   one-frame duration left out, invariant numbers, `y`+`b` folded into `by`), so `Write(Parse(text))`
   is the same text again; `Parse` names the line it refuses.
-- **`ScriptFrames.cs`** — `Expand`/`Collapse` for the table. Its bits are the same order as
+- **`ScriptFrames.cs`** — `Expand`/`Collapse`, the text writer's own intermediate: a document in the
+  angle-plus-deflection shape `Collapse` turns back into commands. Its bits are the same order as
   `CommandKeys.All`, so a column, its JSON key and its DSL token cannot drift apart — a test walks the
-  list and asserts each field lights its own bit.
+  list and asserts each field lights its own bit. **The command table does not use it**: `Expand`
+  resolves `ls:<angle>` into axes and folds the direction flags into a stick, which is exactly what
+  the table must not do (`ScriptFrameProjection` reads the text's own tokens instead).
+- **`ScriptFrame.cs` / `ScriptFrameProjection.cs`** — the table's view, and the only reader of the
+  text that is not `ScriptDsl.Parse`. `FlagKeys.All` is the DSL's flag tokens in the order a line
+  writes them, and a `ScriptFrame` holds each stick as a `StickValue` in whichever of the two forms
+  the line used.
 
 ### Fixtures and goldens
 

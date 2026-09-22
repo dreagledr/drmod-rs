@@ -76,7 +76,11 @@ public class ScriptPanelTests
         var table = Assert.IsType<ComponentElement<CommandTableProps>>(
             Regions(Split(Script)).ElementAt(1).Content);
 
+        // The table takes the script for its identity, the text for its frames and the pane's own
+        // parse for the empty state: it visualizes the text on screen, not the file behind it.
         Assert.Equal(Script, table.Props.Script);
+        Assert.Equal(Text, table.Props.Text);
+        Assert.True(table.Props.Status.IsOk);
     }
 
     [Fact]

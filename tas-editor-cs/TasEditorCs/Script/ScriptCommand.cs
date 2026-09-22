@@ -35,8 +35,8 @@ internal sealed record ScriptCommand
     public EnemyCondition? WhenEnemy { get; init; }
 }
 
-/// The `input` object: 26 booleans — one per command-table column, in
-/// <see cref="CommandKeys"/> order — the two sticks and the two raw key codes.
+/// The `input` object: 26 booleans — the flags of the script format, plus the four movement
+/// directions the DSL carries as the stick — the two sticks and the two raw key codes.
 ///
 /// Names and meaning come from the mod's `ScriptInput` (`docs/API.md` §4.2), and
 /// `uint` mirrors its unsigned fields, so a typo such as `-1` fails on read

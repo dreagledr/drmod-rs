@@ -2,13 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 
-/// The command table's view of a document: one <see cref="CommandRow"/> per frame,
-/// the shape the mock generator (<see cref="CommandRows"/>) fills today.
+/// The text converter's view of a document: one <see cref="CommandRow"/> per frame, in the
+/// angle-plus-deflection shape the converter collapses back into commands.
+///
+/// The command table does not use this — it shows <see cref="ScriptFrame"/>, the DSL's own
+/// terms. This is the intermediate the text writer goes through.
 ///
 /// Only frame-level inputs project: `raw_key`, `dik_key` and `when_enemy` have no
-/// column, so commands carrying them are left out of the table — and a document
-/// collapsed back from the frames loses them. The tests pin that down instead of
-/// hiding it.
+/// column, so commands carrying them are left out — and a document collapsed back from
+/// the frames loses them. The tests pin that down instead of hiding it.
 ///
 /// The projection is lossy by nature, which is why the JSON stays the source of
 /// truth: a documented stick arrives as an angle plus a deflection, and the axes
@@ -22,8 +24,8 @@ internal static class ScriptFrames
     const double AxisUnit = 1000.0;
 
     /// Where a stick that is at rest points: a released stick keeps its last
-    /// direction (the mock generator's convention, so the table does not snap to
-    /// zero between runs). A full push forward is the angle 270.
+    /// direction, so a run of frames does not snap to zero between two pushes. A
+    /// full push forward is the angle 270 in this shape (0 in the DSL's compass).
     const double RestAngle = 270.0;
 
     /// Axes closer than this are the same value: `cos 270°` is 6·10⁻¹⁷, which is a

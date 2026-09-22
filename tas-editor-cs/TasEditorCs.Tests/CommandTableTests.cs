@@ -8,209 +8,218 @@ namespace TasEditorCs.Tests;
 /// The command table. Like the other pane tests these are structural — nothing here creates a
 /// WinUI control, and nothing here calls the cell or header templates, which allocate brushes
 /// (a headless test host has no WinUI runtime and throws COMException if it tries).
+///
+/// The table visualizes the `.tas` text and is read-only, so what is asserted here is the shape
+/// of the columns and the frames a text projects to — not editing, which belongs to the text
+/// region.
 public class CommandTableTests
 {
     [Fact]
-    public void Lays_out_the_frame_the_four_stick_values_and_one_column_per_input()
+    public void Lays_out_the_frame_then_each_sticks_angle_and_axes_then_one_column_per_token()
     {
-        var columns = Grid(Script(240)).Columns!;
+        var columns = Grid(Text).Columns!;
 
-        Assert.Equal(CommandKeys.All.Length + 5, columns.Count);
+        // 1 frame + (angle, x, y) per stick + one column per DSL token.
+        Assert.Equal(FlagKeys.All.Length + 7, columns.Count);
         Assert.Equal(
-            new[] { "Frame", "left_stick_angle", "right_stick_angle", "left_stick_amount", "right_stick_amount" },
-            columns.Take(5).Select(column => column.Name));
-        Assert.Equal(CommandKeys.All.Select(key => key.Key), columns.Skip(5).Select(column => column.Name));
+            new[] { "Frame", "ls", "lsx", "lsy", "rs", "rsx", "rsy" },
+            columns.Take(7).Select(column => column.Name));
+        Assert.Equal(FlagKeys.All.Select(key => key.Token), columns.Skip(7).Select(column => column.Name));
     }
 
     [Fact]
-    public void Heads_every_input_column_with_the_token_the_script_text_uses()
+    public void Heads_every_column_with_its_dsl_token_except_the_frame()
     {
-        var inputs = Grid(Script(240)).Columns!.Skip(5).ToList();
+        var columns = Grid(Text).Columns!;
 
-        // The header is the DSL's own spelling of that input, so the table doubles as the text
-        // format's legend — short, but words are allowed (`esc`, `start` is not a key on PC).
-        Assert.All(inputs, column => Assert.InRange(column.DisplayName!.Length, 1, 3));
-        Assert.Equal(CommandKeys.All.Select(key => key.Label), inputs.Select(column => column.DisplayName));
+        // The token is the header, so the table doubles as the text format's legend — including the
+        // sticks, whose header is the token the line actually writes (`ls`, `lsx`, `lsy`, …). The
+        // frame is the one column the format does not spell as a token: a frame is the bare number
+        // at the start of the line.
+        Assert.Equal("#", columns[0].DisplayName);
+        Assert.Equal(
+            new[] { "ls", "lsx", "lsy", "rs", "rsx", "rsy" },
+            columns.Skip(1).Take(6).Select(column => column.DisplayName));
+        Assert.Equal(FlagKeys.All.Select(key => key.Token), columns.Skip(7).Select(column => column.DisplayName));
     }
 
     [Fact]
-    public void Keeps_the_frame_number_pinned_and_the_grid_editable()
+    public void Is_read_only_end_to_end()
     {
-        var grid = Grid(Script(240));
+        var grid = Grid(Text);
 
-        Assert.Equal(PinPosition.Left, grid.Columns![0].Pin);
-        Assert.True(grid.Editable);
-        Assert.NotNull(grid.OnRowChanged);
+        Assert.False(grid.Editable);
+        Assert.Null(grid.OnRowChanged);
         Assert.Equal(SelectionMode.None, grid.SelectionMode);
-    }
-
-    [Fact]
-    public void Leaves_the_frame_column_read_only_and_the_rest_editable()
-    {
-        var columns = Grid(Script(240)).Columns!;
-
-        Assert.True(columns[0].IsReadOnly);
-        Assert.Null(columns[0].SetValue);
-        Assert.Null(columns[0].Editor);
-
-        Assert.All(columns.Skip(1), column =>
+        Assert.All(grid.Columns!, column =>
         {
-            Assert.False(column.IsReadOnly);
-            Assert.NotNull(column.SetValue);
-            Assert.NotNull(column.Editor);
+            Assert.True(column.IsReadOnly);
+            Assert.Null(column.SetValue);
+            Assert.Null(column.Editor);
         });
     }
 
     [Fact]
-    public void A_flag_edit_moves_only_its_own_bit()
+    public void Keeps_the_frame_number_pinned()
     {
-        var columns = Grid(Script(240)).Columns!;
-        var row = new CommandRow(7, 90, 0, 0.5, 0, 0);
-
-        for (var bit = 0; bit < CommandKeys.All.Length; bit++)
-        {
-            // The loop that builds these columns captures the bit index — a shared capture would
-            // wire every flag to the last column.
-            var set = (CommandRow)columns[bit + 5].SetValue!(row, true)!;
-            Assert.Equal(1u << bit, set.Buttons);
-            Assert.True(set.Holds(bit));
-
-            var cleared = (CommandRow)columns[bit + 5].SetValue!(set, false)!;
-            Assert.Equal(0u, cleared.Buttons);
-        }
-    }
-
-    [Fact]
-    public void A_stick_edit_replaces_only_its_own_column()
-    {
-        var columns = Grid(Script(240)).Columns!;
-        var row = new CommandRow(7, 90, 10, 0.5, 0.25, 0);
-
-        var angled = (CommandRow)columns[1].SetValue!(row, "359.5")!;
-        Assert.Equal(359.5, angled.LeftStickAngle);
-        Assert.Equal(row.RightStickAngle, angled.RightStickAngle);
-
-        var deflected = (CommandRow)columns[4].SetValue!(row, "1")!;
-        Assert.Equal(1d, deflected.RightStickAmount);
-        Assert.Equal(row.LeftStickAmount, deflected.LeftStickAmount);
-    }
-
-    [Fact]
-    public void A_stick_edit_clamps_the_value_and_keeps_the_old_one_when_it_cannot_be_read()
-    {
-        var columns = Grid(Script(240)).Columns!;
-        var row = new CommandRow(7, 90, 10, 0.5, 0.25, 0);
-
-        Assert.Equal(360d, ((CommandRow)columns[1].SetValue!(row, "3600")!).LeftStickAngle);
-        Assert.Equal(0d, ((CommandRow)columns[1].SetValue!(row, "-5")!).LeftStickAngle);
-        Assert.Equal(1d, ((CommandRow)columns[3].SetValue!(row, "42")!).LeftStickAmount);
-
-        // Garbage in the box must not become a value the row can't show.
-        Assert.Equal(90d, ((CommandRow)columns[1].SetValue!(row, "abc")!).LeftStickAngle);
-        Assert.Equal(90d, ((CommandRow)columns[1].SetValue!(row, "")!).LeftStickAngle);
-    }
-
-    [Fact]
-    public async Task A_committed_edit_lands_in_the_data_source()
-    {
-        var script = Script(240);
-        var source = Source(script);
-        var grid = Grid(script);
-        var forward = IndexOf("forward");
-        var row = CommandRows.For(script)[7];
-
-        // Flip whatever the generated frame holds, so the assertion is about the write landing
-        // rather than about what the mock happens to contain.
-        var flipped = !row.Holds(forward);
-        var edited = (CommandRow)grid.Columns![forward + 5].SetValue!(row, flipped)!;
-        await CommandTable.Commit(source, (RowKey)row.Frame, edited);
-
-        // Read back through the source: an edit the grid never writes back would only live in its
-        // own optimism overlay, which the next fetch drops.
-        var page = await source.GetPageAsync(new DataRequest { PageSize = 20 });
-        Assert.Equal(flipped, page.Items.Single(item => item.Frame == 7).Holds(forward));
-    }
-
-    [Fact]
-    public void The_stick_editor_is_a_text_box_pinned_to_the_row_and_showing_the_cell_format()
-    {
-        var columns = Grid(Script(240)).Columns!;
-
-        // Not a `NumberBox`: that one hosts its own text box at the stock 32 DIP minimum height, so it
-        // overflowed the row (measured) — this is the control that does fit.
-        var angle = Assert.IsType<TextBoxElement>(columns[1].Editor!(90d, _ => { }));
-        Assert.Equal("90.00", angle.Value.Value);
-        Assert.Equal(26d, angle.Modifiers?.Layout?.Height);
-        Assert.Equal(0d, angle.Modifiers?.Layout?.MinHeight);
-
-        var amount = Assert.IsType<TextBoxElement>(columns[4].Editor!(0.5, _ => { }));
-        Assert.Equal("0.50", amount.Value.Value);
-        Assert.Equal("Right stick deflection", amount.Modifiers?.AutomationName);
-    }
-
-    [Fact]
-    public void The_stick_editor_shows_the_typed_buffer_instead_of_reformatting_it()
-    {
-        var columns = Grid(Script(240)).Columns!;
-
-        // Each keystroke re-renders the editor; formatting the half-typed buffer would move the caret.
-        var half = Assert.IsType<TextBoxElement>(columns[1].Editor!("12.", _ => { }));
-        Assert.Equal("12.", half.Value.Value);
-    }
-
-    [Fact]
-    public void The_flag_editor_is_a_check_box_without_the_stock_minimum_width()
-    {
-        var columns = Grid(Script(240)).Columns!;
-        var forward = IndexOf("forward");
-
-        // A stock WinUI checkbox keeps a 120 DIP minimum width — four square cells' worth.
-        var box = Assert.IsType<CheckBoxElement>(columns[forward + 5].Editor!(false, _ => { }));
-        Assert.Equal(0d, box.Modifiers?.Layout?.MinWidth);
-        Assert.Equal(0d, box.Modifiers?.Layout?.MinHeight);
-        Assert.Equal("forward", box.Modifiers?.AutomationName);
+        Assert.Equal(PinPosition.Left, Grid(Text).Columns![0].Pin);
     }
 
     [Fact]
     public void Puts_the_cell_and_header_body_in_its_own_templates()
     {
-        var grid = Grid(Script(240));
+        var grid = Grid(Text);
 
         Assert.NotNull(grid.CellTemplate);
         Assert.NotNull(grid.HeaderTemplate);
         Assert.NotNull(grid.PlaceholderCellTemplate);
-        // Rows butt against each other only while the pitch is a fixed row height, and the height
-        // is what has to fit an open editor.
-        Assert.Equal(32d, grid.RowHeight);
+        Assert.Equal(24d, grid.RowHeight);
     }
 
     [Fact]
-    public void Expands_the_mock_script_to_exactly_one_row_per_frame()
+    public void Opens_a_row_for_every_frame_the_text_touches_and_no_more()
     {
-        var rows = CommandRows.For(Script(120));
+        // Frames run 0..last, so a gap the text writes nothing for still has a row — it is the
+        // table's blank line, which is exactly what the format says by omitting it. `lt:3` on
+        // frame 4 covers frames 4, 5 and 6, so the last frame is 6.
+        var frames = Frames("0 a\n4 lt:3\n");
 
-        Assert.Equal(120, rows.Count);
-        Assert.Equal(Enumerable.Range(0, 120), rows.Select(row => row.Frame));
-        Assert.All(rows, row =>
-        {
-            Assert.InRange(row.LeftStickAngle, 0d, 359.999d);
-            Assert.InRange(row.RightStickAngle, 0d, 359.999d);
-            Assert.InRange(row.LeftStickAmount, 0d, 1d);
-            Assert.InRange(row.RightStickAmount, 0d, 1d);
-            // Only the inputs the table has columns for — a stray bit would be invisible.
-            Assert.True(row.Buttons < 1u << CommandKeys.All.Length);
-        });
+        Assert.Equal(7, frames.Count);
+        Assert.Equal(Enumerable.Range(0, 7).Select(frame => (uint)frame), frames.Select(frame => frame.Frame));
+        Assert.True(frames[0].Holds(FlagKeys.IndexOf("a")));
+        Assert.False(frames[0].Holds(FlagKeys.IndexOf("lt")));
+        Assert.False(frames[3].Holds(FlagKeys.IndexOf("lt")));
+        Assert.True(frames[4].Holds(FlagKeys.IndexOf("lt")));
+        Assert.True(frames[6].Holds(FlagKeys.IndexOf("lt")));
     }
 
     [Fact]
-    public void Opens_the_mock_script_on_its_first_run_phase()
+    public void Lights_the_column_of_every_token_the_line_writes()
     {
-        var first = CommandRows.For(Script(240))[0];
+        var frame = Assert.Single(Frames("0 a x lt rt\n"));
 
-        // Phases[0] is the long run, so the table never opens on a blank first row.
-        Assert.True(first.Holds(IndexOf("forward")));
-        Assert.True(first.Holds(IndexOf("ninja_run")));
-        Assert.Equal(1d, first.LeftStickAmount);
+        Assert.True(frame.Holds(FlagKeys.IndexOf("a")));
+        Assert.True(frame.Holds(FlagKeys.IndexOf("x")));
+        Assert.True(frame.Holds(FlagKeys.IndexOf("lt")));
+        Assert.True(frame.Holds(FlagKeys.IndexOf("rt")));
+        Assert.False(frame.Holds(FlagKeys.IndexOf("y")));
+    }
+
+    [Fact]
+    public void An_angle_stick_fills_the_angle_column_and_leaves_the_axes_blank()
+    {
+        // The table shows the token the line wrote. `ls:0` is an angle, so it goes in the angle
+        // column and the axis columns stay blank — the table does not resolve it into axes.
+        var frame = Assert.Single(Frames("0 ls:0\n"));
+
+        Assert.Equal(0.0, frame.Left.Angle);
+        Assert.Null(frame.Left.X);
+        Assert.Null(frame.Left.Y);
+    }
+
+    [Fact]
+    public void Reads_every_compass_angle_the_way_the_text_writes_it()
+    {
+        // The number is passed through unchanged — the table is a picture of the text, so it does
+        // not reinterpret the compass.
+        Assert.Equal(0.0, Assert.Single(Frames("0 ls:0\n")).Left.Angle);
+        Assert.Equal(90.0, Assert.Single(Frames("0 ls:90\n")).Left.Angle);
+        Assert.Equal(180.0, Assert.Single(Frames("0 ls:180\n")).Left.Angle);
+        Assert.Equal(270.0, Assert.Single(Frames("0 ls:270\n")).Left.Angle);
+    }
+
+    [Fact]
+    public void An_exact_stick_fills_the_axes_and_leaves_the_angle_blank()
+    {
+        var frame = Assert.Single(Frames("0 lsx:300 lsy:-800\n"));
+
+        Assert.Null(frame.Left.Angle);
+        Assert.Equal(300.0, frame.Left.X);
+        Assert.Equal(-800.0, frame.Left.Y);
+    }
+
+    [Fact]
+    public void The_right_stick_is_the_camera_tokens()
+    {
+        var angle = Assert.Single(Frames("0 rs:90\n"));
+
+        Assert.Equal(90.0, angle.Right.Angle);
+        Assert.Null(angle.Right.X);
+        Assert.Null(angle.Left.Angle);
+
+        var axes = Assert.Single(Frames("0 rsx:6500\n"));
+
+        Assert.Equal(6500.0, axes.Right.X);
+        Assert.Null(axes.Right.Y);
+        Assert.Null(axes.Right.Angle);
+    }
+
+    [Fact]
+    public void Keeps_an_axis_the_line_left_out_blank_rather_than_zero()
+    {
+        // `lsx` alone says nothing about Y, and the table shows exactly that: the Y column is
+        // blank, not 0 — the text never wrote a Y.
+        var frame = Assert.Single(Frames("0 lsx:500\n"));
+
+        Assert.Equal(500.0, frame.Left.X);
+        Assert.Null(frame.Left.Y);
+    }
+
+    [Fact]
+    public void Shows_the_value_of_a_stick_held_for_several_frames()
+    {
+        // The duration rides behind a second colon; the value is the first argument.
+        var frames = Frames("0 lsx:500:3\n");
+
+        Assert.Equal(3, frames.Count);
+        Assert.All(frames, frame => Assert.Equal(500.0, frame.Left.X));
+    }
+
+    [Fact]
+    public void Draws_the_tokens_the_line_carries_and_nothing_else()
+    {
+        // The contract in one place: `ls:270` is an angle and stays an angle — the table does not
+        // resolve it into the axes the mod would assemble, because the text never said those.
+        var frame = Assert.Single(Frames("0 ls:270 lt\n"));
+
+        Assert.Equal(270.0, frame.Left.Angle);
+        Assert.Null(frame.Left.X);
+        Assert.Null(frame.Left.Y);
+        Assert.Null(frame.Right.Angle);
+
+        // And the flag is the column of its own token, lit.
+        Assert.True(frame.Holds(FlagKeys.IndexOf("lt")));
+    }
+
+    [Fact]
+    public void Keeps_a_multi_frame_run_on_every_frame_it_covers()
+    {
+        // `lt:3` covers frames 0, 1 and 2: each is a row with the column lit, not just the first.
+        var frames = Frames("0 lt:3\n");
+
+        Assert.Equal(3, frames.Count);
+        Assert.All(frames, frame => Assert.True(frame.Holds(FlagKeys.IndexOf("lt"))));
+        Assert.All(frames, frame => Assert.True(frame.Held));
+    }
+
+    [Fact]
+    public void Says_nothing_when_the_text_does_not_parse()
+    {
+        // The text region carries the parser's message, so the table stays silent rather than
+        // saying the same thing a third way.
+        var status = ScriptTextStatus.Of(ScriptDsl.Lines("0 zz\n"));
+
+        Assert.False(status.IsOk);
+        Assert.Empty(CommandTable.Frames(ScriptDsl.Lines("0 zz\n")));
+    }
+
+    [Fact]
+    public void Shows_the_frame_number_the_text_writes()
+    {
+        var frames = Frames("40 a\n");
+
+        Assert.Equal(41, frames.Count);
+        Assert.Equal(40u, frames[40].Frame);
     }
 
     [Fact]
@@ -218,26 +227,22 @@ public class CommandTableTests
     {
         var up = CommandTable.CellSurface(0, "Frame");
 
-        Assert.NotEqual(up, CommandTable.CellSurface(0, "left_stick_angle"));   // across a column
-        Assert.NotEqual(up, CommandTable.CellSurface(1, "Frame"));              // down a row
-        Assert.Equal(up, CommandTable.CellSurface(2, "Frame"));                 // two down is the same parity
+        Assert.NotEqual(up, CommandTable.CellSurface(0, "ls"));        // across a column
+        Assert.NotEqual(up, CommandTable.CellSurface(1, "Frame"));      // down a row
+        Assert.Equal(up, CommandTable.CellSurface(2, "Frame"));         // two down is the same parity
     }
 
-    /// A workspace entry for the table's own tests: the table reads a path — the mock's seed — and
-    /// a frame count — how many rows to generate. What the text says is not part of it, because the
-    /// rows are generated rather than parsed (`CommandRows`), so the two need not agree here.
-    static ScriptEntry Script(int frames) =>
-        new(@"C:\workspace\blade-run.tas", "blade-run", string.Empty, (uint)frames, null);
+    const string Text = "! trig=ticks:0\n0 a\n";
 
-    static int IndexOf(string key) =>
-        Array.FindIndex(CommandKeys.All, entry => entry.Key == key);
+    internal static IReadOnlyList<ScriptFrame> Frames(string text) =>
+        CommandTable.Frames(ScriptDsl.Lines(text));
 
-    static ListDataSource<CommandRow> Source(ScriptEntry script) =>
-        new(CommandRows.For(script), row => (RowKey)row.Frame);
-
-    static DataGridElement<CommandRow> Grid(ScriptEntry script)
+    static DataGridElement<ScriptFrame> Grid(string text)
     {
-        var root = Assert.IsType<FlexElement>(CommandTable.View(Source(script)));
-        return Assert.IsType<ComponentElement<DataGridElement<CommandRow>>>(Assert.Single(root.Children)).Props;
+        var root = Assert.IsType<FlexElement>(CommandTable.View(Source(text)));
+        return Assert.IsType<ComponentElement<DataGridElement<ScriptFrame>>>(Assert.Single(root.Children)).Props;
     }
+
+    static ListDataSource<ScriptFrame> Source(string text) =>
+        new(CommandTable.Frames(ScriptDsl.Lines(text)), row => (RowKey)(int)row.Frame);
 }

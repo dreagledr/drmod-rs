@@ -47,7 +47,7 @@ internal sealed record ScriptTextEditorView(
 /// The reference panel is a plain list and nothing more: it does not follow the caret, does not
 /// complete anything and does not color the text. Coloring a token means walking the document on
 /// every keystroke, which costs the editor its responsiveness on a text of a few hundred lines
-/// (observed live on the 20 000-frame mock) — the editor stays a plain `TextBox` for that reason,
+/// (observed live on a 20 000-frame script) — the editor stays a plain `TextBox` for that reason,
 /// and `Script/ScriptCommands.cs` is read by the panel only.
 sealed class ScriptTextEditor : Component<ScriptTextEditorProps>
 {
