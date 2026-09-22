@@ -107,6 +107,65 @@ internal static class Workspace
         }
     }
 
+    /// Renames a script's file inside its own folder: `<stem>.tas` → `<new name>.tas`, the file
+    /// itself moved and nothing else touched. The name is the *file's*, not the script's — the
+    /// `name=` a rules line carries is a different thing and is edited in the text.
+    ///
+    /// A name that is already taken is refused with a message rather than suffixed: **New** and
+    /// **Duplicate** make up a free name because they were asked for "a new file", but a name that
+    /// was typed is a name the author wants, and `-2` would hand them a file they did not ask for.
+    ///
+    /// The extension is the workspace's: it is not part of the name a user types, so a trailing
+    /// `.tas` is a mistake worth naming rather than a suffix to strip silently.
+    internal static (string? Path, string? Error) Rename(string path, string name)
+    {
+        var stem = (name ?? string.Empty).Trim();
+
+        if (stem.Length == 0)
+        {
+            return (null, "A script needs a file name");
+        }
+
+        if (stem.EndsWith(Extension, StringComparison.OrdinalIgnoreCase))
+        {
+            return (null, $"Leave {Extension} out of the name — the workspace adds it");
+        }
+
+        var invalid = stem.IndexOfAny(Path.GetInvalidFileNameChars());
+        if (invalid >= 0)
+        {
+            return (null, $"A file name cannot hold '{stem[invalid]}'");
+        }
+
+        var folder = Path.GetDirectoryName(path);
+        if (string.IsNullOrEmpty(folder))
+        {
+            return (null, $"Cannot tell where {path} lives");
+        }
+
+        var target = Path.Combine(folder, stem + Extension);
+        if (string.Equals(target, path, StringComparison.OrdinalIgnoreCase))
+        {
+            // The same name, however it was spelled: nothing to do, and nothing to complain about.
+            return (path, null);
+        }
+
+        if (File.Exists(target) || Directory.Exists(target))
+        {
+            return (null, $"{stem}{Extension} is already in this folder");
+        }
+
+        try
+        {
+            File.Move(path, target);
+            return (target, null);
+        }
+        catch (Exception error)
+        {
+            return (null, $"Cannot rename {path}: {error.Message}");
+        }
+    }
+
     /// Overwrites a script's file with a text. The whole file, because the whole file is the
     /// script: there is no part of it the editor holds somewhere else.
     ///

@@ -23,51 +23,28 @@ public class ScriptPanelTests
         Assert.Equal(
             new object[] { "script:controls", "script:table", "script:text" },
             Regions(split).Select(region => region.Key));
-        // The first two carry an initial height; the last one takes what is left of the pane.
-        Assert.Equal(new double?[] { 180, 320, null }, Regions(split).Select(region => region.Height));
+        // The heights are the region's share of the pane — one to two to three — not a size in DIPs:
+        // the host normalizes the three into ratios when all of them carry a hint (`BootstrapRatios`),
+        // which is what makes the base layout proportional and the splitter drag the author's.
+        Assert.Equal(new double?[] { 1, 2, 3 }, Regions(split).Select(region => region.Height));
     }
 
     [Fact]
-    public void The_script_controls_region_names_the_selected_script()
+    public void The_script_controls_region_hosts_the_run_controls_it_was_given()
     {
-        Assert.Equal(
-            "1 frames — name, trigger and restart policy come next",
-            Content(Body(0).Children[1]));
-    }
+        // The pane owns no run state: the region is handed a value and paints that value's own view
+        // (`ScriptControlsTests` asserts what the region makes of it). What the pane has to get right is
+        // that the value reaches the region whole — its Save button is the pane's own command, and its
+        // status line is the region's own reading of the game it was handed.
+        var view = View(Script);
+        var region = Assert.IsType<FlexElement>(Regions(Split(view)).First().Content);
 
-    [Fact]
-    public void The_script_controls_region_reads_the_text_not_the_file_behind_it()
-    {
-        // The entry's file ends on frame 1; the text on screen is what the pane is about, and it is
-        // edited freely without being saved. A line saying "not a script the mod would run" above a
-        // text region that reads it perfectly is the contradiction this pins down.
-        var shorter = "! trig=ticks:0\n0 a:9\n";
-
-        Assert.Equal(
-            "9 frames — name, trigger and restart policy come next",
-            Content(Body(0, shorter).Children[1]));
-
-        Assert.Equal(
-            "Not a script the mod would run — the text region below says why",
-            Content(Body(0, "0 zz\n").Children[1]));
-    }
-
-    [Fact]
-    public void The_script_controls_region_says_when_the_text_has_not_been_written_back()
-    {
-        Assert.Equal("saved", Caption(Controls(Script), 1));
-        Assert.Equal("unsaved changes", Caption(Controls(Script, dirty: true), 1));
-    }
-
-    [Fact]
-    public void Save_is_live_only_while_there_is_something_to_write_back()
-    {
-        // The writer decides: an enabled Save with nothing to save would be a button that lies
-        // about having work to do. What the text *says* is not part of it — a half-written script
-        // is still work worth keeping, so a refused text saves like any other.
-        Assert.True(SaveButton(Script, dirty: true).Command!.IsEnabled);
-        Assert.False(SaveButton(Script, dirty: false).Command!.IsEnabled);
-        Assert.True(SaveButton(Script, text: "0 zz\n", dirty: true).Command!.IsEnabled);
+        Assert.Same(
+            view.SaveCommand,
+            Assert.IsType<ButtonElement>(Assert.IsType<StackElement>(region.Children[0]).Children[0]).Command);
+        // …and the status line is the region's own reading of the game it was handed. This view's game
+        // was never polled, so that reading is the offline line.
+        Assert.Equal(ScriptControls.Offline, Content(region.Children[2]));
     }
 
     [Fact]
@@ -86,14 +63,28 @@ public class ScriptPanelTests
     [Fact]
     public void The_script_text_region_hosts_the_editor_on_the_text_and_status_it_was_given()
     {
-        // The pane is handed the text and its own reading of it rather than computing either: the
-        // status is what its Save button is enabled by, and the region only paints it.
+        // The pane is handed the text and the shell's own reading of it rather than parsing either:
+        // the status is what the region's errors and the Save button's state are about, and the region
+        // only paints it.
         var editor = Assert.IsType<ComponentElement<ScriptTextEditorProps>>(
             Regions(Split(Script)).ElementAt(2).Content);
 
         Assert.Equal(Text, editor.Props.Text);
         Assert.True(editor.Props.Status.IsOk);
         Assert.Equal(1u, ScriptTextStatus.LastFrame(editor.Props.Status.Document!));
+    }
+
+    [Fact]
+    public void The_save_command_is_the_one_the_pane_registers_and_the_controls_region_shows()
+    {
+        // One command for the Ctrl+S accelerator and for the controls region's button, so the shortcut
+        // and the button cannot disagree about whether there is anything to write back.
+        var view = View(Script, dirty: true);
+        var host = Assert.IsType<CommandHostElement>(
+            Assert.Single(Assert.IsType<FlexElement>(ScriptPanel.View(view)).Children));
+
+        Assert.Same(view.SaveCommand, Assert.Single(host.Commands));
+        Assert.Same(view.SaveCommand, view.Controls.SaveCommand);
     }
 
     [Fact]
@@ -108,36 +99,53 @@ public class ScriptPanelTests
     [Fact]
     public void Says_so_when_nothing_is_selected()
     {
-        var children = Assert.IsType<FlexElement>(ScriptPanel.View(View(null))).Children;
+        var children = Assert.IsType<FlexElement>(
+            ScriptPanel.View(View(null))).Children;
 
         Assert.Single(children);
         Assert.Equal("No script selected.", Content(children[0]));
     }
 
-    static ScriptPanelView View(ScriptEntry? script, string text = Text, bool dirty = false) =>
-        new(script, text, dirty, ScriptTextStatus.Of(ScriptDsl.Lines(text)), _ => { }, () => { });
+    static ScriptPanelView View(ScriptEntry? script, string text = Text, bool dirty = false)
+    {
+        // One command for the pane and for the run controls: the shell builds it once from its own
+        // `dirty`, and both readers have to see the same instance.
+        var save = SaveCommand(dirty);
+        return new(script,
+            text,
+            ScriptTextStatus.Of(ScriptDsl.Lines(text)),
+            save,
+            Controls(text, dirty, save),
+            _ => { });
+    }
 
-    static DockManager Host(ScriptEntry? script, string text = Text, bool dirty = false) =>
+    static Command SaveCommand(bool dirty) => StandardCommand.Save(() => { }, dirty);
+
+    static ScriptControlsView Controls(string text = Text, bool dirty = false, Command? save = null) =>
+        new(ScriptTextStatus.Of(ScriptDsl.Lines(text)),
+            dirty,
+            save ?? SaveCommand(dirty),
+            PlaybackRules.Default,
+            "1",
+            GameStatus.Offline,
+            Preparing: false,
+            Error: null,
+            _ => { },
+            _ => { },
+            () => { },
+            () => { });
+
+    static DockManager Host(ScriptPanelView view) =>
         Assert.IsType<DockManager>(Assert.IsType<CommandHostElement>(
-            Assert.Single(Assert.IsType<FlexElement>(ScriptPanel.View(View(script, text, dirty))).Children))
+            Assert.Single(Assert.IsType<FlexElement>(ScriptPanel.View(view)).Children))
             .Child);
 
+    static DockSplit Split(ScriptPanelView view) => Assert.IsType<DockSplit>(Host(view).Layout);
+
     static DockSplit Split(ScriptEntry? script, string text = Text, bool dirty = false) =>
-        Assert.IsType<DockSplit>(Host(script, text, dirty).Layout);
+        Split(View(script, text, dirty));
 
     static IEnumerable<Document> Regions(DockSplit split) => split.Children.OfType<Document>();
-
-    /// The body of one region — the controls one is a flex column of its own.
-    static FlexElement Body(int index, string text = Text, bool dirty = false) =>
-        Assert.IsType<FlexElement>(Regions(Split(Script, text, dirty)).ElementAt(index).Content);
-
-    static StackElement Controls(ScriptEntry script, bool dirty = false) =>
-        Assert.IsType<StackElement>(Body(0, Text, dirty).Children[0]);
-
-    static ButtonElement SaveButton(ScriptEntry script, bool dirty, string text = Text) =>
-        Assert.IsType<ButtonElement>(Assert.IsType<StackElement>(Body(0, text, dirty).Children[0]).Children[0]);
-
-    static string? Caption(StackElement row, int index) => Content(row.Children[index]);
 
     static string? Content(Element element) => Assert.IsType<TextBlockElement>(element).Content;
 }

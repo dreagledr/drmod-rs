@@ -46,6 +46,12 @@
         -->
         <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == '' And ('$(Platform)' == '' Or '$(Platform)' == 'AnyCPU' Or '$(Platform)' == 'Any CPU')">$(NETCoreSdkPortableRuntimeIdentifier)</RuntimeIdentifier>
         <!--
+            `[LibraryImport]` (the Win32 window activation in GameWindow.cs) generates marshalling
+            code that the compiler accepts only as unsafe, so this flag is what lets the source
+            generator's own output build. There is no hand-written unsafe code in the project.
+        -->
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <!--
             Globalization mode, not a code-generation switch: it does not touch the
             metadata updater, so it is safe for every configuration — and Debug then
             behaves like the shipped build instead of quietly differing in culture

@@ -183,17 +183,149 @@ public class WorkspaceTests : IDisposable
     }
 
     [Fact]
-    public void A_folder_read_from_the_settings_file_survives_a_restart()
+    public void A_rename_moves_the_file_and_keeps_its_text()
+    {
+        var path = Path.Combine(_folder, "probe.tas");
+        File.WriteAllText(path, Valid);
+
+        // What a user types is a file name, not a path: the whitespace is a slip, and the extension
+        // belongs to the workspace.
+        var (renamed, error) = Workspace.Rename(path, "  barrier-flight  ");
+
+        Assert.Null(error);
+        Assert.Equal(Path.Combine(_folder, "barrier-flight.tas"), renamed);
+        Assert.False(File.Exists(path));
+        Assert.Equal(Valid, File.ReadAllText(renamed!));
+        Assert.Equal("barrier-flight", Assert.Single(Workspace.List(_folder).Scripts).Name);
+    }
+
+    [Fact]
+    public void A_name_that_is_taken_is_refused_rather_than_suffixed()
+    {
+        // New and Duplicate invent a free name because they were asked for "a file"; a name that was
+        // typed is a name the author wants, and `-2` would hand them something they did not ask for.
+        var path = Path.Combine(_folder, "probe.tas");
+        File.WriteAllText(path, Valid);
+        File.WriteAllText(Path.Combine(_folder, "taken.tas"), Valid);
+
+        var (renamed, error) = Workspace.Rename(path, "taken");
+
+        Assert.Null(renamed);
+        Assert.Equal("taken.tas is already in this folder", error);
+        // Both files are still there: nothing was overwritten and nothing moved behind the author's
+        // back.
+        Assert.Equal(2, Workspace.List(_folder).Scripts.Count);
+    }
+
+    [Theory]
+    [InlineData("", "A script needs a file name")]
+    [InlineData("probe.tas", "Leave .tas out of the name — the workspace adds it")]
+    [InlineData("a/b", "A file name cannot hold '/'")]
+    public void A_name_that_would_not_be_a_file_comes_back_as_a_message(string name, string expected)
+    {
+        var path = Path.Combine(_folder, "probe.tas");
+        File.WriteAllText(path, Valid);
+
+        var (renamed, error) = Workspace.Rename(path, name);
+
+        Assert.Null(renamed);
+        Assert.Equal(expected, error);
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public void Renaming_a_file_to_the_name_it_already_has_is_not_an_error()
+    {
+        var path = Path.Combine(_folder, "probe.tas");
+        File.WriteAllText(path, Valid);
+
+        var (renamed, error) = Workspace.Rename(path, "probe");
+
+        Assert.Equal(path, renamed);
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void The_folder_and_the_run_rules_survive_a_restart()
     {
         var settings = Path.Combine(_folder, "settings");
+        var rules = new PlaybackRules(
+            FixedTick: false,
+            Cap: FpsCapMode.Custom,
+            CustomFps: 144,
+            PinSeed: true,
+            Seed: 0x55555555,
+            Headless: true);
 
-        EditorSettings.Save(_folder, settings);
-        Assert.Equal(_folder, EditorSettings.Load(settings));
+        EditorSettings.Save(new EditorSettingsData(_folder, rules, "0x55555555"), settings);
+        var loaded = EditorSettings.Load(settings);
+
+        Assert.Equal(_folder, loaded.Folder);
+        Assert.Equal(rules, loaded.Playback);
+        // The spelling travels with the value: the notes spell seeds in hex (`docs/API.md` §3.10), and
+        // a round trip through the settings file must not turn `0x55555555` into a decimal nobody
+        // recognizes.
+        Assert.Equal("0x55555555", loaded.SeedText);
+
+        EditorSettings.Save(new EditorSettingsData(null, PlaybackRules.Default, "1"), settings);
+        Assert.Null(EditorSettings.Load(settings).Folder);
+        Assert.Equal(PlaybackRules.Default, EditorSettings.Load(settings).Playback);
 
         // Nothing remembered, and a file that cannot be read, both answer the same way: an editor
         // that opens on no folder beats one that refuses to start over its own settings.
-        EditorSettings.Save(null, settings);
-        Assert.Null(EditorSettings.Load(settings));
-        Assert.Null(EditorSettings.Load(Path.Combine(_folder, "absent")));
+        Assert.Null(EditorSettings.Load(Path.Combine(_folder, "absent")).Folder);
+    }
+
+    [Fact]
+    public void A_frame_cap_is_remembered_by_the_panels_own_word()
+    {
+        var settings = Path.Combine(_folder, "settings");
+
+        foreach (var cap in new[] { FpsCapMode.Default, FpsCapMode.Unlimited, FpsCapMode.Custom })
+        {
+            EditorSettings.Save(
+                new EditorSettingsData(_folder, PlaybackRules.Default with { Cap = cap }, "1"),
+                settings);
+
+            Assert.Equal(cap, EditorSettings.Load(settings).Playback.Cap);
+        }
+
+        // The mod's own spellings stay readable: the panel used to write them before the two
+        // vocabularies were separated, and a settings file is not worth an upgrade migration over a
+        // word.
+        File.WriteAllText(settings, "cap=off\n");
+        Assert.Equal(FpsCapMode.Unlimited, EditorSettings.Load(settings).Playback.Cap);
+        File.WriteAllText(settings, "cap=game\n");
+        Assert.Equal(FpsCapMode.Default, EditorSettings.Load(settings).Playback.Cap);
+    }
+
+    [Fact]
+    public void A_settings_file_from_before_the_run_rules_still_names_its_folder()
+    {
+        // The previous format was one line of path and nothing else — no `=`, no keys. Reading it as
+        // a settings file nobody can parse would cost the author their workspace after an upgrade.
+        var settings = Path.Combine(_folder, "settings");
+        File.WriteAllText(settings, _folder);
+
+        var loaded = EditorSettings.Load(settings);
+
+        Assert.Equal(_folder, loaded.Folder);
+        Assert.Equal(PlaybackRules.Default, loaded.Playback);
+    }
+
+    [Fact]
+    public void A_seed_that_does_not_read_falls_back_to_the_default_rather_than_breaking_the_file()
+    {
+        var settings = Path.Combine(_folder, "settings");
+        File.WriteAllText(settings, "folder=\ndt=0\nseed=not-a-number\n\n");
+
+        var loaded = EditorSettings.Load(settings);
+
+        Assert.Null(loaded.Folder);
+        Assert.False(loaded.Playback.FixedTick);
+        Assert.Equal(PlaybackRules.Default.Seed, loaded.Playback.Seed);
+        // Half a number is still what the field held: it is not the editor's place to rewrite what the
+        // author is in the middle of typing.
+        Assert.Equal("not-a-number", loaded.SeedText);
     }
 }

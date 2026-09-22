@@ -49,6 +49,35 @@ internal static class ScriptBuffers
         string path) =>
         buffers.ContainsKey(path) ? Replaced(buffers, path, null) : buffers;
 
+    /// Moves a script's buffer to the name its file was just renamed to.
+    ///
+    /// A buffer is what the editor holds for a *path*, so a rename has to carry the text across or the
+    /// typed-but-unsaved script would come back as the file's own text — the rename would silently
+    /// throw work away. A script that was never typed into has nothing to move and comes back
+    /// untouched.
+    internal static IReadOnlyDictionary<string, string> Renamed(
+        IReadOnlyDictionary<string, string> buffers,
+        string from,
+        string to)
+    {
+        if (!buffers.TryGetValue(from, out var text))
+        {
+            return buffers;
+        }
+
+        var next = new Dictionary<string, string>(buffers.Count, StringComparer.Ordinal);
+        foreach (var pair in buffers)
+        {
+            if (pair.Key != from)
+            {
+                next[pair.Key] = pair.Value;
+            }
+        }
+
+        next[to] = text;
+        return next;
+    }
+
     /// The map with one key replaced, or removed when the value is `null`. Never the instance that
     /// came in: it is a piece of state a render is already holding.
     static IReadOnlyDictionary<string, string> Replaced(

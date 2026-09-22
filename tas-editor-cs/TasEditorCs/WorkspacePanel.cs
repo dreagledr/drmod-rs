@@ -15,6 +15,7 @@ sealed record WorkspacePanelProps(
     Action ChooseFolder,
     Action New,
     Action Duplicate,
+    Action Rename,
     Action Delete);
 
 /// Left pane: the `.tas` files of the open folder, and the operations that manage them.
@@ -43,13 +44,16 @@ sealed class WorkspacePanel : Component<WorkspacePanelProps>
                 },
             };
 
-        // A file action needs a folder to act on, and Duplicate and Delete need a script: a
+        // A file action needs a folder to act on, and Duplicate, Rename and Delete need a script: a
         // disabled button is what says so, rather than a click that quietly does nothing.
         var hasFolder = props.Folder is not null;
         var hasSelection = IndexOf(scripts, props.SelectedPath) >= 0;
         var management = HStack(8,
             Button("New", props.New).IsEnabled(hasFolder),
             Button("Duplicate", props.Duplicate).IsEnabled(hasFolder && hasSelection),
+            Button("Rename", props.Rename)
+                .AutomationName("Rename the selected script file")
+                .IsEnabled(hasSelection),
             Button("Delete", props.Delete).IsEnabled(hasSelection)
         );
 

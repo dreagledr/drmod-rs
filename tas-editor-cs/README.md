@@ -4,12 +4,14 @@ Desktop TAS editor for Metal Gear Rising: Revengeance on **WinUI 3** through
 [`Microsoft.UI.Reactor`](https://microsoft.github.io/microsoft-ui-reactor/) — a declarative
 React-style component model (components, hooks, keyed lists), no XAML, no bindings, no ViewModels.
 
-Status: **two-pane shell over a real workspace.** The window is split by a draggable divider — the
-left pane holds the `.tas` files of a folder the user picks (the list and the file actions are real),
-the right pane stacks three regions — script controls, command table, script text — with the same
-drag-resize splitters between them. The command table region and the script text region are both
-filled in; the table is a **read-only** picture of the text on screen (one column per DSL token, no
-editing), the text is the file's, and the script controls region is Save plus a one-line note. The
+Status: **two-pane shell over a real workspace, with a run.** The window is split by a draggable
+divider — 1 part of workspace to 3 of document by default — the left pane holds the `.tas` files of a
+folder the user picks (the list and the file actions are real: new, duplicate, rename, delete), the
+right pane stacks three regions — script controls, command table, script text — split 1 : 2 : 3, with
+the same drag-resize splitters between them. The command table region and the script text region are
+both filled in; the table is a **read-only** picture of the text on screen (one column per DSL token,
+no editing), the text is the file's, and the script controls region is where a script is **run**:
+Save, the four run rules, Run / Cancel and the live state of the game (see *The run* below). The
 three representations of a script — the API JSON, the `.tas` text and the table's frames — round-trip
 through `Script/` (see *Script formats* below).
 
@@ -24,11 +26,15 @@ tas-editor-cs/
 ├── TasEditorCs.slnx        # solution: the app and its tests
 ├── TasEditorCs/            # the app (WinUI 3, self-contained + NativeAOT)
 │   ├── App.cs              # entry point: ReactorApp.Run + docking registration
-│   ├── Editor.cs           # window shell: the split, the workspace and the selection
-│   ├── Workspace.cs        #   the folder on disk: list, read, write, new, copy, delete
-│   ├── EditorSettings.cs   #   what survives a restart (the workspace folder)
+│   ├── Editor.cs           # window shell: the split, the workspace, the selection, the run
+│   ├── Workspace.cs        #   the folder on disk: list, read, write, new, copy, rename, delete
+│   ├── EditorSettings.cs   #   what survives a restart (the folder and the run rules)
 │   ├── WorkspacePanel.cs   # left pane — the script list and its management
 │   ├── ScriptPanel.cs      # right pane — the three stacked regions
+│   ├── ScriptControls.cs   #   the controls region — Save, the run rules, Run / Cancel, the status
+│   ├── PlaybackRules.cs    #     the four levers a run applies, and the bodies they become
+│   ├── GameWindow.cs       #     the game's window, and bringing it to the foreground
+│   ├── Api/                #     the mod's HTTP API: the client, its JSON, the state it answers with
 │   ├── CommandTable.cs     #   the command table region (read-only DataGrid over the text)
 │   ├── ScriptTextEditor.cs #   the script text region (`.tas` text + its status line)
 │   ├── ScriptTextStatus.cs #     what a text parses to, or why it does not
@@ -103,17 +109,29 @@ back as a message and ends up in the pane's own line.
 
 The file actions are `ScriptEntry`-level, not document-level: **New** writes an empty `script.tas`
 (`script-2.tas`, … — an existing name is never overwritten), **Duplicate** copies the file to
-`<name>-copy.tas`, **Delete** asks first, in a declarative `ContentDialog` that stays in the tree with
-`IsOpen` toggled (a `ShowAsync` from a handler gets no parent theme and is not testable —
-`REACTOR_DIALOG_001`). The dialog names the file and says so when that file has unsaved text, because
-deleting it takes the text with it.
+`<name>-copy.tas`, **Rename** moves the file to the name the author types, **Delete** asks first, in a
+declarative `ContentDialog` that stays in the tree with `IsOpen` toggled (a `ShowAsync` from a handler
+gets no parent theme and is not testable — `REACTOR_DIALOG_001`). The delete dialog names the file and
+says so when that file has unsaved text, because deleting it takes the text with it.
+
+⚠️ **Rename is the file's, not the script's.** `name=` in a rules line is a different thing and is
+edited in the text; the extension is the workspace's and is not part of the name a user types. A name
+that is already taken is **refused with a message** rather than suffixed: New and Duplicate invent a
+free name because they were asked for "a file", but a typed name is a name the author wants, and
+`-2` would hand them something they did not ask for. The buffer travels with the file
+(`ScriptBuffers.Renamed`), or a rename would quietly throw away text that was never written back. The
+dialog's primary button is live only for a name that would change something — `Rename` for `Rename` is
+not a question worth answering.
 
 **Save is explicit** — a `StandardCommand.Save` button in the script controls region plus its own
 Ctrl+S accelerator, registered for the subtree through `CommandHost`. What is enabled is
 `IsDirty` and nothing else: a half-written script is still work worth keeping, so a text the parser
-refuses saves like any other (the status line already says the mod would turn it down). The folder
-itself is remembered between runs — `%LOCALAPPDATA%\tas-editor-cs\settings`, one line of text — because
-`UsePersisted` is a process-lifetime cache (spec 033 §2), not a disk store.
+refuses saves like any other (the status line already says the mod would turn it down). The folder and
+the run rules are remembered between runs — `%LOCALAPPDATA%\tas-editor-cs\settings`, `key=value` lines
+— because `UsePersisted` is a process-lifetime cache (spec 033 §2), not a disk store. A file written
+before the run rules existed is a bare folder path with no `=` in it, and it is read as the folder
+rather than as a settings file nobody can parse; the seed travels as the text the field held, so a hex
+seed (`0x55555555`) survives a restart spelled the way the notes spell it.
 
 The text each script is *being edited into* is a **buffer** (`ScriptBuffers`), owned by the shell and
 not by the pane: the list marks the scripts that are unsaved, the editor shows that text, and Save
@@ -147,12 +165,20 @@ nowhere. The panes are also pinned shut (`CanClose`, `CanFloat`, `CanMove`, `Can
 off) for the same reason as the workspace tool window above — a region that can be dragged out
 reaches the docking states this shell does not survive.
 
-The three initial heights are a knob (`180`, `320`, and the last one left open), but the host is what
-resolves them against a window, and it weighs what each pane's *content* asks for. The text region is
-the one that changes its mind — its content is as tall as the script — so a long script pulls height
-away from the table region: measured with an 819-line script selected, the regions came out ~180 /
-~124 / ~440 DIP, i.e. the table sat at its minimum. That is the host's distribution over content the
-user can see; the splitter is the fix, and there is nothing to hard-code here.
+The base sizes of both splits are **weights, not DIPs**. The host bootstraps a split's ratios from its
+children's `Width`/`Height` hints only when *every* child carries one (`BootstrapRatios` in
+`DockHostNativeComponent`), normalizing them into proportions; a mixed set falls back to an equal
+share, which is what the first version of this pane was doing without meaning to. So the shell says
+`Width: 1` / `Width: 3` and the pane says `Height: 1 / 2 / 3`, and what the host keeps from then on is
+whatever the author dragged. Measured with the window maximized (2560 × 1344 physical, 150 %): the
+two panes came out 636 : 1908 (1 : 3 exactly) and the three regions 206.7 / 413.3 / 620 DIP
+(1 : 2 : 3 exactly).
+
+A hint is *not* a size: a ratio is all the host can hold, which is also why the pane can no longer
+say "the last region takes the rest" — the text region is three parts of six, not the remainder. What
+each region gets is then still weighed against what its *content* asks for, so a long script pulls
+height away from its neighbours inside the ratio; the splitter is the fix, and there is nothing to
+hard-code here.
 
 ### The command table
 
@@ -322,6 +348,99 @@ it, the Mica backdrop follows, and the host re-renders so our own `Theme.*` toke
 it only decides where the toggle starts; after a click the pinned value is the truth. It also has to
 run unconditionally: calling the hook inside the `??` that folds it into the choice is a hook-order
 violation, and `REACTOR_HOOKS_001` flags it (`mur check`).
+
+## The run
+
+The controls region is the editor's one window onto the mod: `Save`, the four rules a run is
+configured by, `Run` / `Cancel`, and a line that says what the game is doing. The mod's HTTP API is
+documented in the sibling repo (`../docs/API.md`); what is here is the client.
+
+`Api/ModApi.cs` is that client — `HttpClient` over `127.0.0.1:5223`, with every request carrying
+`Connection: close` (the mod's server answers and then closes; the connection is not handed back to a
+pool to be reused after the server has already dropped it) and one retry on a dropped connection,
+like the python tools do. A call comes back as a **value, never an exception** — the same rule the
+workspace follows, and for the same reason: the only thing a click handler or a poll tick can do with
+a failure is paint it. `ApiResult<T>` spells the three ways a call can end: an answer, a refusal by
+the mod (with the mod's own wording, which already names the field it refused), and no answer at all.
+
+`Api/ApiJson.cs` holds the shapes: the request bodies leave unset fields out (`WhenWritingNull`) and
+the responses **ignore** unknown keys — `/state` carries a player, a camera and a frame ring this
+panel has no use for, and a new field on the mod's side must not break the editor. Serialization goes
+through a source-generated context, like `ScriptJsonContext`: the app is published with NativeAOT.
+`Api/GameStatus.cs` is the reader's half — online or not, the menu, the mission, the script slot and
+what the mod says the levers are actually set to.
+
+### The four rules
+
+The rules are the levers the python tools set before a script goes out (`drmod_api.fixed_dt` /
+`fps_cap` / `rng`, `r03_baseline.run_once`), plus the headless switch:
+
+| Rule | Body | Means |
+| --- | --- | --- |
+| Fixed tick 1/60 | `POST /dt {"fixed":true,"ticks":true}` | one frame is exactly 1/60 s of simulation |
+| Frame cap: default | `POST /fps {"cap":"game"}` | the pacer waits as the game wants it (60 in gameplay, 30 in menus) |
+| Frame cap: unlimited | `POST /fps {"cap":"off"}` | the cap lifted — with a fixed tick, the run is faster than real time |
+| Frame cap: custom | `POST /fps {"fps":N}` | a limit of the editor's own, clamped to `1…1000` |
+| Freeze seed | `POST /rng {"pin":"freeze","seed":N}` | the AI's decisions stop depending on thread interleaving |
+| Headless run | `POST /render {"headless":true}` | the picture is taken away while the run lasts |
+
+⚠️ **The rules are not part of the script.** They are the mod's state for one run — the text format
+says so itself (`../docs/SCRIPT_DSL.md` §6) — so they live in the editor's settings and no `.tas` file
+is ever rewritten to hold them: the same script can be run pinned or unpinned. Nothing is sent to the
+game as the panel is filled in; a run is what applies them, and the status line shows what the mod
+says, never what the panel asked for.
+
+⚠️ **The seed goes last of the three**, immediately before the script: the mod freezes the LCG on the
+first tick of the *next* script, so a pin applied any earlier would land on nothing. `ApplyAsync`
+sends `/dt`, `/fps`, `/rng` in that order and stops at the first refusal — a run whose levers were
+refused would have gone out with the wrong configuration.
+
+### What `Run` does
+
+In this order, and each step is a refusal that stops the whole thing with a message:
+
+1. **A fresh `/state`.** The poll can be half a second old, and the menu is what decides whether the
+   script's own restart can be played at all; a game that is not in gameplay is refused by name
+   (`The game is not in gameplay (Pause Menu) — a run needs it`).
+2. **The game window to the foreground** (`GameWindow.FocusAndSettle`). The game reads its keyboard
+   through `DirectInput::GetDeviceState` and gives up early when its window is not foreground, so the
+   menu keys a `restart` plays arrive only while the game owns the input focus. `SetForegroundWindow`
+   alone is refused unless the caller already owns the foreground, so the call goes through
+   `AttachThreadInput` — the same dance `drmod_api.focus_and_settle` does, retried and followed by a
+   350 ms settle. A window that will not come forward is a **warning, not a stop**: the script still
+   runs, and the message says which part may be lost.
+3. **The rules** (`PlaybackRules.ApplyAsync`).
+4. **`POST /script/run`** with `ScriptJson.Write` of the document — the text **on screen**, parsed
+   again here, not the file: a run of a script whose edits were never saved is the run the author is
+   looking at, and `Run` is not a save. A `409` (the mod's one script slot is taken) is answered by
+   stopping whatever holds it and running once more — a script that ended between the poll and the
+   click is a race the panel cannot see.
+
+⚠️ **Headless is armed from the poll, and only once the script is really `running`.** The skip hooks
+sit on the live device's draw calls, and putting them there while a level loads is what crashed the
+game in `d3d9.dll` (measured — `../docs/HEADLESS.md` §5). The python tools apply it the same way,
+from the loop that watches the status. The mod restores the render and the frame cap by itself when a
+run ends, cancelled or not (`headless_service`), so nothing here counts runs back down; the run a
+headless rule was applied for is remembered by its script id, and the setting is off by default.
+
+`Cancel` is `POST /script/stop` and nothing else — the render and the cap come back on their own. It
+is live exactly while the mod says a script is active, whoever started it: a run from the python tools
+is a run this panel can stop.
+
+### The status line
+
+`In Game · R-03 · 58.4 fps · r03-barrier-ticks 412/1300 (running) · tick fixed 1/60 · cap 60 fps ·
+rng freeze 1` — every part of it is read from `/state`, off the UI thread, **twice a second** (the
+mod's HTTP server is single-threaded and lives in the game's render loop: it answers one request at a
+time, so a couple of times a second is a control panel's cadence, not a TAS readout's). The poll is
+one `UseEffect` + `Task.Run` + `PeriodicTimer` and the state setter marshals back to the UI thread on
+its own (`docs/guide/effects-scheduling.md`); a status that has not changed re-renders nothing, since
+`GameStatus` is a record. Nothing answering is its own line — `Offline — the game is not running the
+mod, or the API is not reachable` — and `Run` goes quiet with it.
+
+The region's last line says what a run of the text on screen would be — `"probe" starts after 5 ticks
+of gameplay · restarts the mission first` — read from the panel's own parse of the text, or the
+parser's message, or the mod's wording when the last action failed.
 
 ## Script formats
 
@@ -506,6 +625,14 @@ The test project needs the app's TFM (`net10.0-windows10.0.22621.0`), a pinned
 `RuntimeIdentifier` (Win2D's targets refuse to wire up their native DLL for an AnyCPU consumer), and
 `InternalsVisibleTo` from the app (the components stay internal). `AccessibilityScanner.Scan(element)`
 runs headlessly, so each pane is also scanned for `A11Y_001`.
+
+The mod's API is the one part whose contract is a program in another repository, so it is pinned
+against a **real socket**: `ModApiTests` starts a `TcpListener` that answers the way the mod's own
+server does (`Connection: close`, `Content-Length`, JSON bodies) and asserts what left and in which
+order — the four rules' request bodies byte for byte, a `409` arriving as its own kind of answer, a
+refused lever stopping the sequence before the seed, and nothing listening reading as *offline* rather
+than as a refusal. What those tests fake is the game, not the transport: a request that left with
+`frames` instead of `fps` would pass against a mock and fail against the game.
 
 ```bash
 dotnet test TasEditorCs.slnx

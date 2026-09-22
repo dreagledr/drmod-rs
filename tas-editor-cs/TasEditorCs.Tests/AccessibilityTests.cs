@@ -24,6 +24,7 @@ public class AccessibilityTests
             () => { },
             () => { },
             () => { },
+            () => { },
             () => { }));
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
@@ -35,10 +36,10 @@ public class AccessibilityTests
         var view = ScriptPanel.View(new ScriptPanelView(
             Script,
             Script.Text,
-            Dirty: false,
             ScriptTextStatus.Of(Script.Text),
-            _ => { },
-            () => { }));
+            StandardCommand.Save(() => { }, canExecute: false),
+            Controls(),
+            _ => { }));
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
     }
@@ -52,6 +53,29 @@ public class AccessibilityTests
             ScriptTextEditorTests.RegionFor(ScriptTextStatus.Of("0 a\n")));
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_003");
+    }
+
+    [Fact]
+    public void The_run_controls_name_their_fields()
+    {
+        // The rules row is three checkboxes, a combo box, a number box and a seed field: the checkboxes
+        // carry their own label and the others carry a header (`CheckBox`'s label is content, which is
+        // why only the fields the scanner knows about can be pinned by a test).
+        var view = ScriptControls.View(Controls());
+
+        Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_003");
+        Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
+    }
+
+    [Fact]
+    public void The_rename_dialog_names_its_field_and_its_buttons()
+    {
+        // Same rule as the delete question: a modal is the one surface a user cannot navigate around,
+        // so its field and both answers have to reach a screen reader with a name of their own.
+        var dialog = Editor.RenameScript(Script, "blade-run", _ => { }, _ => { });
+
+        Assert.DoesNotContain(AccessibilityScanner.Scan(dialog), f => f.Id == "A11Y_003");
+        Assert.DoesNotContain(AccessibilityScanner.Scan(dialog), f => f.Id == "A11Y_001");
     }
 
     [Fact]
@@ -74,4 +98,18 @@ public class AccessibilityTests
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
     }
+
+    static ScriptControlsView Controls() => new(
+        ScriptTextStatus.Of(Script.Text),
+        Dirty: false,
+        StandardCommand.Save(() => { }, canExecute: false),
+        PlaybackRules.Default,
+        "1",
+        GameStatus.Offline,
+        Preparing: false,
+        Error: null,
+        _ => { },
+        _ => { },
+        () => { },
+        () => { });
 }

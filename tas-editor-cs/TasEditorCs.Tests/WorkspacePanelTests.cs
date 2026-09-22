@@ -77,13 +77,26 @@ public class WorkspacePanelTests
     [Fact]
     public void The_file_actions_need_a_folder_and_a_selection()
     {
-        Assert.Equal((true, true, true), Buttons(View(Scripts, selected: BladeRunPath, folder: Folder)));
+        Assert.Equal((true, true, true, true), Buttons(View(Scripts, selected: BladeRunPath, folder: Folder)));
 
-        // No folder: nothing to create in, nothing to copy, nothing to delete.
-        Assert.Equal((false, false, false), Buttons(View(Scripts, folder: null)));
+        // No folder: nothing to create in, nothing to copy, nothing to rename, nothing to delete.
+        Assert.Equal((false, false, false, false), Buttons(View(Scripts, folder: null)));
 
-        // A folder but nothing selected: New works, the two that act on a script do not.
-        Assert.Equal((true, false, false), Buttons(View(Scripts, folder: Folder)));
+        // A folder but nothing selected: New works, the three that act on a script do not.
+        Assert.Equal((true, false, false, false), Buttons(View(Scripts, folder: Folder)));
+    }
+
+    [Fact]
+    public void Renaming_reports_the_click_and_nothing_else()
+    {
+        // The name itself is asked for in a dialog the shell owns: the pane only says that the action
+        // was asked for, which is what keeps the pane a value.
+        var renamed = 0;
+        var view = View(Scripts, selected: BladeRunPath, folder: Folder, rename: () => renamed++);
+
+        Action(view, 2).OnClick!();
+
+        Assert.Equal(1, renamed);
     }
 
     [Fact]
@@ -116,12 +129,13 @@ public class WorkspacePanelTests
         string? selected = null,
         string? folder = Folder,
         string? error = null,
-        IReadOnlyDictionary<string, string>? buffers = null) =>
-        Assert.IsType<FlexElement>(WorkspacePanel.View(Props(selected, null, scripts, folder, error, buffers)));
+        IReadOnlyDictionary<string, string>? buffers = null,
+        Action? rename = null) =>
+        Assert.IsType<FlexElement>(WorkspacePanel.View(Props(selected, null, scripts, folder, error, buffers, rename)));
 
     /// The buttons in the order the pane lays them out, with whether each one is live.
-    static (bool New, bool Duplicate, bool Delete) Buttons(FlexElement view) =>
-        (Enabled(view, 0), Enabled(view, 1), Enabled(view, 2));
+    static (bool New, bool Duplicate, bool Rename, bool Delete) Buttons(FlexElement view) =>
+        (Enabled(view, 0), Enabled(view, 1), Enabled(view, 2), Enabled(view, 3));
 
     /// Whether a file action is live. `.IsEnabled(...)` lands in the element's modifiers rather
     /// than in its own record property — that is the entry the reconciler applies to the control
@@ -146,7 +160,8 @@ public class WorkspacePanelTests
         IReadOnlyList<ScriptEntry>? scripts = null,
         string? folder = Folder,
         string? error = null,
-        IReadOnlyDictionary<string, string>? buffers = null) =>
+        IReadOnlyDictionary<string, string>? buffers = null,
+        Action? rename = null) =>
         new(folder,
             scripts ?? Scripts,
             buffers ?? ScriptBuffers.Empty,
@@ -156,6 +171,7 @@ public class WorkspacePanelTests
             () => { },
             () => { },
             () => { },
+            rename ?? (() => { }),
             () => { });
 
     static string? Text(Element element) => Assert.IsType<TextBlockElement>(element).Content;

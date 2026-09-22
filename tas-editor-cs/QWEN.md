@@ -102,12 +102,16 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   — with the docking splitters between them. The title bar carries the dark / light toggle.
 - The workspace is on disk (`Workspace.cs`, `EditorSettings.cs`): `Open folder…` through the
   library's own picker, the folder remembered between runs in `%LOCALAPPDATA%\tas-editor-cs\settings`
-  (`UsePersisted` is a process-lifetime cache, not a disk store), and the folder read as a listing —
+  along with the run rules (`key=value` lines; `UsePersisted` is a process-lifetime cache, not a disk
+  store, and a file from before the rules existed reads as the folder), and the folder read as a
+  listing —
   the top-level `.tas` files by name, each read and parsed, so a row carries its frame count and a
   file that does not read as a script says so in its own row instead of vanishing. **New** writes an
-  empty `script.tas` (`-2`, `-3` …), **Duplicate** copies to `<name>-copy.tas`, **Delete** asks first
-  in a declarative `ContentDialog`. Renaming is not among them: the file name is not the script's
-  name, and the text never renames the file. ⚠️ The listing is built inside a render (memoized on
+  empty `script.tas` (`-2`, `-3` …), **Duplicate** copies to `<name>-copy.tas`, **Rename** moves the
+  file to the name that was typed — a taken name is refused with a message rather than suffixed, and
+  the buffer travels with the file — **Delete** asks first in a declarative `ContentDialog`. ⚠️ The
+  file name is still *not* the script's `name=`, and the text never renames the file. ⚠️ The listing
+  is built inside a render (memoized on
   `folder` + a revision the writes bump), which is why nothing in `Workspace` throws — every failure
   comes back as a message for the pane's own line. Details and measurements — `README.md`
   (*The workspace*).
@@ -148,10 +152,20 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   per pan event and felt heavier than the host's own, which is why the native one is what shipped; and
   a help line that outgrows a narrow panel is clipped rather than wrapped (the list's `ScrollViewer`
   measures unbounded).
-- The script controls region holds Save, whether the text has been written back, and what the script
-  is — read from the text on screen, never from the file behind it (a summary taken from the entry
-  contradicted the status line one region below). The name, the trigger and the restart policy come
-  next.
+- **The script controls region runs a script** (`ScriptControls.cs`, `PlaybackRules.cs`, `Api/`,
+  `GameWindow.cs`): Save, the four rules a run is configured by — fixed tick 1/60, frame cap
+  (default / unlimited / custom), a frozen seed (decimal or `0x` hex) and headless — `Run` / `Cancel`,
+  and a line read from the mod's `/state` twice a second (menu · mission · fps · script frame · what
+  the levers are actually set to). `Run` goes: a fresh `/state`, gameplay check, the game window to
+  the foreground, the rules, then `POST /script/run` with the **text on screen** (not the file — Run
+  is not a save); a `409` stops the script holding the mod's slot and runs once more. ⚠️ The two rules
+  that were measured, not chosen: the seed is applied **last** of the three levers (the mod freezes
+  the LCG on the first tick of the *next* script), and headless is armed from the poll only once the
+  script is really `running` (skip hooks during a level load crash the game — `../docs/HEADLESS.md`
+  §5). ⚠️ The rules are the mod's state for one run, **not part of the script** (`../docs/SCRIPT_DSL.md`
+  §6): they live in the editor's settings and no `.tas` file is rewritten to hold them. The client
+  answers with values rather than exceptions, and its JSON goes through a source-generated context
+  (NativeAOT). `README.md` (*The run*) has the order, the bodies and the measurements.
 - The three script representations round-trip through `Script/`: the API JSON (`ScriptJson`), the
   `.tas` text (`ScriptDsl`) and the converter's frames (`ScriptFrames`), around the `ScriptDocument`
   hub. Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and
@@ -163,7 +177,7 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in `../docs/SCRIPT_DSL.md`
   and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha there before trusting a
   property initializer to survive deserialization.
-- Next: the script controls region's remaining fields (name, trigger, restart policy), and a close
-  guard for unsaved buffers (today they live in the process's memory only — an explicit save is the
-  whole of the save UX).
+- Next: the script controls region's remaining fields (`name=` in the rules line, the trigger and the
+  restart policy, which are edited in the text today), and a close guard for unsaved buffers (today
+  they live in the process's memory only — an explicit save is the whole of the save UX).
 - The Rust version (`../tas-editor/`) is left untouched; this project is the candidate replacement.

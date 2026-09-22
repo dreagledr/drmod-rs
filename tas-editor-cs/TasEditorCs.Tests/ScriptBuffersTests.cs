@@ -103,6 +103,35 @@ public class ScriptBuffersTests
         Assert.False(deleted.ContainsKey(BarrierFlight.Path));
     }
 
+    [Fact]
+    public void A_rename_takes_the_typed_text_with_it()
+    {
+        // A buffer is what the editor holds for a *path*, so a rename has to carry the text across —
+        // otherwise the renamed file would come back as its own text on disk and work that was never
+        // written back would be gone without a word.
+        var typed = "! trig=ticks:0\r0 a\r7 x\r";
+        var buffers = ScriptBuffers.Typed(ScriptBuffers.Empty, BladeRun, typed);
+        var renamed = BarrierFlight with { Name = "blade-run-moved" };
+
+        var moved = ScriptBuffers.Renamed(buffers, BladeRun.Path, renamed.Path);
+
+        Assert.Equal(typed, ScriptBuffers.Resolve(moved, renamed));
+        // Still unsaved, and the old path holds nothing: after the rename the workspace has one file.
+        Assert.True(ScriptBuffers.IsDirty(moved, renamed));
+        Assert.Equal(BladeRun.Text, ScriptBuffers.Resolve(moved, BladeRun));
+    }
+
+    [Fact]
+    public void Renaming_a_script_nobody_typed_in_leaves_the_buffers_alone()
+    {
+        var buffers = ScriptBuffers.Typed(ScriptBuffers.Empty, BarrierFlight, "1 b\n");
+
+        Assert.Same(buffers, ScriptBuffers.Renamed(buffers, BladeRun.Path, "elsewhere"));
+        Assert.Same(
+            ScriptBuffers.Empty,
+            ScriptBuffers.Renamed(ScriptBuffers.Empty, BladeRun.Path, "elsewhere"));
+    }
+
     /// An entry as the workspace would list it: a path that is the identity, the file's text, and
     /// the frame count the text ends on (`ScriptTextStatus.LastFrame`).
     static ScriptEntry Entry(string name, string text)
