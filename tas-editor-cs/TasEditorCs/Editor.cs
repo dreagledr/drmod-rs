@@ -409,8 +409,9 @@ sealed class Editor : Component
         ///
         /// The order is the one the python tools established (`r03_baseline.run_once`): the game window
         /// first (the menu keys a `restart` plays arrive only while the game owns the input focus), then
-        /// the rules, and the seed **last** of the three — the mod freezes the LCG on the first tick of
-        /// the *next* script, and the script it has to land on is the one sent right after.
+        /// a menu settled out of the way, then the rules, and the seed **last** of the three — the mod
+        /// freezes the LCG on the first tick of the *next* script, and the script it has to land on is
+        /// the one sent right after.
         ///
         /// What goes to the mod is the text on screen, parsed again here. The file is not written first:
         /// the run is of the script the author is looking at, and `Run` is not a save.
@@ -447,15 +448,21 @@ sealed class Editor : Component
                 }
 
                 setGame(snapshot);
-                if (!snapshot.InGameplay)
-                {
-                    setRunError($"The game is not in gameplay ({snapshot.MenuStatus}) — a run needs it");
-                    return;
-                }
 
                 if (!GameWindow.FocusAndSettle())
                 {
-                    setRunError("The game window did not take the foreground — a restart's menu keys may be lost");
+                    // A warning, not a stop: the script runs either way, and what may be lost is the
+                    // menu input the script's own restart plays.
+                    setRunError("The game window did not take the foreground — menu input may be lost");
+                }
+
+                // Out of the pause menu, or out of a fail menu, before the script arms — otherwise the
+                // menu swallows the keys the script's own restart plays. The window is focused above,
+                // which is what the menu reads its keyboard through.
+                if (await MenuSettler.EnsureGameplayAsync(api, CancellationToken.None) is { } stuck)
+                {
+                    setRunError(stuck);
+                    return;
                 }
 
                 if (await runRules.ApplyAsync(api, CancellationToken.None) is { } lever)

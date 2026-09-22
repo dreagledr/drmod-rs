@@ -153,19 +153,25 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   a help line that outgrows a narrow panel is clipped rather than wrapped (the list's `ScrollViewer`
   measures unbounded).
 - **The script controls region runs a script** (`ScriptControls.cs`, `PlaybackRules.cs`, `Api/`,
-  `GameWindow.cs`): Save, the four rules a run is configured by — fixed tick 1/60, frame cap
-  (default / unlimited / custom), a frozen seed (decimal or `0x` hex) and headless — `Run` / `Cancel`,
-  and a line read from the mod's `/state` twice a second (menu · mission · fps · script frame · what
-  the levers are actually set to). `Run` goes: a fresh `/state`, gameplay check, the game window to
-  the foreground, the rules, then `POST /script/run` with the **text on screen** (not the file — Run
-  is not a save); a `409` stops the script holding the mod's slot and runs once more. ⚠️ The two rules
-  that were measured, not chosen: the seed is applied **last** of the three levers (the mod freezes
-  the LCG on the first tick of the *next* script), and headless is armed from the poll only once the
-  script is really `running` (skip hooks during a level load crash the game — `../docs/HEADLESS.md`
-  §5). ⚠️ The rules are the mod's state for one run, **not part of the script** (`../docs/SCRIPT_DSL.md`
-  §6): they live in the editor's settings and no `.tas` file is rewritten to hold them. The client
-  answers with values rather than exceptions, and its JSON goes through a source-generated context
-  (NativeAOT). `README.md` (*The run*) has the order, the bodies and the measurements.
+  `GameWindow.cs`, `MenuSettler.cs`): Save, the four rules a run is configured by — fixed tick 1/60,
+  frame cap (default / unlimited / custom), a frozen seed (decimal or `0x` hex) and headless —
+  `Run` / `Cancel`, and a line read from the mod's `/state` twice a second (menu · mission · fps ·
+  script frame · what the levers are actually set to). `Run` goes: a fresh `/state`, the game window
+  to the foreground, **the menu settled out of the way**, the rules, then `POST /script/run` with the
+  **text on screen** (not the file — Run is not a save); a `409` stops the script holding the mod's
+  slot and runs once more. ⚠️ The menu step is a port of the python tools' `ensure_gameplay` /
+  `recover_fail` (`MenuSettler`): a pause menu is toggled shut by a three-frame `pause` script and a
+  fail menu by one `confirm` — mod scripts rather than keystrokes, because the pause menu does not
+  tick the input unit and reads script frames through the `isKeyDown`/`isKeyPressed` detours. A game
+  already playing is left untouched, and any other menu (front end, a mission still loading) is
+  **refused by name** rather than guessed at with a blind confirm. ⚠️ The two rules that were
+  measured, not chosen: the seed is applied **last** of the three levers (the mod freezes the LCG on
+  the first tick of the *next* script), and headless is armed from the poll only once the script is
+  really `running` (skip hooks during a level load crash the game — `../docs/HEADLESS.md` §5). ⚠️ The
+  rules are the mod's state for one run, **not part of the script** (`../docs/SCRIPT_DSL.md` §6): they
+  live in the editor's settings and no `.tas` file is rewritten to hold them. The client answers with
+  values rather than exceptions, and its JSON goes through a source-generated context (NativeAOT).
+  `README.md` (*The run*) has the order, the bodies and the measurements.
 - The three script representations round-trip through `Script/`: the API JSON (`ScriptJson`), the
   `.tas` text (`ScriptDsl`) and the converter's frames (`ScriptFrames`), around the `ScriptDocument`
   hub. Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and

@@ -33,6 +33,7 @@ tas-editor-cs/
 │   ├── ScriptPanel.cs      # right pane — the three stacked regions
 │   ├── ScriptControls.cs   #   the controls region — Save, the run rules, Run / Cancel, the status
 │   ├── PlaybackRules.cs    #     the four levers a run applies, and the bodies they become
+│   ├── MenuSettler.cs      #     getting the game out of a menu before a run (pause / fail)
 │   ├── GameWindow.cs       #     the game's window, and bringing it to the foreground
 │   ├── Api/                #     the mod's HTTP API: the client, its JSON, the state it answers with
 │   ├── CommandTable.cs     #   the command table region (read-only DataGrid over the text)
@@ -400,8 +401,7 @@ refused would have gone out with the wrong configuration.
 In this order, and each step is a refusal that stops the whole thing with a message:
 
 1. **A fresh `/state`.** The poll can be half a second old, and the menu is what decides whether the
-   script's own restart can be played at all; a game that is not in gameplay is refused by name
-   (`The game is not in gameplay (Pause Menu) — a run needs it`).
+   script's own restart can be played at all.
 2. **The game window to the foreground** (`GameWindow.FocusAndSettle`). The game reads its keyboard
    through `DirectInput::GetDeviceState` and gives up early when its window is not foreground, so the
    menu keys a `restart` plays arrive only while the game owns the input focus. `SetForegroundWindow`
@@ -409,8 +409,9 @@ In this order, and each step is a refusal that stops the whole thing with a mess
    `AttachThreadInput` — the same dance `drmod_api.focus_and_settle` does, retried and followed by a
    350 ms settle. A window that will not come forward is a **warning, not a stop**: the script still
    runs, and the message says which part may be lost.
-3. **The rules** (`PlaybackRules.ApplyAsync`).
-4. **`POST /script/run`** with `ScriptJson.Write` of the document — the text **on screen**, parsed
+3. **The menu out of the way** (`MenuSettler`, see below).
+4. **The rules** (`PlaybackRules.ApplyAsync`).
+5. **`POST /script/run`** with `ScriptJson.Write` of the document — the text **on screen**, parsed
    again here, not the file: a run of a script whose edits were never saved is the run the author is
    looking at, and `Run` is not a save. A `409` (the mod's one script slot is taken) is answered by
    stopping whatever holds it and running once more — a script that ended between the poll and the
@@ -426,6 +427,25 @@ headless rule was applied for is remembered by its script id, and the setting is
 `Cancel` is `POST /script/stop` and nothing else — the render and the cap come back on their own. It
 is live exactly while the mod says a script is active, whoever started it: a run from the python tools
 is a run this panel can stop.
+
+### A menu is settled before the script arms
+
+`MenuSettler.cs` is the editor's port of the python tools' menu work (`drmod_api.ensure_gameplay` /
+`recover_fail`). It exists because of what a script's own `restart` is: a sequence of pause-menu keys,
+which a menu that is *already open* simply swallows — so a run started from the pause menu, or after a
+death left the fail menu up, would arm and then not move.
+
+⚠️ **The steps are mod scripts, not synthesised input.** A one-command script — three frames of a
+`pause` bit to toggle the pause menu, one `confirm` for the fail menu's preselected Retry — is how the
+mod delivers menu input at all: the pause menu does not tick the input unit, so script frames are read
+through the `isKeyDown`/`isKeyPressed` detours (`docs/API.md` §5). That is also why the menu is settled
+*after* the window comes forward: the game reads that keyboard only while it is foreground.
+
+What the settler will and will not do is deliberate. A game already playing is left **untouched** —
+not a request beyond the status read the decision needs. The pause menu and the fail menus are pressed
+out. **Anything else is refused by name** — the game's front end, a mission that has not finished
+loading — because the alternative is pointing a blind confirm at a menu this client has never driven.
+A menu that does not close is refused too, rather than armed into losing its keys.
 
 ### The status line
 
