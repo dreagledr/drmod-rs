@@ -63,22 +63,14 @@ public class ScriptTextEditorTests
         Assert.StartsWith("line 1: unknown token 'zz'", Status(Refused));
     }
 
-    [Theory]
-    [InlineData("a\rb", "a\nb")]
-    [InlineData("a\r\nb", "a\nb")]
-    [InlineData("a\nb", "a\nb")]
-    public void Puts_the_formats_line_separator_back(string asReported, string expected)
-    {
-        Assert.Equal(expected, ScriptTextEditor.Lines(asReported));
-    }
-
     [Fact]
     public void Reads_a_draft_the_way_the_text_box_reports_it()
     {
-        // Measured live: a WinUI `TextBox` hands its text back with a lone `\r`, so a draft stored
-        // as it comes would read as one long line — the caption would paint an error the user
-        // cannot clear by editing the text.
-        var reported = ScriptTextStatus.Of(ScriptTextEditor.Lines(Draft.Replace('\n', '\r')));
+        // Measured live: a WinUI `TextBox` hands its text back with a lone `\r`, and the pane puts
+        // the format's separator back on the way into the parser (`ScriptDsl.Lines`) — a draft read
+        // as it comes would be one long line, and the caption would paint an error the user cannot
+        // clear by editing the text.
+        var reported = ScriptTextStatus.Of(ScriptDsl.Lines(Draft.Replace('\n', '\r')));
 
         Assert.True(reported.IsOk);
         Assert.Equal(8u, ScriptTextStatus.LastFrame(reported.Document!));

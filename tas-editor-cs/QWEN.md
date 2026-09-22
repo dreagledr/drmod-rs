@@ -97,28 +97,56 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
 
 ## Status
 
-- Two-pane window shell: the left pane lists the workspace scripts (selection live, management
-  buttons are placeholders), the right pane stacks three regions — script controls, command table,
-  script text — with the docking splitters between them. The title bar carries the dark / light
-  toggle.
+- Two-pane window shell over a **real workspace**: the left pane holds the `.tas` files of a folder
+  the user picks, the right pane stacks three regions — script controls, command table, script text
+  — with the docking splitters between them. The title bar carries the dark / light toggle.
+- The workspace is on disk (`Workspace.cs`, `EditorSettings.cs`): `Open folder…` through the
+  library's own picker, the folder remembered between runs in `%LOCALAPPDATA%\tas-editor-cs\settings`
+  (`UsePersisted` is a process-lifetime cache, not a disk store), and the folder read as a listing —
+  the top-level `.tas` files by name, each read and parsed, so a row carries its frame count and a
+  file that does not read as a script says so in its own row instead of vanishing. **New** writes an
+  empty `script.tas` (`-2`, `-3` …), **Duplicate** copies to `<name>-copy.tas`, **Delete** asks first
+  in a declarative `ContentDialog`. Renaming is not among them: the file name is not the script's
+  name, and the text never renames the file. ⚠️ The listing is built inside a render (memoized on
+  `folder` + a revision the writes bump), which is why nothing in `Workspace` throws — every failure
+  comes back as a message for the pane's own line. Details and measurements — `README.md`
+  (*The workspace*).
+- **Save is explicit**: a `StandardCommand.Save` button in the script controls region plus its own
+  Ctrl+S accelerator (registered for the subtree through `CommandHost`). It is enabled by
+  `ScriptBuffers.IsDirty` and nothing else — a half-written script is still work worth keeping, so a
+  text the parser refuses saves like any other. The text each script is being edited into is a buffer
+  owned by the *shell*, because the list's unsaved markers, the text region and Save all read it; a
+  buffer outlives the selection.
+- ⚠️ **Line separators are never strict, and that was a measured bug.** A `TextBox` reports its lines
+  with a lone `\r`, the file is `\n`, a file edited elsewhere may be `\r\n`. The buffer keeps what the
+  control reported (storing `\n` there would make the reconciler rewrite the text per keystroke and
+  move the caret), `ScriptDsl.Lines` is the one place that says what a line break is, `Workspace.Write`
+  writes the format's own separator and `Workspace.Read` normalises what it finds, while `IsDirty`
+  compares *readings*. Before that, the first save wrote the control's text through: 31 `\r` and no
+  `\n` in the file (one line to the parser, frames glued: `… y:6` + `22` → `y:622`) while the editor
+  showed the script as fine.
 - The command table is real: a `DataGrid` over generated frames (`CommandTable.cs`), one column per
   script input, 20 000-frame scripts included. Its cells are edited inline through the grid's own
-  editing (`editable: true`, click to open an editor, commit written back to the source).
+  editing (`editable: true`, click to open an editor, commit written back to the source). Its frames
+  are still the mock generator's (`CommandRows`, seeded from the file's path and cut to the entry's
+  frame count — the count comes from the text, the content does not).
 - The script text region is real too (`ScriptTextEditor.cs`): the selected script's `.tas` text in a
   multiline monospaced `TextBox`, re-read on every keystroke, with what the text parses to — or the
-  line the parser refused — as the line above it (`ScriptTextStatus`). A draft per script lives in
-  the pane's own state (`ScriptDrafts`), so switching scripts keeps what was typed; `MockScriptText`
-  is what an unedited script opens with (two hand-written texts and one generated from the table's
-  own mock frames, clipped at the mod's 3600-frame limit). Its `Commands` button opens the format's
-  command reference (`Script/ScriptCommands.cs`) as a **pane beside the editor**, separated by the
-  docking host's own splitter — the same one the regions use — so the reader can drag the boundary
-  as wide as they want. ⚠️ Measured traps are in `README.md` (*The script text region*): a `TextBox`
-  reports its lines with a lone `\r`; it fills the region only from a `Grid` star row, not from a
-  flex slot; its scrollbars have to be turned on through `.Set` (the font rides there for the same
-  reason); a hand-rolled `OnPan` splitter re-rendered the region per pan event and felt heavier than
-  the host's own, which is why the native one is what shipped; and a help line that outgrows a narrow
-  panel is clipped rather than wrapped (the list's `ScrollViewer` measures unbounded). The script
-  controls region is still a note.
+  line the parser refused — as the line above it (`ScriptTextStatus`; the parse itself is the pane's,
+  handed down so that the status line, the controls region and Save all read one answer). Its
+  `Commands` button opens the format's command reference (`Script/ScriptCommands.cs`) as a **pane
+  beside the editor**, separated by the docking host's own splitter — the same one the regions use —
+  so the reader can drag the boundary as wide as they want. ⚠️ Measured traps are in `README.md`
+  (*The script text region*): a `TextBox` reports its lines with a lone `\r`; it fills the region only
+  from a `Grid` star row, not from a flex slot; its scrollbars have to be turned on through `.Set`
+  (the font rides there for the same reason); a hand-rolled `OnPan` splitter re-rendered the region
+  per pan event and felt heavier than the host's own, which is why the native one is what shipped; and
+  a help line that outgrows a narrow panel is clipped rather than wrapped (the list's `ScrollViewer`
+  measures unbounded).
+- The script controls region holds Save, whether the text has been written back, and what the script
+  is — read from the text on screen, never from the file behind it (a summary taken from the entry
+  contradicted the status line one region below). The name, the trigger and the restart policy come
+  next.
 - The three script representations round-trip through `Script/`: the API JSON (`ScriptJson`), the
   `.tas` text (`ScriptDsl`) and the table's frames (`ScriptFrames`), around the `ScriptDocument` hub.
   Text tokens are console pad names (`a` jump, `x` light attack, `lt` blade, `du` augment …) and they
@@ -130,7 +158,7 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   in `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in
   `../docs/SCRIPT_DSL.md` and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha
   there before trusting a property initializer to survive deserialization.
-- Next: the script controls region, the table↔text link (an edit in one seen by the other), and the
-  on-disk workspace — frames are generated, not parsed, and an edited row or draft lives only in
-  memory.
+- Next: the script controls region's remaining fields, the table↔text link (an edit in one seen by
+  the other), and a close guard for unsaved buffers (today they live in the process's memory only —
+  an explicit save is the whole of the save UX).
 - The Rust version (`../tas-editor/`) is left untouched; this project is the candidate replacement.

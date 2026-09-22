@@ -4,14 +4,14 @@ Desktop TAS editor for Metal Gear Rising: Revengeance on **WinUI 3** through
 [`Microsoft.UI.Reactor`](https://microsoft.github.io/microsoft-ui-reactor/) — a declarative
 React-style component model (components, hooks, keyed lists), no XAML, no bindings, no ViewModels.
 
-Status: **two-pane shell with a live command table and the script formats wired.** The window is split
-by a draggable divider — the left pane lists the workspace scripts (the selection is live, the
-management buttons are placeholders), the right pane stacks three regions — script controls, command
-table, script text — with the same drag-resize splitters between them. The command table region and
-the script text region are both filled in (editable, over mock data); the script controls region is
-still a one-line note, and the on-disk workspace is the next pass. The three representations of a
-script — the API JSON, the `.tas` text and the table's frames — round-trip through `Script/` (see
-*Script formats* below).
+Status: **two-pane shell over a real workspace.** The window is split by a draggable divider — the
+left pane holds the `.tas` files of a folder the user picks (the list and the file actions are real),
+the right pane stacks three regions — script controls, command table, script text — with the same
+drag-resize splitters between them. The command table region and the script text region are both
+filled in; the table still builds its frames from a mock generator, the text is the file's, and the
+script controls region is Save plus a one-line note. The three representations of a script — the API
+JSON, the `.tas` text and the table's frames — round-trip through `Script/` (see *Script formats*
+below).
 
 This is the C# version living next to the Rust one (`../tas-editor/`); that one is left untouched.
 Folder conventions — language, component layout, what to run before calling something done —
@@ -24,15 +24,16 @@ tas-editor-cs/
 ├── TasEditorCs.slnx        # solution: the app and its tests
 ├── TasEditorCs/            # the app (WinUI 3, self-contained + NativeAOT)
 │   ├── App.cs              # entry point: ReactorApp.Run + docking registration
-│   ├── Editor.cs           # window shell: owns the split and the selection
+│   ├── Editor.cs           # window shell: the split, the workspace and the selection
+│   ├── Workspace.cs        #   the folder on disk: list, read, write, new, copy, delete
+│   ├── EditorSettings.cs   #   what survives a restart (the workspace folder)
 │   ├── WorkspacePanel.cs   # left pane — the script list and its management
-│   ├── ScriptPanel.cs      # right pane — the three stacked regions, and the drafts
+│   ├── ScriptPanel.cs      # right pane — the three stacked regions
 │   ├── CommandTable.cs     #   the command table region (editable DataGrid)
 │   ├── ScriptTextEditor.cs #   the script text region (`.tas` text + its status line)
 │   ├── ScriptTextStatus.cs #     what a text parses to, or why it does not
-│   ├── ScriptEntry.cs      # the script model
-│   ├── ScriptDrafts.cs     #   the text each script is being edited into
-│   ├── MockScriptText.cs   #   the text a script opens with, while the workspace is not wired
+│   ├── ScriptEntry.cs      # the script model — one `.tas` file
+│   ├── ScriptBuffers.cs    #   the text each script is being edited into, and what is unsaved
 │   ├── CommandRow.cs       #   one script frame + the generated mock frames
 │   ├── Script/             #   the script formats: model, JSON, DSL text, frames
 │   ├── Assets/ Properties/
@@ -83,6 +84,53 @@ Content is which panes exist and what they show — declared by `DockManager.Lay
 own state every render. Shape is the arrangement the user dragged into existence — the host keeps it
 and matches the two by pane `Key`. Feeding the host's live layout back into our own state
 double-owns the shape and breaks re-docking, tab switching and splitter drags.
+
+### The workspace
+
+The left pane is the folder on disk. `Open folder…` picks it through the library's own picker
+(`UseFolderPickerAsync` — captured as a *method group* in `Render` and called from the click, which
+is how the library's picker sample does it; the analyzer reads the `Use*` name and flags it inside a
+branch, though it holds no hook slot), and the folder is then read as a **listing**: the top-level
+`.tas` files, by name, each one read and parsed (`Workspace.List`). Parsing at listing time is what
+puts a frame count in the row — and what lets a file that does not read as a script say so in its own
+row instead of disappearing (`ScriptEntry.Error`).
+
+⚠️ **The listing is built inside a render.** `Editor` memoizes it on `(folder, revision)`, and every
+write to the folder — a save, a new file, a delete — bumps the revision, so the rows re-read the
+files they describe. That makes the listing a disk read in the render path, which is why nothing in
+`Workspace` throws: every failure — a folder that is gone, a file nobody can read or write — comes
+back as a message and ends up in the pane's own line.
+
+The file actions are `ScriptEntry`-level, not document-level: **New** writes an empty `script.tas`
+(`script-2.tas`, … — an existing name is never overwritten), **Duplicate** copies the file to
+`<name>-copy.tas`, **Delete** asks first, in a declarative `ContentDialog` that stays in the tree with
+`IsOpen` toggled (a `ShowAsync` from a handler gets no parent theme and is not testable —
+`REACTOR_DIALOG_001`). The dialog names the file and says so when that file has unsaved text, because
+deleting it takes the text with it.
+
+**Save is explicit** — a `StandardCommand.Save` button in the script controls region plus its own
+Ctrl+S accelerator, registered for the subtree through `CommandHost`. What is enabled is
+`IsDirty` and nothing else: a half-written script is still work worth keeping, so a text the parser
+refuses saves like any other (the status line already says the mod would turn it down). The folder
+itself is remembered between runs — `%LOCALAPPDATA%\tas-editor-cs\settings`, one line of text — because
+`UsePersisted` is a process-lifetime cache (spec 033 §2), not a disk store.
+
+The text each script is *being edited into* is a **buffer** (`ScriptBuffers`), owned by the shell and
+not by the pane: the list marks the scripts that are unsaved, the editor shows that text, and Save
+writes it — three readers of one value. A buffer outlives the selection, so switching scripts and
+coming back keeps what was typed.
+
+⚠️ **A buffer is the text box's own text, and unsaved is a question about readings, not bytes.** A
+WinUI `TextBox` separates its lines with a lone `\r`; the file is `\n`; a file edited elsewhere may be
+`\r\n`. So the buffer keeps exactly what the control reported (storing the file's `\n` instead would
+make the reconciler write the text back on the next keystroke and move the caret with it), while
+`IsDirty` compares `ScriptDsl.Lines(buffer)` with `ScriptDsl.Lines(fileText)` — a line break is a line
+break, whichever of the three it is. This was a **measured bug**, not a hypothetical: the first save
+wrote the control's text through, and the file on disk ended up with 31 `\r` and not one `\n` — one
+line to the parser, with the last frame and the next line's frame number glued together
+(`… y:6` + `22` → `y:622`), while the editor — which normalises before parsing — showed the script as
+perfectly fine. `Workspace.Write` now always writes the format's own separator, and `Workspace.Read`
+normalises whatever it finds, so the same bytes can never read two ways.
 
 ### The three regions inside the right pane
 
@@ -217,15 +265,18 @@ are in `../docs/SCRIPT_DSL.md`; what is here is the editing surface:
   summary — `name · N commands · last frame M` — or the converter's message as it stands, in the
   error color. A 3600-line text re-reads in ~1 ms, so there is nothing to debounce.
 - ⚠️ **The box reports its lines separated by a lone `\r`** (a WinUI `TextBox` normalises its text
-  that way, measured), while the format is `\n`. `ScriptTextEditor.Lines` puts the separator back on
-  the way *into* the parser — never into the stored draft: the draft keeps exactly the bytes the
-  control reported, which is what stops the reconciler writing the text back on every keystroke. The
-  draft is the editor's buffer, not the file; anything written out goes through the converter, which
-  spells the format's own `\n`.
-- **A draft per script, owned by the pane** (`ScriptPanel.Render`, `ScriptDrafts`): switching to
-  another script and back keeps what was typed, because the pane is where the regions that read one
-  script meet — the table will be the second of them. The shell still only decides which script is
-  selected.
+  that way, measured), while the format is `\n`. `ScriptDsl.Lines` puts the separator back wherever a
+  text is read or written — never into the buffer: the buffer keeps exactly the bytes the control
+  reported, which is what stops the reconciler writing the text back on every keystroke. And it is
+  the *same* rule on the way out — `Workspace.Write` writes the file in `\n` — which is what the
+  first save of this pass got wrong, see *The workspace* above.
+- **A buffer per script, owned by the shell** (`ScriptBuffers`): switching to another script and back
+  keeps what was typed. It sits with the shell rather than with the pane because three readers share
+  it — the list's unsaved markers, the text region, and Save.
+- ⚠️ **What the pane says about the script comes from the text, not from the file.** The controls
+  region used to summarise the *entry* — the file as it was listed — so a script whose text had been
+  fixed in the editor still read "not a script the mod would run" one line above a text region that
+  parsed it perfectly. Both lines now read the same parse of the same text.
 - ⚠️ **The editor takes its height from a `Grid` star row, not from a flex slot.** A `TextBox` hands
   a `FlexPanel` its *content* height, and Reactor arranges the child at its own WinUI size inside the
   slot it was given, so `Flex(grow: 1, basis: 0)` leaves the rest of the region empty — measured
@@ -244,16 +295,13 @@ are in `../docs/SCRIPT_DSL.md`; what is here is the editing surface:
   mounted control instead, which only the app has. The cost is the usual one for `.Set`: what it
   writes is not something the headless tests can assert, so the scrollbar and the font are pinned by
   the live measurements above, not by a test.
-- **The text a script opens with is a mock** (`MockScriptText`): `blade-run` and `barrier-flight` are
-  hand-written, in the fixture style, and deliberately inside the frame counts the list shows. The
-  20 000-frame `lightning-strike` is generated — its own table frames, collapsed to commands and
-  written by the DSL, clipped at the mod's 3600-frame limit (`ScriptJson.MaxFrames`), with the clip
-  spelled out as a `#` comment in the text. Measured on that stub: 15 191 characters, 819 lines, 816
-  commands. The list's 20 000 and the text's ≤3600 are two mocks of different sizes meeting in one
-  row — the grid keeps its 20 000-row load test, the text its real limit.
-- Frames for the *table* and text for the *editor* come from the same mock frames, and neither reads
-  the other at render time: the two regions are still unlinked, so an edit in one is not seen by the
-  other. That wiring, and the on-disk workspace behind it, is the next pass.
+- **The text the region shows is the file's** — read by the listing, edited in memory, written back by
+  Save. There is no mock left on this side: the file is the source, and a text the parser refuses is
+  the author's own half-written script, shown with the parser's message rather than hidden.
+- Frames for the *table* are still the mock generator's (`CommandRows`, seeded from the path and cut
+  to the entry's frame count — the count comes from the text, the content does not). Text for the
+  *editor* is the file's, and neither reads the other at render time: the two regions are still
+  unlinked, so an edit in one is not seen by the other. That wiring is the next pass.
 
 ### Theme
 

@@ -9,7 +9,7 @@ using Microsoft.UI.Xaml.Controls;   // ScrollBarVisibility, ScrollViewer, Scroll
 using Microsoft.UI.Xaml.Media;      // FontFamily
 using static Microsoft.UI.Reactor.Factories;
 
-sealed record ScriptTextEditorProps(string Text, Action<string> TextChanged);
+sealed record ScriptTextEditorProps(string Text, ScriptTextStatus Status, Action<string> TextChanged);
 
 /// Everything the region paints and everything it can do, in one record.
 ///
@@ -29,8 +29,16 @@ internal sealed record ScriptTextEditorView(
 ///
 /// The text is edited in place and read back on every keystroke — the status line is the
 /// converter's own answer, either the document's name, command count and last frame or the line
-/// the parser refused. Nothing here reaches the command table: the two regions read the same
-/// script, and neither writes for the other yet.
+/// the parser refused. The parse itself is the pane's: it is the same text the Save button and the
+/// other regions are about, so it is read once there and handed down here.
+///
+/// What is typed stays exactly as the control reported it — the text box is the buffer, and
+/// keeping its own bytes is what stops the reconciler from writing the text back on every
+/// keystroke and moving the caret with it. The format's line separator is put back where a text is
+/// read or written (`ScriptDsl.Lines`), never in the buffer.
+///
+/// Nothing here reaches the command table: the two regions read the same script, and neither
+/// writes for the other yet.
 ///
 /// The text box is monospaced and does not wrap on purpose: one line is one frame
 /// (`docs/SCRIPT_DSL.md` in the sibling repo), so a wrapped line would read as two.
@@ -44,11 +52,6 @@ sealed class ScriptTextEditor : Component<ScriptTextEditorProps>
 {
     public override Element Render()
     {
-        // Both a memo and a per-keystroke cost: the whole document is read again whenever the
-        // text changes, and the answer is what the caption paints. A re-render for another
-        // reason — a theme toggle, a selection — reuses it.
-        var status = UseMemo(() => ScriptTextStatus.Of(Lines(Props.Text)), Props.Text);
-
         // Whether the reference is open is the region's own business: it reads no script, and
         // nothing else in the shell has an opinion about it. Where the boundary between the two
         // panes sits is *not* state here — the docking host owns the split ratio.
@@ -56,22 +59,11 @@ sealed class ScriptTextEditor : Component<ScriptTextEditorProps>
 
         return View(new ScriptTextEditorView(
             Props.Text,
-            status,
+            Props.Status,
             reference,
             () => setReference(!reference),
             Props.TextChanged));
     }
-
-    /// The text as the format reads it. A WinUI `TextBox` separates its lines with a lone `\r`
-    /// and reports that back through `TextChanged`, while the `.tas` format is `\n` — so the
-    /// text that reaches the parser is the control's own text with its line separator put back.
-    ///
-    /// The separator is normalised here, on the way *into* the reader, and not in the change
-    /// handler: the draft then keeps exactly the bytes the control reported, which is what keeps
-    /// the reconciler from writing the text back on every keystroke (and moving the caret with
-    /// it). The stored text is the editor's buffer, not the file — anything written out goes
-    /// through the converter, which spells the format's own `\n`.
-    internal static string Lines(string text) => text.Replace("\r\n", "\n").Replace('\r', '\n');
 
     /// The region body. Split out of the component because `Component<TProps>.Props` is
     /// read-only and set by the host, so a headless unit test has no way to render the component

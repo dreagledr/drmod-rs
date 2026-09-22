@@ -472,6 +472,17 @@ internal static class ScriptDsl
 
     // ── parsing ──────────────────────────────────────────────────────────────
 
+    /// The text as the format reads it: lines separated by `\n`.
+    ///
+    /// Every reader of a script text goes through here, so one text never reads two ways. Nothing
+    /// in the format is sensitive to the separator — a frame line is trimmed, tokens are separated
+    /// by spaces — but a control hands its text back with a lone `\r` (measured: a WinUI `TextBox`
+    /// writes `\r` between its lines and no `\n` at all, so a save that wrote the text through
+    /// would leave a file the parser reads as one long line) and a file edited elsewhere may carry
+    /// `\r\n`.
+    internal static string Lines(string text) =>
+        text.Replace("\r\n", "\n").Replace('\r', '\n');
+
     /// Reads a script text. Every failure is a <see cref="ScriptFormatException"/> naming its
     /// line; the cross-field limits come from <see cref="ScriptJson.Validate"/> and name the
     /// command instead.
@@ -484,7 +495,7 @@ internal static class ScriptDsl
         RestartPolicy? restart = null;
         var rulesSeen = false;
 
-        var lines = text.Split('\n');
+        var lines = Lines(text).Split('\n');
         for (var index = 0; index < lines.Length; index++)
         {
             var number = index + 1;

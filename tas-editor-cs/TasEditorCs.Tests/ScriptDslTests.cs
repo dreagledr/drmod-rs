@@ -211,6 +211,32 @@ public class ScriptDslTests
     }
 
     [Fact]
+    public void Reads_lines_however_their_break_is_spelled()
+    {
+        // `\n` is the format's own separator, but a `.tas` file gets edited in more places than this
+        // editor — Windows writes `\r\n`, and a text box hands its text back with a lone `\r`
+        // (measured: not one `\n` in the whole text). The separator is not part of the format: a line
+        // break is a line break.
+        var canonical = ScriptDsl.Parse("! trig=ticks:0\n0 a:2\n10 x:1\n");
+
+        foreach (var separator in new[] { "\r\n", "\r" })
+        {
+            var document = ScriptDsl.Parse("! trig=ticks:0\n0 a:2\n10 x:1\n".Replace("\n", separator));
+
+            Assert.Equal(2, document.Commands.Count);
+            Assert.Equal(10u, document.Commands[1].T);
+            Assert.Equal(ScriptDsl.Write(canonical), ScriptDsl.Write(document));
+        }
+    }
+
+    [Theory]
+    [InlineData("a\rb", "a\nb")]
+    [InlineData("a\r\nb", "a\nb")]
+    [InlineData("a\nb", "a\nb")]
+    public void Puts_a_text_into_the_formats_own_separators(string asGiven, string expected) =>
+        Assert.Equal(expected, ScriptDsl.Lines(asGiven));
+
+    [Fact]
     public void Takes_a_bare_frame_as_a_marker_without_input()
     {
         var document = ScriptDsl.Parse("0 a:1\n30\n40 x:1\n");

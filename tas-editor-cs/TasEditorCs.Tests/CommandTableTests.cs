@@ -13,7 +13,7 @@ public class CommandTableTests
     [Fact]
     public void Lays_out_the_frame_the_four_stick_values_and_one_column_per_input()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
 
         Assert.Equal(CommandKeys.All.Length + 5, columns.Count);
         Assert.Equal(
@@ -25,7 +25,7 @@ public class CommandTableTests
     [Fact]
     public void Heads_every_input_column_with_the_token_the_script_text_uses()
     {
-        var inputs = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!.Skip(5).ToList();
+        var inputs = Grid(Script(240)).Columns!.Skip(5).ToList();
 
         // The header is the DSL's own spelling of that input, so the table doubles as the text
         // format's legend — short, but words are allowed (`esc`, `start` is not a key on PC).
@@ -36,7 +36,7 @@ public class CommandTableTests
     [Fact]
     public void Keeps_the_frame_number_pinned_and_the_grid_editable()
     {
-        var grid = Grid(new ScriptEntry("s1", "blade-run", 240));
+        var grid = Grid(Script(240));
 
         Assert.Equal(PinPosition.Left, grid.Columns![0].Pin);
         Assert.True(grid.Editable);
@@ -47,7 +47,7 @@ public class CommandTableTests
     [Fact]
     public void Leaves_the_frame_column_read_only_and_the_rest_editable()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
 
         Assert.True(columns[0].IsReadOnly);
         Assert.Null(columns[0].SetValue);
@@ -64,7 +64,7 @@ public class CommandTableTests
     [Fact]
     public void A_flag_edit_moves_only_its_own_bit()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
         var row = new CommandRow(7, 90, 0, 0.5, 0, 0);
 
         for (var bit = 0; bit < CommandKeys.All.Length; bit++)
@@ -83,7 +83,7 @@ public class CommandTableTests
     [Fact]
     public void A_stick_edit_replaces_only_its_own_column()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
         var row = new CommandRow(7, 90, 10, 0.5, 0.25, 0);
 
         var angled = (CommandRow)columns[1].SetValue!(row, "359.5")!;
@@ -98,7 +98,7 @@ public class CommandTableTests
     [Fact]
     public void A_stick_edit_clamps_the_value_and_keeps_the_old_one_when_it_cannot_be_read()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
         var row = new CommandRow(7, 90, 10, 0.5, 0.25, 0);
 
         Assert.Equal(360d, ((CommandRow)columns[1].SetValue!(row, "3600")!).LeftStickAngle);
@@ -113,7 +113,7 @@ public class CommandTableTests
     [Fact]
     public async Task A_committed_edit_lands_in_the_data_source()
     {
-        var script = new ScriptEntry("s1", "blade-run", 240);
+        var script = Script(240);
         var source = Source(script);
         var grid = Grid(script);
         var forward = IndexOf("forward");
@@ -134,7 +134,7 @@ public class CommandTableTests
     [Fact]
     public void The_stick_editor_is_a_text_box_pinned_to_the_row_and_showing_the_cell_format()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
 
         // Not a `NumberBox`: that one hosts its own text box at the stock 32 DIP minimum height, so it
         // overflowed the row (measured) — this is the control that does fit.
@@ -151,7 +151,7 @@ public class CommandTableTests
     [Fact]
     public void The_stick_editor_shows_the_typed_buffer_instead_of_reformatting_it()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
 
         // Each keystroke re-renders the editor; formatting the half-typed buffer would move the caret.
         var half = Assert.IsType<TextBoxElement>(columns[1].Editor!("12.", _ => { }));
@@ -161,7 +161,7 @@ public class CommandTableTests
     [Fact]
     public void The_flag_editor_is_a_check_box_without_the_stock_minimum_width()
     {
-        var columns = Grid(new ScriptEntry("s1", "blade-run", 240)).Columns!;
+        var columns = Grid(Script(240)).Columns!;
         var forward = IndexOf("forward");
 
         // A stock WinUI checkbox keeps a 120 DIP minimum width — four square cells' worth.
@@ -174,7 +174,7 @@ public class CommandTableTests
     [Fact]
     public void Puts_the_cell_and_header_body_in_its_own_templates()
     {
-        var grid = Grid(new ScriptEntry("s1", "blade-run", 240));
+        var grid = Grid(Script(240));
 
         Assert.NotNull(grid.CellTemplate);
         Assert.NotNull(grid.HeaderTemplate);
@@ -187,7 +187,7 @@ public class CommandTableTests
     [Fact]
     public void Expands_the_mock_script_to_exactly_one_row_per_frame()
     {
-        var rows = CommandRows.For(new ScriptEntry("s1", "blade-run", 120));
+        var rows = CommandRows.For(Script(120));
 
         Assert.Equal(120, rows.Count);
         Assert.Equal(Enumerable.Range(0, 120), rows.Select(row => row.Frame));
@@ -205,7 +205,7 @@ public class CommandTableTests
     [Fact]
     public void Opens_the_mock_script_on_its_first_run_phase()
     {
-        var first = CommandRows.For(new ScriptEntry("s1", "blade-run", 240))[0];
+        var first = CommandRows.For(Script(240))[0];
 
         // Phases[0] is the long run, so the table never opens on a blank first row.
         Assert.True(first.Holds(IndexOf("forward")));
@@ -222,6 +222,12 @@ public class CommandTableTests
         Assert.NotEqual(up, CommandTable.CellSurface(1, "Frame"));              // down a row
         Assert.Equal(up, CommandTable.CellSurface(2, "Frame"));                 // two down is the same parity
     }
+
+    /// A workspace entry for the table's own tests: the table reads a path — the mock's seed — and
+    /// a frame count — how many rows to generate. What the text says is not part of it, because the
+    /// rows are generated rather than parsed (`CommandRows`), so the two need not agree here.
+    static ScriptEntry Script(int frames) =>
+        new(@"C:\workspace\blade-run.tas", "blade-run", string.Empty, (uint)frames, null);
 
     static int IndexOf(string key) =>
         Array.FindIndex(CommandKeys.All, entry => entry.Key == key);

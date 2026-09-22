@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Microsoft.UI.Reactor.Core;
 
 namespace TasEditorCs.Tests;
@@ -7,10 +8,23 @@ namespace TasEditorCs.Tests;
 /// keeps this from failing over informational diagnostics.
 public class AccessibilityTests
 {
+    static readonly ScriptEntry Script =
+        new(@"C:\workspace\blade-run.tas", "blade-run", "! trig=ticks:0\n0 a\n", 1, null);
+
     [Fact]
     public void The_workspace_pane_has_no_unnamed_icon_only_button()
     {
-        var view = WorkspacePanel.View([new ScriptEntry("s1", "blade-run", 42)], "s1", _ => { });
+        var view = WorkspacePanel.View(new WorkspacePanelProps(
+            @"C:\workspace",
+            [Script],
+            ScriptBuffers.Empty,
+            Script.Path,
+            null,
+            _ => { },
+            () => { },
+            () => { },
+            () => { },
+            () => { }));
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
     }
@@ -18,7 +32,13 @@ public class AccessibilityTests
     [Fact]
     public void The_script_pane_has_no_unnamed_icon_only_button()
     {
-        var view = ScriptPanel.View(new ScriptEntry("s1", "blade-run", 42), string.Empty, _ => { });
+        var view = ScriptPanel.View(new ScriptPanelView(
+            Script,
+            Script.Text,
+            Dirty: false,
+            ScriptTextStatus.Of(Script.Text),
+            _ => { },
+            () => { }));
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
     }
@@ -32,6 +52,16 @@ public class AccessibilityTests
             ScriptTextEditorTests.RegionFor(ScriptTextStatus.Of("0 a\n")));
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_003");
+    }
+
+    [Fact]
+    public void The_delete_confirmation_names_its_buttons()
+    {
+        // A modal is the one surface a user cannot navigate around: the destructive answer has to
+        // reach a screen reader with its own label.
+        var dialog = Editor.Confirm(Script, unsaved: true, _ => { });
+
+        Assert.DoesNotContain(AccessibilityScanner.Scan(dialog), f => f.Id == "A11Y_001");
     }
 
     [Fact]
