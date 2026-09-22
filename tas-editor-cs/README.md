@@ -367,6 +367,76 @@ it only decides where the toggle starts; after a click the pinned value is the t
 run unconditionally: calling the hook inside the `??` that folds it into the choice is a hook-order
 violation, and `REACTOR_HOOKS_001` flags it (`mur check`).
 
+## Installing the mod
+
+The editor puts the mod into the game itself, so a user who wants to run a script never touches a
+launcher or an injector. The install is **two files copied into the game's root**, and the game loads
+them on its next start:
+
+```
+Metal Gear Rising REVENGEANCE\
+|-- METAL GEAR RISING REVENGEANCE.exe
+|-- d3d9.dll                   <- the ASI loader
+|-- plugins\
+     |-- drmod_rs_lib.asi      <- the mod itself
+```
+
+`drmod_rs_lib.asi` is the same DLL `drmod.exe` carries, renamed — the entry point is `DllMain` on
+process attach, so the loader does not care what the file is called. `d3d9.dll` is the Win32 build of
+[Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader), vendored in
+`../vendor/asi-loader/` with its license and the SHA512 of the release it came from.
+
+**Both files travel inside `TasEditorCs.exe`** as `EmbeddedResource`s, so the distribution is one
+file and there is nothing beside it to go missing. They are not committed: `build-mod.ps1` produces
+them (`cargo build --release` at the repo root, the DLL renamed, the loader copied from `vendor/`),
+and the csproj **fails the build** when they are absent — an editor whose Install button has nothing
+to install is a defect that only appears in front of the game.
+
+### What the pane says and does
+
+The install lives at the top of the workspace pane, above the script list: where the game is, what
+its folder already holds, and two buttons.
+
+| The pane shows | Means |
+|---|---|
+| the game folder, found or picked | `SteamLibrary` read Steam's own records |
+| `The mod is not installed.` / `… up to date.` / `A different build …` | the plugin on disk, compared **by bytes** with the one in this exe |
+| `No d3d9.dll … installing adds one.` | the folder has no loader |
+| `A different d3d9.dll is there (ReShade, an ENB, another mod). It will be kept …` | there is a loader, and it is not ours |
+
+The button's word follows the state — `Install`, `Reinstall`, `Update` — so a click over a folder
+that already holds the mod says what it will do. `Uninstall` is live only when there is really
+something of ours to take out, and it asks first in the same declarative `ContentDialog` the script
+delete uses.
+
+### ⚠️ Somebody else's `d3d9.dll`
+
+Almost every machine with a ReShade, an ENB or another ASI mod already has one, and it is not ours to
+replace. Any ASI loader loads this plugin, so the loader part of the install is only ever **added** —
+never overwritten, never removed unless it is byte-for-byte the one this build carries, and the
+message says which of the two it did.
+
+If the folder has a foreign `d3d9.dll` that is not a loader at all, the pane links the upstream
+release (`ModInstaller.LoaderUrl`) rather than assuming it works.
+
+### Why nothing is injected and nothing is started
+
+The editor does not launch the game, kill it, or write into its memory. The files are the whole
+install, and the message says the game has to be restarted; a running game keeps the old plugin until
+it is. That also means the install is reversible by hand, and the uninstall is the same two files in
+the other direction.
+
+### ⚠️ The pane is not a tab of its own
+
+It is content of the workspace pane (`WorkspacePanel` draws it above the list). Two tool windows in
+one column become *tabs*, and the docking host never reports a tab click back to the app: it hands the
+renderer `onSelectedIndexChanged: null` and does not subscribe to the `TabView`'s own
+`SelectionChanged`, while the renderer writes its default index on every render — so a selection
+there is lost on the next re-render by construction. One pane, one list of contents, nothing to lose.
+
+The install is content-sized and the script list is the child with `grow: 1`. ⚠️ Giving both a `grow`
+split the column in half, and the scripts got a short scroller for two lines of install.
+
 ## The run
 
 The controls region is the editor's one window onto the mod: `Save`, the four rules a run is
@@ -629,13 +699,15 @@ devtools payload, `-KeepCultures all|en-us,…` changes what locales stay.
 ### CI
 
 `pack.ps1` is what the release workflow calls — `.github/workflows/build.yml` runs it on a `v*` tag,
-in the same job that builds the mod, so one release carries both:
+in the same job that builds the mod, so one release carries all three archives:
 
 ```yaml
 - name: Build TAS editor (C#)
   shell: pwsh
   run: |
     .\tas-editor-cs\pack.ps1 `
+      -BuildMod `
+      -SkipCargo `
       -Build `
       -PublishDir .\tas-editor-cs\publish `
       -OutDir .\tas-editor-cs\out\tas-editor `
@@ -643,16 +715,22 @@ in the same job that builds the mod, so one release carries both:
       -ZipPath .\out\tas-editor-cs.zip
 ```
 
+`-BuildMod` stages the payload the editor embeds — without it the csproj refuses to build, by design.
+`-SkipCargo` keeps the mod from being compiled twice in one job: the root `build.ps1` has already
+produced the release DLL, and the payload is that same file, so `build-mod.ps1` copies it instead of
+running `cargo` again.
+
 `-Build` does the `dotnet publish` itself, so the workflow needs no .NET steps of its own —
 `windows-latest` ships the .NET 10 SDK and MSVC, which is what NativeAOT needs. `-ZipPath` puts the
-archive in the root `out/` next to the mod's, so `upload-artifact` and `action-gh-release` name one
-directory for both.
+archive in the root `out/` next to the mod's two, so `upload-artifact` and `action-gh-release` name
+one directory for all of them.
 
 ⚠️ **The editor is not uploaded to Yandex S3**, and that is deliberate: the mod's S3 step runs with
 `clear: true`, which `yandex-storage-website-action` implements as an unfiltered bucket wipe
 (`clearBucket()` takes no prefix — verified in the action's source). Adding a second upload would
 either delete the mod's files or leave a stale copy, so the editor ships through the GitHub Release
-and the workflow artifact only.
+and the workflow artifact only. The ASI archive goes the same way — it is a GitHub-only distribution
+alongside the launcher, not a website asset.
 
 ⚠️ `shell: pwsh` is **required** on the step: a `run:` on a Windows runner defaults to Windows
 PowerShell 5.1, which cannot read a UTF-8 script.

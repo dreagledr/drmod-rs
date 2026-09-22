@@ -43,6 +43,21 @@ sealed class Editor : Component
         var remembered = UseMemo(() => EditorSettings.Load(), []);
         var (folder, setFolder) = UseState<string?>(remembered.Folder ?? EditorSettings.FirstFolder());
 
+        // The mod's install: the game folder, and what the last look at it found. The folder is
+        // remembered (`EditorSettings`) because discovering it costs a registry read and a disk scan
+        // per library, and a user who pointed the editor at the game once should not do it again on
+        // every launch. `payload` is a ref because the bytes never change while the process lives —
+        // they are in this exe.
+        var (gameFolder, setGameFolder) = UseState<string?>(remembered.GameFolder);
+        var (mod, setMod) = UseState<ModView>(ModView.None);
+        var payloadRef = UseRef<(ModPayload? Payload, string? Error)?>(null);
+        var payload = payloadRef.Current ??= ModPayload.Read();
+        var (installing, setInstalling) = UseState(false);
+        var (modMessage, setModMessage) = UseState<string?>(null);
+        // The uninstall asks first, like every other destructive action in this editor: it is a
+        // dialog in the tree with `IsOpen` toggled (`ModUninstall`), not a `ShowAsync` from a handler.
+        var (removingMod, setRemovingMod) = UseState(false);
+
         // The rules a run is configured by. They are the mod's state for one run and not part of the
         // script — the text format says so itself (`docs/SCRIPT_DSL.md` §6) — so they live here and in
         // the settings file, and no `.tas` file is ever rewritten to hold them.
@@ -78,6 +93,21 @@ sealed class Editor : Component
         var headlessRun = UseRef<uint?>(null);
 
         UseEffect(() => () => api.Dispose(), Array.Empty<object>());
+
+        // The game folder is looked at once, on the first render and never again: the discovery reads
+        // the registry and walks Steam's libraries, and the answer only changes when the user picks a
+        // folder or presses Detect (both of which call `LookAt` themselves). The remembered folder is
+        // preferred over a fresh discovery — it is where the mod was installed last, and Steam's
+        // libraries can hold a stale entry for a copy the user has since moved.
+        UseEffect(() =>
+        {
+            var rememberedOrFound = remembered.GameFolder ?? SteamLibrary.GameFolder();
+            setGameFolder(rememberedOrFound);
+            LookAt(rememberedOrFound);
+
+            // No deps on purpose: this is a one-shot, not a reaction to anything. `LookAt` writes
+            // state, so making it a dependency would make it re-run on its own output.
+        }, Array.Empty<object>());
 
         // The status poll. ⚠️ Headless is armed only once the script is *really* `running`: the skip
         // hooks sit on the live device's draw calls, and putting them there while a level loads is what
@@ -191,14 +221,33 @@ sealed class Editor : Component
                 New: NewScript,
                 Duplicate: DuplicateScript,
                 Rename: AskToRename,
-                Delete: AskToDelete)),
+                Delete: AskToDelete,
+                // The mod's install rides in this pane's props and is painted above the script list
+                // (`WorkspacePanel`). It is not a pane of its own: the two would share one column as
+                // tabs, and the docking host does not report a tab click back to the app — it hands
+                // the renderer `onSelectedIndexChanged: null` and never subscribes to the `TabView`'s
+                // own `SelectionChanged`, so every re-render wrote its default index back and threw
+                // the user onto the first tab (`ModPanelTests`, specs of `DockTabGroupRenderer`).
+                // One pane, one list of contents, nothing to lose.
+                Mod: new ModPanelView(
+                    gameFolder,
+                    mod.State,
+                    mod.LoaderPresent,
+                    mod.LoaderOurs,
+                    mod.CanRemove,
+                    payload.Error,
+                    modMessage,
+                    installing || removingMod,
+                    ChooseGameFolder,
+                    InstallMod,
+                    AskToRemoveMod,
+                    DetectMod))),
         };
 
         // One command for the pane's Ctrl+S and the controls region's Save button: the shortcut is
         // registered around the regions (`ScriptPanel`), and what decides whether there is anything to
         // write back is this one `dirty`.
         var saveCommand = StandardCommand.Save(Save, dirty);
-
         var scriptPane = new Document
         {
             Title = selected?.Name ?? "No script",
@@ -231,11 +280,12 @@ sealed class Editor : Component
 
         var layout = new DockSplit(Orientation.Horizontal, new DockNode[]
         {
-            // The widths are **weights, not DIPs**: the host bootstraps a split's ratios from its
-            // children's hints only when every child carries one (`BootstrapRatios`), and normalizes
-            // them — so this is the shell's base ratio, one part of workspace to three of document.
-            // Once the author drags the splitter, their ratio is what the host keeps: these are the
-            // starting proportions, not a fixed size.
+            // The left column is one tool window: the workspace pane, which carries the mod's install
+            // and then the script list. The widths are **weights, not DIPs**: the host bootstraps a
+            // split's ratios from its children's hints only when every child carries one
+            // (`BootstrapRatios`), and normalizes them — so this is the shell's base ratio, one part
+            // of workspace to three of document. Once the author drags the splitter, their ratio is
+            // what the host keeps: these are the starting proportions, not a fixed size.
             new DockTabGroup(new DockableContent[] { workspacePane }, Width: WorkspaceWeight,
                 Role: DockGroupRole.General),
             new DockTabGroup(new DockableContent[] { scriptPane }, Width: ScriptWeight,
@@ -261,6 +311,7 @@ sealed class Editor : Component
                 pendingDelete,
                 pendingDelete is not null && ScriptBuffers.IsDirty(buffers, pendingDelete),
                 Deleted),
+            RemoveMod(removingMod, gameFolder, Removed),
             RenameScript(
                 pendingRename,
                 renameText,
@@ -284,12 +335,137 @@ sealed class Editor : Component
                 setFolder(picked.Path);
                 setSelectedPath(null);
                 setMessage(null);
-                EditorSettings.Save(new EditorSettingsData(picked.Path, rules, seedText));
+                EditorSettings.Save(new EditorSettingsData(picked.Path, rules, seedText, gameFolder));
             }
             catch (Exception failure)
             {
                 setMessage($"The folder picker failed: {failure.Message}");
             }
+        }
+
+        /// Looks at a game folder — the remembered one, or the one just picked — and records what is
+        /// in it. Every fact the pane paints is read here, once, rather than recomputed per render:
+        /// two of them are disk reads (`ModInstaller.Detect` hashes the plugin), and a render runs
+        /// for reasons of its own.
+        ///
+        /// A folder that is not the game is refused rather than recorded: `MOD` writes into it, and
+        /// a folder the user picked by mistake should not be the target of an Install click.
+        void LookAt(string? candidate)
+        {
+            if (candidate is null || payload.Payload is null)
+            {
+                setMod(ModView.None);
+                return;
+            }
+
+            if (!SteamLibrary.IsGameFolder(candidate))
+            {
+                setMod(ModView.None);
+                setModMessage($"That folder holds no {SteamLibrary.GameExeName}.");
+                return;
+            }
+
+            var (present, ours) = ModInstaller.Loader(candidate, payload.Payload);
+            setMod(new ModView
+            {
+                State = ModInstaller.Detect(candidate, payload.Payload),
+                LoaderPresent = present,
+                LoaderOurs = ours,
+                CanRemove = ModInstaller.CanRemove(candidate, payload.Payload),
+            });
+        }
+
+        /// Picks the game folder by hand, for a copy Steam does not know about (a second drive, a
+        /// portable install). Same mechanics as the workspace's picker — the handler calls it, and
+        /// the render never does.
+        async void ChooseGameFolder()
+        {
+            try
+            {
+                var picked = await pickFolder(new FolderPickerOptions());
+                if (picked is null) return;
+
+                setGameFolder(picked.Path);
+                setModMessage(null);
+                LookAt(picked.Path);
+                EditorSettings.Save(new EditorSettingsData(folder, rules, seedText, picked.Path));
+            }
+            catch (Exception failure)
+            {
+                setModMessage($"The folder picker failed: {failure.Message}");
+            }
+        }
+
+        /// Looks again: Steam's libraries, then the remembered folder. For the case the pane exists
+        /// for one half of — the game was installed or moved while the editor was open.
+        void DetectMod()
+        {
+            var found = SteamLibrary.GameFolder() ?? gameFolder;
+            setGameFolder(found);
+            setModMessage(null);
+            LookAt(found);
+
+            if (found is not null)
+            {
+                EditorSettings.Save(new EditorSettingsData(folder, rules, seedText, found));
+            }
+        }
+
+        /// Writes the mod into the game folder. Synchronous on the UI thread: two files of a few
+        /// megabytes into a folder on the same disk is a short write, and the alternative — a thread
+        /// and its marshalling — buys nothing a `Busy` flag and a `ProgressRing` cannot say.
+        ///
+        /// ⚠️ Nothing here starts, stops or touches the game. The files are the install, and the
+        /// message says so; a running game keeps the old plugin until it is restarted
+        /// (`LoadLibraryW` never calls `DllMain` twice — `docs/PITFALLS.md`).
+        void InstallMod()
+        {
+            if (payload.Payload is not { } bytes)
+            {
+                setModMessage(payload.Error);
+                return;
+            }
+
+            setInstalling(true);
+            try
+            {
+                var result = ModInstaller.Install(gameFolder, bytes);
+                setModMessage(result.Message);
+                if (result.Ok)
+                {
+                    LookAt(gameFolder);
+                }
+            }
+            finally
+            {
+                setInstalling(false);
+            }
+        }
+
+        /// Asks before taking the mod out. The question is a dialog in the tree (`ModUninstall`), like
+        /// the script delete: removing files from the game folder is not something to do on a stray
+        /// click.
+        void AskToRemoveMod()
+        {
+            if (mod.CanRemove) setRemovingMod(true);
+        }
+
+        /// The dialog's own answer. What is removed is decided by `ModInstaller.Remove` from the bytes
+        /// on disk, not from anything remembered — the folder can have changed since the last look.
+        void Removed(ContentDialogResult result)
+        {
+            setRemovingMod(false);
+            if (result != ContentDialogResult.Primary) return;
+
+            if (payload.Payload is not { } bytes)
+            {
+                setModMessage(payload.Error);
+                return;
+            }
+
+            var removal = ModInstaller.Remove(gameFolder, bytes);
+            setModMessage(removal.Message);
+            LookAt(gameFolder);
         }
 
         /// A new, empty file, selected as soon as the listing has read it. The selection is set in
@@ -391,7 +567,7 @@ sealed class Editor : Component
         void RulesChanged(PlaybackRules next)
         {
             setRules(next);
-            EditorSettings.Save(new EditorSettingsData(folder, next, seedText));
+            EditorSettings.Save(new EditorSettingsData(folder, next, seedText, gameFolder));
         }
 
         /// The seed field holds text until it reads as a number: the documented seeds are hex
@@ -404,7 +580,7 @@ sealed class Editor : Component
 
             var next = rules with { Seed = seed };
             setRules(next);
-            EditorSettings.Save(new EditorSettingsData(folder, next, typed));
+            EditorSettings.Save(new EditorSettingsData(folder, next, typed, gameFolder));
         }
 
         /// Starts the text on screen in the game.
@@ -525,6 +701,34 @@ sealed class Editor : Component
     const string WorkspacePaneKey = "tool:workspace";
     const string ScriptPaneKey = "doc:script";
 
+    /// What the last look at the game folder found: the state of the plugin, and the state of the
+    /// loader beside it. Two separate questions, because they have two separate answers — the plugin
+    /// does not need *our* loader, and a foreign `d3d9.dll` is a file to leave alone rather than a
+    /// reason to refuse the install (`ModInstaller`).
+    ///
+    /// A record so that an unchanged answer re-renders nothing, and so the shell has one value to
+    /// set instead of three setters to call in the right order. ⚠️ `None` is a shared instance, not
+    /// `new ModView()` at the `UseState` call — a fresh object every render is what `REACTOR_HOOKS_013`
+    /// flags, because the hook only reads its initial value once and the allocation per render is
+    /// pure waste.
+    internal sealed record ModView
+    {
+        internal static readonly ModView None = new();
+
+        /// No game folder to look in — the value of a fresh editor and of a folder that turned out
+        /// not to hold the game.
+        internal ModState State { get; init; } = ModState.NoGameFolder;
+
+        internal bool LoaderPresent { get; init; }
+
+        internal bool LoaderOurs { get; init; }
+
+        /// Whether the uninstall would have anything of ours to take out (`ModInstaller.CanRemove`).
+        /// Read here rather than asked in the render: it reads two files, and a render runs for reasons
+        /// of its own.
+        internal bool CanRemove { get; init; }
+    }
+
     /// The shell's base proportions, one part of workspace to three of document (see the split).
     const double WorkspaceWeight = 1;
     const double ScriptWeight = 3;
@@ -550,6 +754,26 @@ sealed class Editor : Component
             "Delete") with
         {
             IsOpen = script is not null,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            OnClosed = closed,
+        };
+
+    /// The uninstall confirmation, built like <see cref="Confirm"/> and for the same reason.
+    ///
+    /// It asks what is about to leave the game folder by name, and it is the same two files the
+    /// Install button writes — nothing else is touched, and a `d3d9.dll` that is not this build's
+    /// stays where it is (`ModInstaller.Remove`).
+    internal static Element RemoveMod(bool open, string? gameFolder, Action<ContentDialogResult> closed) =>
+        ContentDialog(
+            "Remove the mod?",
+            TextBlock(gameFolder is null
+                ? "Remove the mod from the game folder?"
+                : $"Remove plugins\\{ModPayload.AsiName} from {gameFolder}?"
+                  + " A d3d9.dll that another mod needs is left alone."),
+            "Remove") with
+        {
+            IsOpen = open,
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
             OnClosed = closed,

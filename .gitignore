@@ -9,6 +9,8 @@
 /tas-editor-cs/out
 /tas-editor-cs/dist
 /tas-editor-cs/*.zip
+# Mod payload the editor embeds: produced by tas-editor-cs/build-mod.ps1
+/tas-editor-cs/TasEditorCs/Mod/
 # JetBrains Rider: local IDE state, not project files
 /tas-editor-cs/.idea/
 /tas-editor-cs/*.DotSettings.user

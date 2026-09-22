@@ -25,7 +25,8 @@ public class AccessibilityTests
             () => { },
             () => { },
             () => { },
-            () => { }));
+            () => { },
+            ModPanelFixture.View()));
 
         Assert.DoesNotContain(AccessibilityScanner.Scan(view), f => f.Id == "A11Y_001");
     }

@@ -49,8 +49,10 @@ Deep dives and chronicles live in `docs/` and the tool READMEs — this file onl
 | script_gen: script fixtures for the editor, order of format changes | `tools/script_gen/README.md` |
 | script_tuning: tools, reference recipe | `tools/script_tuning/README.md` |
 | cutscene_skip mod: launcher, flags, status | `mods/cutscene_skip/README.md` |
+| The ASI distribution: loader provenance, both files Win32, why nothing is UPX-packed | `vendor/asi-loader/README.md` |
+| What the ASI archive tells an end user (ships as its `readme.txt`) | `docs/asi-readme.txt` |
 | TAS Editor: UI, packaging, Reactor gotchas | `tas-editor/README.md` |
-| TAS Editor (C#): local conventions, language, one-component-per-file, the on-disk workspace, script converter, the run controls (mod API client, run rules, pane ratios), PRI publish gotcha, packaging (`pack.ps1`, needs `pwsh`) | `tas-editor-cs/QWEN.md`, `tas-editor-cs/README.md` |
+| TAS Editor (C#): local conventions, language, one-component-per-file, the on-disk workspace, script converter, the run controls (mod API client, run rules, pane ratios), installing the mod into the game (embedded payload, Steam discovery, the `d3d9.dll` rule), PRI publish gotcha, packaging (`pack.ps1`, needs `pwsh`) | `tas-editor-cs/QWEN.md`, `tas-editor-cs/README.md` |
 
 ## Architecture
 
@@ -94,8 +96,9 @@ tools/
 mods/
 └── cutscene_skip/   # Standalone mod: in-engine cutscene skip (launcher + embedded DLL, no imgui); own [workspace]
 tas-editor/          # TAS Editor: desktop editor on WinUI 3 (windows-reactor), self-contained; own [workspace] and x64 config
-tas-editor-cs/       # TAS Editor in C#: WinUI 3 via Microsoft.UI.Reactor, self-contained + NativeAOT; own QWEN.md (English-only); pack.ps1 thins a publish into a zip (~222 → 75 MB)
+tas-editor-cs/       # TAS Editor in C#: WinUI 3 via Microsoft.UI.Reactor, self-contained + NativeAOT; own QWEN.md (English-only); installs the mod into the game (payload embedded under TasEditorCs/Mod/, staged by build-mod.ps1, not committed); pack.ps1 thins a publish into a zip (~222 → 75 MB)
 ref/                 # Git submodules — read-only reference projects
+vendor/              # Third-party binaries, checked in — asi-loader/ (Ultimate-ASI-Loader d3d9.dll + license + provenance)
 ```
 
 ## Memory Offsets
@@ -242,7 +245,9 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 ### CI
 
-`.github/workflows/build.yml` runs on a `v*` tag: `build.ps1` packages the mod, `tas-editor-cs/pack.ps1` packages the TAS editor, and both zips go to the workflow artifacts and the GitHub Release. ⚠️ The C# editor is **not** uploaded to Yandex S3 — the mod's S3 step uses `clear: true`, which that action implements as an unfiltered bucket wipe, so a second upload would delete the mod's files. `.github/workflows/deploy.yml` deploys the multiplayer server to the VPS on pushes to `main`.
+`.github/workflows/build.yml` runs on a `v*` tag: `build.ps1` packages the mod **both ways** — `out/drmod-rs.zip` (the self-injecting launcher) and `out/drmod-asi.zip` (the same DLL as `plugins/drmod_rs_lib.asi` plus the vendored ASI loader, which the TAS editor also embeds) — and `tas-editor-cs/pack.ps1 -BuildMod -SkipCargo` packages the editor. All three zips go to the workflow artifacts and the GitHub Release. ⚠️ The C# editor and the ASI archive are **not** uploaded to Yandex S3 — the mod's S3 step uses `clear: true`, which that action implements as an unfiltered bucket wipe, so a second upload would delete the mod's files. `.github/workflows/deploy.yml` deploys the multiplayer server to the VPS on pushes to `main`.
+
+The ASI form needs an ASI loader the game does not ship with: `vendor/asi-loader/` holds the Win32 build of [Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) with its MIT license and the SHA512 of the release it came from. ⚠️ Take the asset from the rolling `Win32-latest` tag (`d3d9-Win32.zip`) — the versioned release's only file is `dinput8.dll`, and both files must be Win32 (the game is a 32-bit process and silently never loads a 64-bit `d3d9.dll`). `vendor/asi-loader/README.md`.
 
 ## Development
 

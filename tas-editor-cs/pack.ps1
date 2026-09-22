@@ -27,6 +27,12 @@
     Publish Release (if -Build), pack into dist/, and drop the archive next to this script.
 
 .EXAMPLE
+    pwsh -File pack.ps1 -BuildMod -Build -Zip
+
+    Build the mod payload the editor embeds, publish Release, pack into dist/, and drop the
+    archive next to this script. This is the whole chain, and what a release is made of.
+
+.EXAMPLE
     pwsh -File pack.ps1 -OutDir .\out\tas-editor -ZipPath .\out\tas-editor-cs.zip
 
     What CI does: pack an already published tree into its own artifact directory.
@@ -51,6 +57,16 @@ param(
     # script quietly made for you.
     [switch]$Build,
 
+    # Build the mod payload the editor embeds (cargo + the vendored loader) before publishing.
+    # Without it the csproj fails on the missing payload, so this is only for a repack of an
+    # already-built tree.
+    [switch]$BuildMod,
+
+    # With -BuildMod, reuse what the last `cargo build --release` left in target/ instead of
+    # building the mod again. The release job runs the root `build.ps1` first, which already built
+    # it, so this is what keeps the same tree from being compiled twice in one run.
+    [switch]$SkipCargo,
+
     # Also produce the .zip.
     [switch]$Zip,
 
@@ -68,6 +84,27 @@ $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
 $project = Join-Path $scriptRoot 'TasEditorCs\TasEditorCs.csproj'
 if (-not $PublishDir) { $PublishDir = Join-Path $scriptRoot 'publish' }
 if (-not $OutDir) { $OutDir = Join-Path $scriptRoot 'dist' }
+
+if ($BuildMod) {
+    Write-Host "build-mod.ps1 - stage the embedded mod payload" -ForegroundColor Cyan
+    # -SkipCargo is forwarded only when asked for: the payload is the *same* DLL the ASI archive
+    # carries, and the release job builds it once in the root script before this one runs.
+    $modArgs = @{}
+    if ($SkipCargo) { $modArgs['SkipCargo'] = $true }
+
+    # ⚠️ Success is judged by the payload being there, not by `$LASTEXITCODE`. A dot-sourced script
+    # leaves that variable alone when it ends on a cmdlet (a `Copy-Item`), so the check read an empty
+    # value and failed a run that had just printed its own success — measured with `-SkipCargo`.
+    # `build-mod.ps1` throws on every way it can fail, and the csproj refuses to build without the
+    # files, so the files are the answer.
+    & (Join-Path $scriptRoot 'build-mod.ps1') @modArgs
+
+    foreach ($needed in @('Mod\drmod_rs_lib.asi', 'Mod\d3d9.dll')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $scriptRoot "TasEditorCs\$needed"))) {
+            throw "build-mod.ps1 left no $needed - see its output above."
+        }
+    }
+}
 
 if ($Build) {
     Write-Host "dotnet publish -c $Configuration -o $PublishDir" -ForegroundColor Cyan

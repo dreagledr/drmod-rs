@@ -3,11 +3,11 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 
-/// What the editor remembers between runs: the folder the workspace is on, and how a run is
-/// configured.
+/// What the editor remembers between runs: the folder the workspace is on, the folder the game is
+/// in, and how a run is configured.
 ///
 /// A file of its own rather than `UsePersisted` — that hook is a process-lifetime cache (spec 033
-/// §2), so it holds a value across a re-render but not across a restart, and both settings have to
+/// §2), so it holds a value across a re-render but not across a restart, and these settings have to
 /// survive one. `%LOCALAPPDATA%` is where the Rust sibling keeps its own things.
 ///
 /// The file is plain `key=value` lines, parsed by hand: there is nothing to serialize, so there is
@@ -21,12 +21,22 @@ using System.IO;
 /// The seed travels as the *text* the field held, not as a number: the documented seeds are hex
 /// (`0x55555555`, `docs/API.md` §3.10), and writing the parsed decimal would quietly turn the
 /// author's spelling into a different-looking one.
-internal sealed record EditorSettingsData(string? Folder, PlaybackRules Playback, string SeedText)
+///
+/// `GameFolder` is remembered separately from `Folder` and for a different reason: `Folder` is the
+/// workspace the author chose, `GameFolder` is where the mod gets installed. Neither implies the
+/// other — a script folder is not inside the game, and the game is often not the folder being
+/// worked on.
+internal sealed record EditorSettingsData(
+    string? Folder,
+    PlaybackRules Playback,
+    string SeedText,
+    string? GameFolder = null)
 {
     internal static readonly EditorSettingsData Empty = new(
         null,
         PlaybackRules.Default,
-        PlaybackRules.Default.Seed.ToString(CultureInfo.InvariantCulture));
+        PlaybackRules.Default.Seed.ToString(CultureInfo.InvariantCulture),
+        null);
 }
 
 internal static class EditorSettings
@@ -39,7 +49,8 @@ internal static class EditorSettings
 
     /// The keys the file holds. A line whose key is not one of these is not a settings line at all —
     /// which is how the old, single-line format is recognised (`Load`).
-    static readonly string[] Keys = ["folder", "dt", "cap", "cap_fps", "pin_seed", "seed", "headless"];
+    static readonly string[] Keys =
+        ["folder", "game_folder", "dt", "cap", "cap_fps", "pin_seed", "seed", "headless"];
 
     /// The folder the workspace opens on when nothing was ever picked: `examples` next to the exe,
     /// the scripts shipped in the distribution.
@@ -107,7 +118,8 @@ internal static class EditorSettings
                 PinSeed: Flag(values, "pin_seed", defaults.PinSeed),
                 Seed: PlaybackRules.TrySeed(seedText, out var seed) ? seed : defaults.Seed,
                 Headless: Flag(values, "headless", defaults.Headless)),
-            SeedText: seedText);
+            SeedText: seedText,
+            GameFolder: Text(values, "game_folder"));
     }
 
     /// Remembers the settings. A write that fails is not worth telling anyone about: it costs the
@@ -127,6 +139,7 @@ internal static class EditorSettings
             string[] lines =
             [
                 $"folder={settings.Folder ?? string.Empty}",
+                $"game_folder={settings.GameFolder ?? string.Empty}",
                 $"dt={(rules.FixedTick ? 1 : 0)}",
                 $"cap={Spelling(rules.Cap)}",
                 $"cap_fps={rules.CustomFps.ToString(CultureInfo.InvariantCulture)}",

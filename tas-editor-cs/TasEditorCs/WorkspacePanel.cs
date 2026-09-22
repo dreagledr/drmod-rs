@@ -16,7 +16,12 @@ sealed record WorkspacePanelProps(
     Action New,
     Action Duplicate,
     Action Rename,
-    Action Delete);
+    Action Delete,
+    // The mod's install, painted above the script list (`ModPanel.View`). It rides in this pane's
+    // props rather than in one of its own because the two would otherwise be tabs of one column —
+    // and the docking host does not report a tab click back, so the selection would be lost on every
+    // re-render (see the note at the layout in `Editor.cs`).
+    ModPanelView Mod);
 
 /// Left pane: the `.tas` files of the open folder, and the operations that manage them.
 ///
@@ -58,6 +63,7 @@ sealed class WorkspacePanel : Component<WorkspacePanelProps>
         );
 
         return (FlexColumn(
+            ModPanel.View(props.Mod),
             Heading("Scripts"),
             Folder(props),
             list.Flex(grow: 1, basis: 0),

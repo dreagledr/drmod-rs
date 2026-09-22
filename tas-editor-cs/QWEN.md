@@ -9,6 +9,38 @@ file disagrees with the root one, this file wins for everything under `tas-edito
 
 Commands, publish gotchas and measurements: `README.md` in this folder.
 
+## The mod
+
+- The editor **installs the mod into the game** from its own exe: `TasEditorCs\Mod\drmod_rs_lib.asi`
+  and `TasEditorCs\Mod\d3d9.dll` are `EmbeddedResource`s `ModPayload.Read()` pulls out by name. The
+  payload is generated, not committed (`.gitignore`), and `build-mod.ps1` is what produces it —
+  `cargo build --release` at the repo root, the DLL renamed to `.asi`, plus the vendored loader.
+- ⚠️ **The csproj fails the build when the payload is missing** (`_RequireModPayload`). Without it a
+  fresh clone builds a green exe whose Install button has nothing to install — a defect that only
+  shows up in front of the game, with the user watching.
+- `ModInstaller` is the whole of the install: `Detect` (is the plugin there, and is it *these*
+  bytes), `Loader` (is there a `d3d9.dll`, and is it ours), `CanRemove`, `Install`, `Remove`. It
+  never throws — every answer is an `InstallResult` with a line the pane paints.
+- ⚠️ **A `d3d9.dll` that is already there belongs to somebody else until proven otherwise.** Almost
+  every machine with a ReShade, an ENB or another ASI mod has one. It is only *added* when the folder
+  has none, and only *removed* when it is byte-for-byte ours; the plugin works with any ASI loader,
+  so neither direction needs to touch that file. Both directions say which of the two they did.
+- ⚠️ Writes go through a temporary beside the target and a move over it, and the order differs per
+  direction on purpose: install writes the loader first and the plugin last, removal deletes the
+  plugin first — so an interrupted run never leaves a plugin the game still tries to load.
+- `SteamLibrary` finds the game the way Steam records it: `HKCU\Software\Valve\Steam\SteamPath` plus
+  every `steamapps\libraryfolders.vdf` (both the modern object shape and the older numbered list),
+  confirmed by `METAL GEAR RISING REVENGEANCE.exe` being there. A folder the user picks is checked
+  the same way before anything is written into it. Nothing here throws either.
+- The pane is **content of the workspace pane**, not a pane of its own (`WorkspacePanel` draws it
+  above the list). ⚠️ Two tool windows in one column become *tabs*, and the docking host does not
+  report a tab click back to the app — it hands `DockTabGroupRenderer` `onSelectedIndexChanged: null`
+  and never subscribes to the `TabView`'s own `SelectionChanged`, while the renderer writes its
+  default index on every render. A selection there is lost on the next re-render by construction, so
+  there is one pane with one list of contents and nothing to lose.
+- The install is content-sized (`.Flex(shrink: 0)`) and the script list is the child with
+  `grow: 1`; giving both a `grow` split the column in half and left the scripts a short scroller.
+
 ## Language
 
 - **English only.** In-app text, code comments, XML doc comments, identifiers, file names, and this
@@ -74,15 +106,19 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
 
 ## Publishing
 
+- ⚠️ **Build the mod payload first**: `pwsh -File build-mod.ps1` (or `pack.ps1 -BuildMod`, which calls
+  it). The csproj refuses to build without it, so a publish of a tree that never ran it fails at the
+  first target rather than shipping an editor that cannot install anything.
 - `dotnet publish TasEditorCs/TasEditorCs.csproj -c Release -o publish` — self-contained +
   NativeAOT, gives a native x64 exe that runs from any folder.
-- `pwsh -File pack.ps1 -Build -Zip` turns that folder into the shippable zip (222 → 75 MB).
-  ⚠️ **Run it with `pwsh`**, not `powershell`: Windows PowerShell 5.1 reads `.ps1` as ANSI and
-  chokes on UTF-8 punctuation. What it drops and the measurements behind it — `README.md`
-  (*Packaging*).
+- `pwsh -File pack.ps1 -BuildMod -Build -Zip` is the whole chain: payload, publish, thin the tree into
+  the shippable zip (222 → 75 MB). ⚠️ **Run it with `pwsh`**, not `powershell`: Windows PowerShell 5.1
+  reads `.ps1` as ANSI and chokes on UTF-8 punctuation. What it drops and the measurements behind it —
+  `README.md` (*Packaging*).
 - CI calls the same script (`.github/workflows/build.yml`, a `v*` tag) and puts the zip in the
-  GitHub Release beside the mod's. ⚠️ The step needs `shell: pwsh`, and the editor does **not** go
-  to Yandex S3 — that step wipes the whole bucket. `README.md` (*CI*).
+  GitHub Release beside the mod's. ⚠️ The step needs `shell: pwsh` and `-BuildMod` (CI builds the mod
+  itself for the ASI archive, and the editor's payload comes from that same build), and the editor
+  does **not** go to Yandex S3 — that step wipes the whole bucket. `README.md` (*CI*).
 - `PublishAot` is **gated on Release on purpose**: set unconditionally (as the template does) it
   leaks `MetadataUpdater.IsSupported: false` into Debug builds and kills hot reload. Keep it gated.
 - ⚠️ The `_PublishAppPri` target in the csproj is load-bearing: `dotnet publish` does not copy the
@@ -192,6 +228,15 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in `../docs/SCRIPT_DSL.md`
   and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha there before trusting a
   property initializer to survive deserialization.
+- **The editor installs the mod** (`ModPanel.cs`, `ModInstaller.cs`, `SteamLibrary.cs`,
+  `ModPayload.cs`): the workspace pane carries, above the script list, where the game is, what is
+  already in its folder, and two buttons — `Install` / `Reinstall` / `Update` and `Uninstall`, each
+  live only when the click could do something, with the uninstall asking first in the same declarative
+  `ContentDialog` the script delete uses. The game folder is found through Steam's own records and
+  remembered in the settings file (`game_folder`), and one look at it (`LookAt`) reads every fact the
+  pane paints — so a render never touches the disk. Nothing here launches, kills or injects anything:
+  the files are the whole install and the message says the game has to be restarted. See *The mod*
+  above.
 - Next: the script controls region's remaining fields (`name=` in the rules line, the trigger and the
   restart policy, which are edited in the text today), and a close guard for unsaved buffers (today
   they live in the process's memory only — an explicit save is the whole of the save UX).

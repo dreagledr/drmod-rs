@@ -102,6 +102,18 @@
         </ItemGroup>
     </Target>
 
+    <!--
+        The mod payload: the installer writes these two files into the game, and the editor
+        carries them inside its own exe as embedded resources. Sources, and why they are not
+        committed, are in `build-mod.ps1`:
+          Mod\drmod_rs_lib.asi — the cargo release build of the mod, renamed;
+          Mod\d3d9.dll         — the vendored Ultimate-ASI-Loader (Win32).
+    -->
+    <ItemGroup>
+        <EmbeddedResource Include="Mod\drmod_rs_lib.asi" LogicalName="Mod.drmod_rs_lib.asi" />
+        <EmbeddedResource Include="Mod\d3d9.dll" LogicalName="Mod.d3d9.dll" />
+    </ItemGroup>
+
     <ItemGroup>
         <Content Include="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" />
         <!--
@@ -128,6 +140,20 @@
         -->
         <InternalsVisibleTo Include="TasEditorCs.Tests" />
     </ItemGroup>
+
+    <!--
+        The payload is not in version control, so a fresh clone has none and `dotnet build` would
+        otherwise succeed with an exe whose Install button cannot install anything — a defect that
+        only shows up in front of the game, with the user watching. Fail the build instead, naming
+        the command that fixes it.
+        Skipped for the test project's own builds? No: the resources live in this project, and a
+        test run builds it too, so the check has to hold there as well (`build-mod.ps1` stages the
+        payload once and both then use it).
+    -->
+    <Target Name="_RequireModPayload" BeforeTargets="BeforeBuild">
+        <Error Condition="!Exists('Mod\drmod_rs_lib.asi') OR !Exists('Mod\d3d9.dll')"
+               Text="The mod payload is missing (TasEditorCs\Mod\drmod_rs_lib.asi, d3d9.dll). Build it first: pwsh -File build-mod.ps1" />
+    </Target>
 
     <ItemGroup>
         <PackageReference Include="Microsoft.UI.Reactor" Version="0.1.0-preview.15" />

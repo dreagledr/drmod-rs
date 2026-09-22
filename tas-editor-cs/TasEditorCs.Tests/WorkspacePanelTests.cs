@@ -122,7 +122,7 @@ public class WorkspacePanelTests
         string? selected = BladeRunPath,
         Action<string>? select = null) =>
         Assert.IsType<TemplatedListViewElement<ScriptEntry>>(
-            Assert.IsType<FlexElement>(WorkspacePanel.View(Props(selected, select))).Children[2]);
+            Assert.IsType<FlexElement>(WorkspacePanel.View(Props(selected, select))).Children[3]);
 
     static FlexElement View(
         IReadOnlyList<ScriptEntry> scripts,
@@ -149,10 +149,14 @@ public class WorkspacePanelTests
     }
 
     static ButtonElement Action(FlexElement view, int index) =>
-        Assert.IsType<ButtonElement>(Assert.IsType<StackElement>(view.Children[3]).Children[index]);
+        Assert.IsType<ButtonElement>(Assert.IsType<StackElement>(view.Children[4]).Children[index]);
 
     /// The pane's own line under the buttons — what went wrong, or what the folder holds.
-    static string? Note(FlexElement view) => Text(view.Children[4]);
+    ///
+    /// ⚠️ The pane's children, in order: the mod's install (`ModPanel`), the "Scripts" heading, the
+    /// folder, the list, the buttons, this note. The install is why the indices here are one higher
+    /// than the pane's own contents count.
+    static string? Note(FlexElement view) => Text(view.Children[5]);
 
     static WorkspacePanelProps Props(
         string? selected,
@@ -172,7 +176,8 @@ public class WorkspacePanelTests
             () => { },
             () => { },
             rename ?? (() => { }),
-            () => { });
+            () => { },
+            ModPanelFixture.View());
 
     static string? Text(Element element) => Assert.IsType<TextBlockElement>(element).Content;
 }
