@@ -21,7 +21,18 @@ jobs:
         run: choco install upx -y
 
       - name: Build, compress, package
+        shell: pwsh
         run: .\build.ps1
+
+      - name: Build TAS editor (C#)
+        shell: pwsh
+        run: |
+          .\tas-editor-cs\pack.ps1 `
+            -Build `
+            -PublishDir .\tas-editor-cs\publish `
+            -OutDir .\tas-editor-cs\out\tas-editor `
+            -Zip `
+            -ZipPath .\out\tas-editor-cs.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
@@ -29,10 +40,18 @@ jobs:
           name: drmod-rs
           path: out/drmod-rs.zip
 
+      - name: Upload TAS editor artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: tas-editor-cs
+          path: out/tas-editor-cs.zip
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: out/drmod-rs.zip
+          files: |
+            out/drmod-rs.zip
+            out/tas-editor-cs.zip
 
   upload-s3:
     name: Upload to Yandex S3

@@ -24,9 +24,14 @@
 .EXAMPLE
     pwsh -File pack.ps1 -Build -Zip
 
-    Publish Release (if -Build), pack into publish-dist/, and drop the archive next to it.
+    Publish Release (if -Build), pack into dist/, and drop the archive next to this script.
+
+.EXAMPLE
+    pwsh -File pack.ps1 -OutDir .\out\tas-editor -ZipPath .\out\tas-editor-cs.zip
+
+    What CI does: pack an already published tree into its own artifact directory.
 #>
-#Requires -Version 5.1
+#Requires -Version 7.0
 [CmdletBinding()]
 param(
     # Where `dotnet publish` wrote the app. Recreated only when -Build is given.
@@ -46,8 +51,12 @@ param(
     # script quietly made for you.
     [switch]$Build,
 
-    # Also produce the .zip beside OutDir.
+    # Also produce the .zip.
     [switch]$Zip,
+
+    # Where the .zip goes when -Zip is given. Defaults to tas-editor-cs.zip next to this script;
+    # CI points it at its own artifact directory.
+    [string]$ZipPath,
 
     [string]$Configuration = 'Release'
 )
@@ -172,12 +181,16 @@ Write-Host ("  files: {0}, size: {1} MB" -f $files.Count, $sizeMb)
 Write-Host ("  locales: {0}" -f $(if ($copiedCultures.Count) { $copiedCultures -join ', ' } else { 'none' }))
 
 if ($Zip) {
-    $zipPath = Join-Path $scriptRoot 'tas-editor-cs.zip'
+    if (-not $ZipPath) { $ZipPath = Join-Path $scriptRoot 'tas-editor-cs.zip' }
+    $zipDir = Split-Path -Parent $ZipPath
+    if ($zipDir -and -not (Test-Path -LiteralPath $zipDir)) {
+        New-Item -ItemType Directory -Path $zipDir -Force | Out-Null
+    }
     $tempZip = Join-Path $env:TEMP ("tas-editor-cs-{0}.zip" -f [guid]::NewGuid().ToString('N'))
     Compress-Archive -Path (Join-Path $OutDir '*') -DestinationPath $tempZip -Force
-    Move-Item -LiteralPath $tempZip -Destination $zipPath -Force
-    $zipMb = [math]::Round((Get-Item -LiteralPath $zipPath).Length / 1MB, 1)
-    Write-Host ("  archive: {0} ({1} MB)" -f $zipPath, $zipMb)
+    Move-Item -LiteralPath $tempZip -Destination $ZipPath -Force
+    $zipMb = [math]::Round((Get-Item -LiteralPath $ZipPath).Length / 1MB, 1)
+    Write-Host ("  archive: {0} ({1} MB)" -f $ZipPath, $zipMb)
 }
 
 Write-Host ''

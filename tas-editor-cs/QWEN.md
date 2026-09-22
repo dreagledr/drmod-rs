@@ -80,6 +80,9 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   ⚠️ **Run it with `pwsh`**, not `powershell`: Windows PowerShell 5.1 reads `.ps1` as ANSI and
   chokes on UTF-8 punctuation. What it drops and the measurements behind it — `README.md`
   (*Packaging*).
+- CI calls the same script (`.github/workflows/build.yml`, a `v*` tag) and puts the zip in the
+  GitHub Release beside the mod's. ⚠️ The step needs `shell: pwsh`, and the editor does **not** go
+  to Yandex S3 — that step wipes the whole bucket. `README.md` (*CI*).
 - `PublishAot` is **gated on Release on purpose**: set unconditionally (as the template does) it
   leaks `MetadataUpdater.IsSupported: false` into Debug builds and kills hot reload. Keep it gated.
 - ⚠️ The `_PublishAppPri` target in the csproj is load-bearing: `dotnet publish` does not copy the

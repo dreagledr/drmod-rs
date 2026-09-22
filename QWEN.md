@@ -12,7 +12,7 @@ A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**
 - **dbdump (`tools/dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script)
 - **script_gen (`tools/script_gen/`)**: generates the JSON script fixtures for the editor's round-trip tests out of the shared DTOs (`replay-types::script`) and accepts the editor's own JSON back — `tools/script_gen/README.md`
 - **TAS Editor (`tas-editor/`)**: desktop TAS editor on WinUI 3 (`windows-reactor`, Rust, self-contained x64) — UI mock for now
-- **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT; two-pane shell over a real on-disk workspace (a picked folder of `.tas` files: new / duplicate / rename / delete, explicit save with Ctrl+S), a virtualized read-only command table that visualizes the text (one column per DSL token, read token by token so `ls:<angle>` and `lsx`/`lsy` stay as written), a `.tas` text region with a live parse and the format's command reference in a pane beside it (the docking host's own splitter), the script converter (API JSON ⇄ `.tas` text ⇄ table frames), and the **run controls**: the mod's HTTP API as a client (`/state` polled twice a second), the four run rules (fixed 1/60 tick, frame cap, frozen seed, headless) applied in the order a run needs, Run/Cancel, and the game window brought to the foreground so menu input lands. ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
+- **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT; two-pane shell over a real on-disk workspace (a picked folder of `.tas` files: new / duplicate / rename / delete, explicit save with Ctrl+S), a virtualized read-only command table that visualizes the text (one column per DSL token, read token by token so `ls:<angle>` and `lsx`/`lsy` stay as written), a `.tas` text region with a live parse and the format's command reference in a pane beside it (the docking host's own splitter), the script converter (API JSON ⇄ `.tas` text ⇄ table frames), and the **run controls**: the mod's HTTP API as a client (`/state` polled twice a second), the four run rules (fixed 1/60 tick, frame cap, frozen seed, headless) applied in the order a run needs, Run/Cancel, and the game window brought to the foreground so menu input lands. Packaged by its own `pack.ps1` (222 → 75 MB), published by CI on a `v*` tag alongside the mod. ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
 - **Mod `mods/cutscene_skip/`**: standalone crate — in-engine cutscene skip (launcher + embedded DLL, no imgui/networking)
 
 Features:
@@ -239,6 +239,10 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 - `test_connect.ps1` — multiplayer server (TCP connect/disconnect, dashboard)
 - `test_api.ps1` — HTTP API (health/state/script run+get+stop/logs, error paths, 20 parallel requests, optional `-Eject` final step that unloads the DLL); requires the game running with the mod injected
+
+### CI
+
+`.github/workflows/build.yml` runs on a `v*` tag: `build.ps1` packages the mod, `tas-editor-cs/pack.ps1` packages the TAS editor, and both zips go to the workflow artifacts and the GitHub Release. ⚠️ The C# editor is **not** uploaded to Yandex S3 — the mod's S3 step uses `clear: true`, which that action implements as an unfiltered bucket wipe, so a second upload would delete the mod's files. `.github/workflows/deploy.yml` deploys the multiplayer server to the VPS on pushes to `main`.
 
 ## Development
 

@@ -610,6 +610,37 @@ devtools payload, `-KeepCultures all|en-us,…` changes what locales stay.
 `resources.pri`; this project has no such file — the app PRI is `TasEditorCs.pri` and Reactor's is
 `Reactor.pri`. A check copied from the Rust script would fail on a healthy publish.
 
+### CI
+
+`pack.ps1` is what the release workflow calls — `.github/workflows/build.yml` runs it on a `v*` tag,
+in the same job that builds the mod, so one release carries both:
+
+```yaml
+- name: Build TAS editor (C#)
+  shell: pwsh
+  run: |
+    .\tas-editor-cs\pack.ps1 `
+      -Build `
+      -PublishDir .\tas-editor-cs\publish `
+      -OutDir .\tas-editor-cs\out\tas-editor `
+      -Zip `
+      -ZipPath .\out\tas-editor-cs.zip
+```
+
+`-Build` does the `dotnet publish` itself, so the workflow needs no .NET steps of its own —
+`windows-latest` ships the .NET 10 SDK and MSVC, which is what NativeAOT needs. `-ZipPath` puts the
+archive in the root `out/` next to the mod's, so `upload-artifact` and `action-gh-release` name one
+directory for both.
+
+⚠️ **The editor is not uploaded to Yandex S3**, and that is deliberate: the mod's S3 step runs with
+`clear: true`, which `yandex-storage-website-action` implements as an unfiltered bucket wipe
+(`clearBucket()` takes no prefix — verified in the action's source). Adding a second upload would
+either delete the mod's files or leave a stale copy, so the editor ships through the GitHub Release
+and the workflow artifact only.
+
+⚠️ `shell: pwsh` is **required** on the step: a `run:` on a Windows runner defaults to Windows
+PowerShell 5.1, which cannot read a UTF-8 script.
+
 ## Dev tooling
 
 `dotnet watch run` gives hot reload but no MCP endpoint; `mur devtools` is the launcher that does
