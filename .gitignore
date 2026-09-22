@@ -6,7 +6,8 @@
 /tas-editor-cs/**/bin
 /tas-editor-cs/**/obj
 /tas-editor-cs/**/publish
-/tas-editor-cs/**/dist
+/tas-editor-cs/dist
+/tas-editor-cs/*.zip
 # JetBrains Rider: local IDE state, not project files
 /tas-editor-cs/.idea/
 /tas-editor-cs/*.DotSettings.user

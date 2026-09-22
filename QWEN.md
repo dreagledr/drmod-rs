@@ -50,7 +50,7 @@ Deep dives and chronicles live in `docs/` and the tool READMEs — this file onl
 | script_tuning: tools, reference recipe | `tools/script_tuning/README.md` |
 | cutscene_skip mod: launcher, flags, status | `mods/cutscene_skip/README.md` |
 | TAS Editor: UI, packaging, Reactor gotchas | `tas-editor/README.md` |
-| TAS Editor (C#): local conventions, language, one-component-per-file, the on-disk workspace, script converter, the run controls (mod API client, run rules, pane ratios), PRI publish gotcha | `tas-editor-cs/QWEN.md`, `tas-editor-cs/README.md` |
+| TAS Editor (C#): local conventions, language, one-component-per-file, the on-disk workspace, script converter, the run controls (mod API client, run rules, pane ratios), PRI publish gotcha, packaging (`pack.ps1`, needs `pwsh`) | `tas-editor-cs/QWEN.md`, `tas-editor-cs/README.md` |
 
 ## Architecture
 
@@ -94,7 +94,7 @@ tools/
 mods/
 └── cutscene_skip/   # Standalone mod: in-engine cutscene skip (launcher + embedded DLL, no imgui); own [workspace]
 tas-editor/          # TAS Editor: desktop editor on WinUI 3 (windows-reactor), self-contained; own [workspace] and x64 config
-tas-editor-cs/       # TAS Editor in C#: WinUI 3 via Microsoft.UI.Reactor, self-contained + NativeAOT; own QWEN.md (English-only)
+tas-editor-cs/       # TAS Editor in C#: WinUI 3 via Microsoft.UI.Reactor, self-contained + NativeAOT; own QWEN.md (English-only); pack.ps1 thins a publish into a zip (~222 → 75 MB)
 ref/                 # Git submodules — read-only reference projects
 ```
 

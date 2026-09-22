@@ -24,6 +24,7 @@ are in `QWEN.md`.
 ```
 tas-editor-cs/
 ├── TasEditorCs.slnx        # solution: the app and its tests
+├── pack.ps1                # thins a publish into a shippable zip (see Packaging)
 ├── TasEditorCs/            # the app (WinUI 3, self-contained + NativeAOT)
 │   ├── App.cs              # entry point: ReactorApp.Run + docking registration
 │   ├── Editor.cs           # window shell: the split, the workspace, the selection, the run
@@ -550,18 +551,64 @@ dotnet publish TasEditorCs/TasEditorCs.csproj -c Release -o publish
 AOT block of the template — `PublishAot=true` + `InvariantGlobalization=true`, matching the Native
 AOT section of the Reactor packaging guide — plus `WindowsAppSDKSelfContained=true`.
 
-- the output is a **native** x64 exe (~9.6 MB): no `coreclr.dll`, `hostpolicy.dll`, `TasEditorCs.dll`
+- the output is a **native** x64 exe (~17 MB): no `coreclr.dll`, `hostpolicy.dll`, `TasEditorCs.dll`
   or `TasEditorCs.runtimeconfig.json` in the payload;
 - a private Windows App Runtime sits next to it, so no separate .NET runtime install is needed — run
   it from any folder, ship it as a zip;
-- the whole folder is ~181 MB / 297 files: Windows App SDK 2.5.1 pulls AI/ML pieces into the
-  self-contained runtime as well (`DirectML.dll`, `onnxruntime.dll`, `Microsoft.Windows.AI.*`,
-  SemanticSearch), and Reactor.Advanced adds Win2D. The payload is not thinned — the Rust version
-  does that in `tas-editor/pack.ps1`.
+- the whole published folder is ~222 MB / 297 files. Most of that is not the app: NativeAOT's
+  `.pdb` is ~88 MB, the Windows App SDK ships AI/ML pieces that a self-contained runtime carries
+  along (`DirectML.dll`, `onnxruntime.dll`, `Microsoft.Windows.AI.*`, Search/SemanticIndex,
+  Widgets, Workloads), and Reactor.Advanced adds Win2D. `pack.ps1` thins it down to ~75 MB — see
+  *Packaging* below.
 
 `PublishAot` is gated on `Configuration=Release`, not set unconditionally as the template does — see
 the hot reload gotcha below. The cost of the gate: the trim/AOT analyzers no longer run in the Debug
 dev loop, so they need a Release build before shipping.
+
+## Packaging
+
+The publish folder is a build artifact directory, not a distribution. `pack.ps1` turns it into one:
+
+```powershell
+pwsh -File pack.ps1 -Build -Zip     # publish Release, thin into dist/, zip it
+```
+
+⚠️ **`pwsh`, not `powershell`.** Windows PowerShell 5.1 reads `.ps1` files as ANSI, so a UTF-8
+script with an em dash in a comment dies with `Unexpected token` — `pwsh` reads them as UTF-8.
+
+**222 MB → 75 MB.** What is dropped, and why it is safe to drop:
+
+| Dropped | Size | Why |
+|---|---|---|
+| `*.pdb` | 88 MB | NativeAOT debug symbols; the runtime never reads them |
+| `onnxruntime.dll`, `DirectML.dll` | 38 MB | ML inference accelerators behind the Windows AI stack |
+| `Microsoft.Windows.AI.*` | 3.8 MB | the Windows AI APIs (Text, Imaging, Video, …) |
+| Search / SemanticIndex / PerceptiveStreaming | 8.8 MB | Search and semantic-index runtimes |
+| Widgets / Workloads | 3.1 MB | the Widgets and ML Workloads runtimes |
+| WebView2 (2 files) | 0.9 MB | needed only by apps that host a WebView2 |
+| `Microsoft.UI.Designer`, `NPUDetect` | 0.5 MB | XAML designer host; NPU capability probing |
+| locale folders except `en-us` | 3.3 MB | the UI is English-only |
+
+The exclusions were **measured, not guessed**: the running editor loads 117 of the publish folder's
+~150 binaries — `onnxruntime`, `DirectML` and every `Microsoft.Windows.*` AI/Search/Widgets binary
+were never loaded in 34 of the 54 checked cases. Each thinning pass was then launched and looked at,
+not just checked for a live process: the shell, the script list, the command table (29 DSL columns)
+and the script text all render from the packed folder.
+
+⚠️ **`AutoColumns<T>` would undo this** — it is reflection-based and the packaging guide flags it as
+the reason trim/AOT analyzers complain. The command table builds its columns by hand (`Column<T>`),
+so the reflection path stays out and the trimmer can drop what is unused.
+
+The script is idempotent, recreates `dist/` from scratch, and **fails with a non-zero exit code**
+when the publish folder has no exe or when a required core file did not survive — `TasEditorCs.exe`,
+`TasEditorCs.pri`, `Reactor.pri`, `Microsoft.WindowsAppRuntime.dll`, `Microsoft.UI.Xaml*.dll`,
+`CoreMessagingXP.dll`. Missing `TasEditorCs.pri` is exactly the `0xC000027B` failure documented
+below, so the check doubles as a truncated-publish detector. `-IncludeDevtools` keeps the Debug-only
+devtools payload, `-KeepCultures all|en-us,…` changes what locales stay.
+
+⚠️ **Check `TasEditorCs.pri`, not `resources.pri`.** The Rust sibling's `pack.ps1` requires
+`resources.pri`; this project has no such file — the app PRI is `TasEditorCs.pri` and Reactor's is
+`Reactor.pri`. A check copied from the Rust script would fail on a healthy publish.
 
 ## Dev tooling
 

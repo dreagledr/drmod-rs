@@ -76,6 +76,10 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
 
 - `dotnet publish TasEditorCs/TasEditorCs.csproj -c Release -o publish` — self-contained +
   NativeAOT, gives a native x64 exe that runs from any folder.
+- `pwsh -File pack.ps1 -Build -Zip` turns that folder into the shippable zip (222 → 75 MB).
+  ⚠️ **Run it with `pwsh`**, not `powershell`: Windows PowerShell 5.1 reads `.ps1` as ANSI and
+  chokes on UTF-8 punctuation. What it drops and the measurements behind it — `README.md`
+  (*Packaging*).
 - `PublishAot` is **gated on Release on purpose**: set unconditionally (as the template does) it
   leaks `MetadataUpdater.IsSupported: false` into Debug builds and kills hot reload. Keep it gated.
 - ⚠️ The `_PublishAppPri` target in the csproj is load-bearing: `dotnet publish` does not copy the
