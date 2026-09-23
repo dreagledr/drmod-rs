@@ -166,14 +166,19 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   text the parser refuses saves like any other. The text each script is being edited into is a buffer
   owned by the *shell*, because the list's unsaved markers, the text region and Save all read it; a
   buffer outlives the selection.
-- ⚠️ **Line separators are never strict, and that was a measured bug.** A `TextBox` reports its lines
-  with a lone `\r`, the file is `\n`, a file edited elsewhere may be `\r\n`. The buffer keeps what the
-  control reported (storing `\n` there would make the reconciler rewrite the text per keystroke and
-  move the caret), `ScriptDsl.Lines` is the one place that says what a line break is, `Workspace.Write`
-  writes the format's own separator and `Workspace.Read` normalises what it finds, while `IsDirty`
-  compares *readings*. Before that, the first save wrote the control's text through: 31 `\r` and no
-  `\n` in the file (one line to the parser, frames glued: `… y:6` + `22` → `y:622`) while the editor
-  showed the script as fine.
+- ⚠️ **Line separators are never strict, and that was a measured bug — twice.** A `TextBox` reports
+  its lines with a lone `\r`, the file is `\n`, a file edited elsewhere may be `\r\n`. The buffer keeps
+  what the control reported, `ScriptDsl.Lines` is the one place that says what a line break is,
+  `Workspace.Write` writes the format's own separator and `Workspace.Read` normalises what it finds,
+  while `IsDirty` compares *readings*. Before that, the first save wrote the control's text through:
+  31 `\r` and no `\n` in the file (one line to the parser, frames glued: `… y:6` + `22` → `y:622`)
+  while the editor showed the script as fine.
+  ⚠️ **`ScriptBuffers.Resolve` hands the file's text over in the control's own separator too**
+  (`Boxed`) — a script nobody has typed in yet has no buffer, and the file's `\n` is not what the
+  `TextBox` reports back: unequal, so the reconciler wrote `Text` on **every** render and every write
+  of `Text` drops the caret to the start. Polling `/state` twice a second was therefore a caret that
+  jumped to the top of the script twice a second (`… observed live, 2026-09-23`; the fix is what makes
+  *keeps what the control reported* true from the first render instead of from the first keystroke).
 - The command table is real and **read-only**: a `DataGrid` over the selected script's own `.tas` text
   (`CommandTable.cs`), one column per DSL token, 20 000-frame scripts included. It is a picture of the
   text region, not a second editor — editing lives in the text alone. `Script/ScriptFrameProjection.cs`
@@ -200,14 +205,19 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
 - **The script controls region runs a script** (`ScriptControls.cs`, `PlaybackRules.cs`, `Api/`,
   `GameWindow.cs`, `MenuSettler.cs`): Save, the four rules a run is configured by — fixed tick 1/60,
   frame cap (default / unlimited / custom), a frozen seed (decimal or `0x` hex) and headless —
-  `Run` / `Cancel`, and a line read from the mod's `/state` twice a second (menu · mission · fps ·
-  script frame · what the levers are actually set to). `Run` goes: a fresh `/state`, the game window
-  to the foreground, **the menu settled out of the way**, the rules, then `POST /script/run` with the
-  **text on screen** (not the file — Run is not a save); a `409` stops the script holding the mod's
-  slot and runs once more. ⚠️ The menu step is a port of the python tools' `ensure_gameplay` /
-  `recover_fail` (`MenuSettler`): a pause menu is toggled shut by a three-frame `pause` script and a
-  fail menu by one `confirm` — mod scripts rather than keystrokes, because the pause menu does not
-  tick the input unit and reads script frames through the `isKeyDown`/`isKeyPressed` detours. A game
+  `Run` / `Apply` / `Cancel`, and a line read from the mod's `/state` twice a second (menu · mission ·
+  fps · script frame · what the levers are actually set to). `Run` goes: a fresh `/state`, the game
+  window to the foreground, **the menu settled out of the way**, the rules, then `POST /script/run`
+  with the **text on screen** (not the file — Run is not a save); a `409` stops the script holding the
+  mod's slot and runs once more. **`Apply` sends the same three lever posts and nothing else** — no
+  script, no window focus, no menu settle. An extreme rule (`1 fps`, a lifted cap) is what makes a run
+  cheap and the mod keeps it after the run ends, so setting it deliberately — before a run, or between
+  them — is worth its own button rather than being reachable only as a side effect of Run; it asks for
+  nothing but the game answering, where `Run` also needs the mod's one script slot free. ⚠️ The menu
+  step is a port of the python tools' `ensure_gameplay` / `recover_fail` (`MenuSettler`): a pause menu
+  is toggled shut by a three-frame `pause` script and a fail menu by one `confirm` — mod scripts rather
+  than keystrokes, because the pause menu does not tick the input unit and reads script frames through
+  the `isKeyDown`/`isKeyPressed` detours. A game
   already playing is left untouched, and any other menu (front end, a mission still loading) is
   **refused by name** rather than guessed at with a blind confirm. ⚠️ The two rules that were
   measured, not chosen: the seed is applied **last** of the three levers (the mod freezes the LCG on

@@ -30,6 +30,29 @@ public class ScriptControlsTests
     }
 
     [Fact]
+    public void Apply_sets_the_rules_without_needing_a_free_script_slot()
+    {
+        // The levers are the mod's own state, not a run: an extreme rule is worth setting on its own
+        // (and outlives the run), so Apply asks for nothing but the game answering.
+        Assert.True(Live(Apply(View())));
+        Assert.True(Live(Apply(View(game: Online(Running)))));
+
+        Assert.False(Live(Apply(View(game: GameStatus.Offline))));
+        Assert.False(Live(Apply(View(preparing: true))));
+    }
+
+    [Fact]
+    public void Apply_hands_its_click_to_the_shell()
+    {
+        var applied = 0;
+        var view = View(apply: () => applied++);
+
+        Apply(view).OnClick!();
+
+        Assert.Equal(1, applied);
+    }
+
+    [Fact]
     public void The_status_line_reads_the_game_not_the_rules()
     {
         Assert.Equal(
@@ -215,7 +238,8 @@ public class ScriptControlsTests
         Action<PlaybackRules>? report = null,
         Action<string>? seedTyped = null,
         Action? run = null,
-        Action? cancel = null)
+        Action? cancel = null,
+        Action? apply = null)
     {
         var dirty = false;
         return new ScriptControlsView(
@@ -230,6 +254,7 @@ public class ScriptControlsTests
             seedTyped ?? (_ => { }),
             report ?? (_ => { }),
             run ?? (() => { }),
+            apply ?? (() => { }),
             cancel ?? (() => { }));
     }
 
@@ -274,8 +299,11 @@ public class ScriptControlsTests
     static ButtonElement Run(ScriptControlsView view) =>
         Assert.IsType<ButtonElement>(Buttons(view).Children[1]);
 
-    static ButtonElement Cancel(ScriptControlsView view) =>
+    static ButtonElement Apply(ScriptControlsView view) =>
         Assert.IsType<ButtonElement>(Buttons(view).Children[2]);
+
+    static ButtonElement Cancel(ScriptControlsView view) =>
+        Assert.IsType<ButtonElement>(Buttons(view).Children[3]);
 
     static string? Status(ScriptControlsView view) => Content(Region(view).Children[2]);
 

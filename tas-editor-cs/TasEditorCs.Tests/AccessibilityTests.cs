@@ -112,5 +112,6 @@ public class AccessibilityTests
         _ => { },
         _ => { },
         () => { },
+        () => { },
         () => { });
 }

@@ -12,7 +12,20 @@ public class ScriptBuffersTests
 
     [Fact]
     public void Shows_the_files_own_text_until_something_is_typed() =>
-        Assert.Equal(BladeRun.Text, ScriptBuffers.Resolve(ScriptBuffers.Empty, BladeRun));
+        Assert.Equal(BladeRun.Text, ScriptDsl.Lines(ScriptBuffers.Resolve(ScriptBuffers.Empty, BladeRun)));
+
+    [Fact]
+    public void A_script_nobody_typed_in_is_shown_as_the_control_would_hold_it()
+    {
+        // The file carries `\n`, the text box reports `\r`, and the reconciler compares the two:
+        // handed the file's own separator it writes the text back on every render, and every write
+        // of `Text` drops the caret to the start. Polling the game twice a second is therefore a
+        // caret that jumps to the top of the script twice a second (`View` leaves `buffers` empty
+        // until the author types).
+        Assert.Equal(BladeRun.Text.Replace("\n", "\r"), ScriptBuffers.Resolve(ScriptBuffers.Empty, BladeRun));
+        Assert.Equal("", ScriptBuffers.Boxed(""));
+        Assert.Equal("0 a\r1 b\r", ScriptBuffers.Boxed("0 a\n1 b\n"));
+    }
 
     [Fact]
     public void Prefers_what_was_typed_for_that_script()
@@ -28,7 +41,7 @@ public class ScriptBuffersTests
     {
         var buffers = ScriptBuffers.Typed(ScriptBuffers.Empty, BladeRun, "0 a\n");
 
-        Assert.Equal(BarrierFlight.Text, ScriptBuffers.Resolve(buffers, BarrierFlight));
+        Assert.Equal(BarrierFlight.Text, ScriptDsl.Lines(ScriptBuffers.Resolve(buffers, BarrierFlight)));
         Assert.False(ScriptBuffers.IsDirty(buffers, BarrierFlight));
     }
 
@@ -118,7 +131,7 @@ public class ScriptBuffersTests
         Assert.Equal(typed, ScriptBuffers.Resolve(moved, renamed));
         // Still unsaved, and the old path holds nothing: after the rename the workspace has one file.
         Assert.True(ScriptBuffers.IsDirty(moved, renamed));
-        Assert.Equal(BladeRun.Text, ScriptBuffers.Resolve(moved, BladeRun));
+        Assert.Equal(BladeRun.Text, ScriptDsl.Lines(ScriptBuffers.Resolve(moved, BladeRun)));
     }
 
     [Fact]

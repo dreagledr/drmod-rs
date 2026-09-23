@@ -19,8 +19,18 @@ internal static class ScriptBuffers
         new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// The text the editor shows for a script: what was typed, or the file's own text.
+    ///
+    /// A script nobody has typed in yet is shown in the separator a text box reports (`\r`, see
+    /// <see cref="ScriptDsl.Lines"/>), not the file's own `\n`. The two read the same, but the
+    /// control is what the reconciler compares against: handed a `\n` text it would write it back
+    /// on every render — and setting `Text` drops the caret to the start, which is a caret that
+    /// jumps every time the game is polled while the author is reading the script.
     internal static string Resolve(IReadOnlyDictionary<string, string> buffers, ScriptEntry script) =>
-        buffers.TryGetValue(script.Path, out var typed) ? typed : script.Text;
+        buffers.TryGetValue(script.Path, out var typed) ? typed : Boxed(script.Text);
+
+    /// A text as a text box holds it: one `\n`, one `\r`. The file's line separator put back is
+    /// <see cref="ScriptDsl.Lines"/>, and this is the same question asked the other way.
+    internal static string Boxed(string text) => text.Replace("\n", "\r");
 
     /// Whether the editor holds something a save would change. A save leaves the buffer where it
     /// is — the text box already holds it, and handing the file's text back would move the caret —

@@ -272,6 +272,7 @@ sealed class Editor : Component
                     SeedChanged,
                     RulesChanged,
                     Run,
+                    Apply,
                     Cancel),
                 // A keystroke can only come from the text region, which exists only while a script
                 // is selected, so the script is the selected one by construction.
@@ -695,6 +696,49 @@ sealed class Editor : Component
 
             var after = await api.StateAsync(CancellationToken.None);
             if (after.Value is { } snapshot) setGame(snapshot);
+        }
+
+        /// Sets the levers on the game without starting a script — the same three posts `Run` makes,
+        /// and nothing else.
+        ///
+        /// The point is the state, not a run: an extreme rule (`1 fps`, a lifted cap) is how a run is
+        /// made cheap, and the mod keeps it after the run ends, so setting it deliberately is worth
+        /// having on its own. No window focus and no menu settle either — those exist to deliver a
+        /// script's own restart, and nothing here plays a restart.
+        async void Apply()
+        {
+            if (!PlaybackRules.TrySeed(seedText, out var seed))
+            {
+                setRunError("The seed is not a number — decimal, or 0x-prefixed for hex");
+                return;
+            }
+
+            setRunError(null);
+            setPreparing(true);
+            try
+            {
+                if (await (rules with { Seed = seed }).ApplyAsync(api, CancellationToken.None) is { } lever)
+                {
+                    setRunError(lever);
+                    return;
+                }
+
+                var after = await api.StateAsync(CancellationToken.None);
+                if (after.Value is { } snapshot)
+                {
+                    setGame(snapshot);
+                }
+                else
+                {
+                    // The mod answered the posts but not the read: the levers landed, and saying so
+                    // beats painting a stale panel as if nothing had happened.
+                    setGame(GameStatus.Offline);
+                }
+            }
+            finally
+            {
+                setPreparing(false);
+            }
         }
     }
 

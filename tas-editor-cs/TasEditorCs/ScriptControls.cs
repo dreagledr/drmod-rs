@@ -26,6 +26,7 @@ internal sealed record ScriptControlsView(
     Action<string> SeedChanged,
     Action<PlaybackRules> RulesChanged,
     Action Run,
+    Action Apply,
     Action Cancel);
 
 /// The script controls region: Save, the run, the rules the run is configured by, and what the game
@@ -54,19 +55,28 @@ internal static class ScriptControls
         .FlexPadding(12)
         .Flex(grow: 1);
 
-    /// Save, Run, Cancel, and whether the text has been written back.
+    /// Save, Run, Apply, Cancel, and whether the text has been written back.
     ///
     /// Run is live only with something to run, the mod answering, and no run in flight — the mod holds
     /// one script slot and answers a second one `409`. Filling in the panel does not need a game, but
     /// running does, and a disabled button is a better answer than a click that can only fail. Cancel is
     /// live exactly while the mod says a script is active, whoever started it (a run from the python
     /// tools is a run this panel can stop).
+    ///
+    /// Apply sets the levers on their own, without a script: an extreme one (1 fps, a lifted cap) is
+    /// how a run is made cheap, and it also outlives the run — leaving the game in a state that a
+    /// later run would inherit anyway, so it is worth being able to set it deliberately, before or
+    /// between runs, rather than only as a side effect of Run. It needs the game answering and
+    /// nothing else.
     static Element Buttons(ScriptControlsView view) =>
         HStack(8,
             Button(view.SaveCommand),
             Button("Run", view.Run)
                 .AutomationName("Run this script in the game")
                 .IsEnabled(view.Game.Online && !view.Preparing && !view.Game.ScriptActive),
+            Button("Apply", view.Apply)
+                .AutomationName("Set the run rules on the game without starting a script")
+                .IsEnabled(view.Game.Online && !view.Preparing),
             Button("Cancel", view.Cancel)
                 .AutomationName("Stop the script the mod is running")
                 .IsEnabled(view.Game.ScriptActive),

@@ -133,6 +133,7 @@ public class ScriptPanelTests
             _ => { },
             _ => { },
             () => { },
+            () => { },
             () => { });
 
     static DockManager Host(ScriptPanelView view) =>
