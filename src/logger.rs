@@ -1,10 +1,39 @@
 //! Логгер в `%LOCALAPPDATA%\drmod\`: `debug.log` (построчно, с таймстампом)
 //! и буферизованный `state.log` (пачками, для per-frame состояния).
+//!
+//! В debug-сборке логи всегда включены. В release файловые логи молчат, пока
+//! не задана переменная окружения `DRMOD_LOG` (любое непустое значение) —
+//! конечному пользователю они не нужны, а диагностировать релиз всё равно
+//! иногда приходится.
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
 
 static LOG_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Включены ли файловые логи. Решается один раз при старте мода (`init_enabled`),
+/// дальше только читается.
+static LOG_ENABLED: AtomicBool = AtomicBool::new(cfg!(debug_assertions));
+
+/// Переменная окружения, включающая логи в release-сборке.
+const LOG_ENV: &str = "DRMOD_LOG";
+
+/// Включает логи в release, если задана `DRMOD_LOG` (debug всегда включён).
+/// Вызывается один раз при старте мода — до этого `log_line` молчит.
+pub(crate) fn init_enabled() {
+    if cfg!(debug_assertions) {
+        LOG_ENABLED.store(true, Ordering::Relaxed);
+        return;
+    }
+    let on = std::env::var_os(LOG_ENV).is_some_and(|v| !v.is_empty());
+    LOG_ENABLED.store(on, Ordering::Relaxed);
+}
+
+/// Пишутся ли логи сейчас. Нужен там, где строка собирается до вызова
+/// `log_line`/`log_state_line` — `format!` не должен работать впустую.
+pub(crate) fn enabled() -> bool {
+    LOG_ENABLED.load(Ordering::Relaxed)
+}
 
 /// Re-entrancy guard для `log_line`. Если сам `log_line` падает (chrono или
 /// файловый I/O при рестарте игры), VEH-обработчик вызовет `log_line` повторно
@@ -16,6 +45,9 @@ static LOG_REENTRY: AtomicBool = AtomicBool::new(false);
 /// Дописывает строку в `%LOCALAPPDATA%\drmod\debug.log` с таймстампом.
 /// Используется для отладки хука ввода (детур/override).
 pub(crate) fn log_line(line: &str) {
+    if !enabled() {
+        return;
+    }
     if LOG_REENTRY.swap(true, Ordering::SeqCst) {
         return;
     }
@@ -56,6 +88,9 @@ const STATE_LOG_FLUSH_EVERY: u32 = 60;
 /// Перезатирает `%LOCALAPPDATA%\drmod\state.log` при старте мода и очищает
 /// буфер — чтобы лог не рос между сессиями.
 pub(crate) fn init_state_log() {
+    if !enabled() {
+        return;
+    }
     let Ok(localappdata) = std::env::var("LOCALAPPDATA") else {
         return;
     };
@@ -80,6 +115,9 @@ pub(crate) fn init_state_log() {
 /// Дописывает строку состояния в буфер; флашится в `state.log` каждые
 /// `STATE_LOG_FLUSH_EVERY` строк.
 pub(crate) fn log_state_line(line: &str) {
+    if !enabled() {
+        return;
+    }
     if let Ok(mut buf) = STATE_LOG_BUF.lock() {
         buf.push(line.to_string());
     }

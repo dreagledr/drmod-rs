@@ -75,7 +75,7 @@ src/
 ├── settings.rs      # User settings (ghost opacity, show ghost toggle, cutscene skip toggle)
 ├── d3d_render.rs    # CylinderRenderer, SphereRenderer for 3D overlays
 ├── skeleton.rs      # Bone/skeleton data structures
-├── logger.rs        # Logging to %LOCALAPPDATA%\drmod\ (debug.log + buffered state.log)
+├── logger.rs        # Logging to %LOCALAPPDATA%\drmod\ (debug.log + buffered state.log); debug builds always on, release only under DRMOD_LOG
 ├── tas/             # TAS (tool-assisted speedrun) — input record/replay
 │   ├── addresses.rs #   Input memory addresses/constants
 │   ├── db.rs        #   Replay SQLite tables, column migration + bulk insert
@@ -293,6 +293,7 @@ The ASI form needs an ASI loader the game does not ship with: `vendor/asi-loader
 - **script_tuning** (`tools/script_tuning/`, python): core-script timings for the `P310_RESTART` barrier flight, run speedup (`/dt` + `/fps`), restart/menu/fail-recovery automation, cutscene skip — `tools/script_tuning/README.md`, `docs/SCRIPT_TUNING.md`, `docs/PITFALLS.md`.
 - **`mods/cutscene_skip/`** (standalone crate, not in the root workspace): cutscene-skip port without imgui/hudhook-dx9/API/networking — launcher `cutscene_skip.exe` + embedded DLL, per-frame entry point is a MinHook on `updateFrameTime` (`0xA03970`). `mods/cutscene_skip/README.md`.
 - **`tas-editor/`** (standalone crate: own `[workspace]`, `target/` and x64 `.cargo/config.toml` — the root forces i686, which WinUI 3 does not build for; lives at the repo root, not `tools/`): WinUI 3 via `windows-reactor` **0.100**, declarative, no XAML, **self-contained** via `windows-reactor-setup` in `build.rs`. `cargo run --release` to run, `pwsh -File pack.ps1 -Build -Zip` to ship (~56 MB, zip ≈20 MB). Status: UI mock; the on-disk workspace (`src/workspace.rs`) is not wired up. ⚠️ Self-contained gotchas (a truncated `.nupkg` = "green" build with no runtime) and Reactor rendering — `tas-editor/README.md`.
+- **File logs are gated** (`src/logger.rs`): `debug.log`/`state.log` in `%LOCALAPPDATA%\drmod\` are always written in debug builds; in release they stay silent unless `DRMOD_LOG` is set to a non-empty value (read once in `HelloHud::new` via `logger::init_enabled`, so end users get no log files). Every write path — `log_line`, `log_state_line`, `init_state_log` — checks `logger::enabled()` first.
 - User-facing errors use Windows `MessageBoxW`; the library is built as both `cdylib` (injection) and `rlib`.
 
 ### Reference Projects
