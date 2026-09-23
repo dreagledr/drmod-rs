@@ -12,8 +12,12 @@ using System.Text.Json.Serialization;
 /// either.
 internal static class ScriptJson
 {
-    /// Mirrors `MAX_SCRIPT_FRAMES` in `src/api.rs` — 60 s at 60 FPS.
-    internal const uint MaxFrames = 3600;
+    /// Mirrors `MAX_SCRIPT_FRAMES` in `replay-types/src/script.rs` — an upper
+    /// guard (~4.6 h at 60 FPS), not the practical limit: what really bounds a
+    /// script is the request body size, which is why the editor gzips it
+    /// (`ModApi`). Kept in step with the mod so a script the editor stores is
+    /// one the game would accept.
+    internal const uint MaxFrames = 1_000_000;
 
     /// Mirrors the mod's `name too long (max 64)` check.
     internal const int MaxNameLength = 64;

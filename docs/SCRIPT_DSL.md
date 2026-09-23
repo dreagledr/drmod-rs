@@ -171,11 +171,12 @@ rsy:<значение>[:<кадры>]
 ## 7. Валидация
 
 Тексты проверяются теми же лимитами, что и JSON (`API.md` §4.4): `commands` не
-пуст, `duration ≥ 1`, `t + duration ≤ 3600`, `name ≤ 64`, `input` не пуст,
+пуст, `duration ≥ 1`, `t + duration ≤ 1000000` (верхняя страховка — практический
+ограничитель размер тела запроса), `name ≤ 64`, `input` не пуст,
 `trigger` с `pos` или `ticks`, `camera`/`left_stick`/`trigger.pos` — нужное число
 чисел. Ошибка текста называет строку (`line 3: unknown token 'zz' — a pad button,
 a stick token or `by``), лимит — команду (`commands[4]: t+duration exceeds max
-3600`).
+1000000`).
 
 ## 8. Гарантии round trip (и чем они проверены)
 

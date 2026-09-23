@@ -36,6 +36,25 @@
     pwsh -File pack.ps1 -OutDir .\out\tas-editor -ZipPath .\out\tas-editor-cs.zip
 
     What CI does: pack an already published tree into its own artifact directory.
+
+.EXAMPLE
+    cd <repository root>
+    pwsh -File tas-editor-cs\pack.ps1 -BuildMod -Build `
+        -OutDir .\out\tas-editor -Zip -ZipPath .\out\tas-editor-cs.zip
+
+    One command for a release-ready editor carrying the **current** mod: build the mod payload
+    from source (`cargo build --release` at the repository root), publish the editor Release, trim
+    into `out/tas-editor`, and drop the archive at `out/tas-editor-cs.zip`.
+
+    ⚠️ No `-SkipCargo` on purpose - it reuses whatever the last `cargo build --release` left in
+    `target/`, which is only right when the root `build.ps1` has *just* built the mod in the same
+    run (the CI job does exactly that). For "give me a release with the current mod", let this
+    build it.
+
+    ⚠️ `-OutDir` and `-ZipPath` are taken as written and resolved against your **current
+    directory**, so run this from the repository root for `.\out` to mean the root's `out/`.
+    (Only the defaults - `publish`, `dist`, `tas-editor-cs.zip` - are built from the script's own
+    folder.)
 #>
 #Requires -Version 7.0
 [CmdletBinding()]

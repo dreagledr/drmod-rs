@@ -30,11 +30,13 @@ public class ScriptTextStatusTests
         // The cross-field limits are the mod's own (`ScriptJson.Validate`), so a text breaking
         // one is refused here rather than handed on to answer a 400. The frame the text ran up to
         // rides behind the message (`ScriptFormatException.FrameAware`), which is why this matches
-        // the start rather than the whole of it.
-        var status = ScriptTextStatus.Of("3500 a:200\n");
+        // the start rather than the whole of it. The ceiling is read from the constant: what the
+        // test is about is that the *check* is the mod's, not which number the cap happens to be.
+        var past = ScriptJson.MaxFrames;
+        var status = ScriptTextStatus.Of($"{past - 100} a:{200}\n");
 
         Assert.False(status.IsOk);
-        Assert.StartsWith("commands[0]: t+duration exceeds max 3600", status.Error);
+        Assert.StartsWith($"commands[0]: t+duration exceeds max {past}", status.Error);
     }
 
     [Theory]

@@ -451,6 +451,16 @@ workspace follows, and for the same reason: the only thing a click handler or a 
 a failure is paint it. `ApiResult<T>` spells the three ways a call can end: an answer, a refusal by
 the mod (with the mod's own wording, which already names the field it refused), and no answer at all.
 
+⚠️ **Every body goes out gzipped** (`Content-Encoding: gzip`, `ModApi.Gzipped`). The mod's body limit
+is 64 KiB but it is measured on the **compressed** bytes (`../docs/API.md` §6), so a script long
+enough to be worth storing is only accepted compressed: the ceiling on frames is an upper guard
+(~4.6 h), and what really bounds a script is the request size. The body is sent as bytes rather than
+as a string — `Content-Length` has to be the compressed length, and a `StringContent` would declare
+the readable one — and the header is what tells the mod to unpack it before reading JSON. The
+compression is unconditional: every body here is a small JSON object, and a branch deciding whether to
+compress would cost more than the bytes it saves. Requests with no body (`GET /state`, `/script/stop`)
+send none, so nothing else changes.
+
 `Api/ApiJson.cs` holds the shapes: the request bodies leave unset fields out (`WhenWritingNull`) and
 the responses **ignore** unknown keys — `/state` carries a player, a camera and a frame ring this
 panel has no use for, and a new field on the mod's side must not break the editor. Serialization goes
@@ -824,7 +834,10 @@ server does (`Connection: close`, `Content-Length`, JSON bodies) and asserts wha
 order — the four rules' request bodies byte for byte, a `409` arriving as its own kind of answer, a
 refused lever stopping the sequence before the seed, and nothing listening reading as *offline* rather
 than as a refusal. What those tests fake is the game, not the transport: a request that left with
-`frames` instead of `fps` would pass against a mock and fail against the game.
+`frames` instead of `fps` would pass against a mock and fail against the game. Both stubs read a body
+through `Content-Encoding` (`StubBodies.Inflate`), so the assertions stay about the script while the
+wire stays gzipped — and one test asserts the header itself, or the tests would pass on a client that
+never compressed anything.
 
 ```bash
 dotnet test TasEditorCs.slnx

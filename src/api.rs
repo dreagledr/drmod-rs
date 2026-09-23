@@ -41,8 +41,13 @@ const BIND_ADDR: &str = "127.0.0.1:5223";
 const RING_CAPACITY: usize = 3600;
 /// Окно расчёта живого FPS — за сколько последних миллисекунд буфера считаем.
 const FPS_WINDOW_MS: u64 = 500;
-/// Лимит тела запроса (защита от гигантских скриптов).
+/// Лимит тела запроса (защита от гигантских скриптов). Для сжатого тела
+/// (`Content-Encoding: gzip`) это лимит **сжатых** байт на проводе.
 const MAX_BODY_BYTES: u64 = 64 * 1024;
+/// Лимит **распакованного** тела: сжатое тело позволяет упаковать много в
+/// 64 КиБ, поэтому распаковка ограничена отдельно (защита от «zip-бомбы»,
+/// которая съела бы память 32-битного процесса игры).
+const MAX_INFLATED_BYTES: u64 = 8 * 1024 * 1024;
 /// Максимум кадров в ответе /logs.
 const MAX_LOG_LIMIT: usize = 5000;
 /// Таймаут чтения/записи на клиентском сокете: клиент, который не читает
@@ -1695,6 +1700,7 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>) {
     // Content-Length и Transfer-Encoding из заголовков.
     let mut content_length = 0usize;
     let mut chunked = false;
+    let mut gzipped = false;
     for line in lines {
         if let Some((name, value)) = line.split_once(':') {
             let name = name.trim();
@@ -1703,6 +1709,22 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>) {
                 content_length = value.parse().unwrap_or(0);
             } else if name.eq_ignore_ascii_case("transfer-encoding") {
                 chunked = !value.eq_ignore_ascii_case("identity");
+            } else if name.eq_ignore_ascii_case("content-encoding") {
+                // Поддерживается только gzip; `identity` — как отсутствие.
+                if value.eq_ignore_ascii_case("gzip") || value.eq_ignore_ascii_case("x-gzip") {
+                    gzipped = true;
+                } else if value.eq_ignore_ascii_case("identity") {
+                    gzipped = false;
+                } else {
+                    respond(
+                        &mut stream,
+                        415,
+                        &Response::Error(ErrorResponse {
+                            error: format!("unsupported content-encoding: {value}"),
+                        }),
+                    );
+                    return;
+                }
             }
         }
     }
@@ -1742,10 +1764,57 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>) {
             Err(_) => return,
         }
     }
-    let body = String::from_utf8_lossy(&body_bytes).into_owned();
+    let body = if gzipped {
+        match gunzip_limited(&body_bytes, MAX_INFLATED_BYTES as usize) {
+            Ok(inflated) => String::from_utf8_lossy(&inflated).into_owned(),
+            Err(err) => {
+                let code = if err == InflateError::TooLarge { 413 } else { 400 };
+                let message = if err == InflateError::TooLarge {
+                    "inflated body too large".to_string()
+                } else {
+                    format!("gzip: {err:?}")
+                };
+                respond(&mut stream, code, &Response::Error(ErrorResponse { error: message }));
+                return;
+            }
+        }
+    } else {
+        String::from_utf8_lossy(&body_bytes).into_owned()
+    };
 
     let (code, value) = route(&method, &target, &body, state);
     respond(&mut stream, code, &value);
+}
+
+/// Почему не удалось распаковать gzip-тело.
+#[derive(PartialEq, Debug)]
+enum InflateError {
+    /// Данные не gzip или повреждены.
+    BadData,
+    /// Распакованное тело превысило лимит (защита от «zip-бомбы»).
+    TooLarge,
+}
+
+/// Распаковывает gzip-тело, не позволяя ему вырасти выше `limit`.
+///
+/// Читает поток порциями и обрывается, как только распакованного стало больше
+/// лимита: `read_to_end` на «бомбе» съел бы всю память 32-битного процесса.
+fn gunzip_limited(data: &[u8], limit: usize) -> Result<Vec<u8>, InflateError> {
+    let mut decoder = flate2::read::GzDecoder::new(data);
+    let mut out = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = match decoder.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => return Err(InflateError::BadData),
+        };
+        if out.len() + n > limit {
+            return Err(InflateError::TooLarge);
+        }
+        out.extend_from_slice(&chunk[..n]);
+    }
+    Ok(out)
 }
 
 /// Маршрутизация по (метод, путь). Возвращает (код, JSON-тело ответа).
@@ -3141,4 +3210,68 @@ fn decode_buttons(down: u32) -> Vec<&'static str> {
         v.push("pause");
     }
     v
+}
+
+#[cfg(test)]
+mod gunzip_tests {
+    use super::*;
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+
+    fn gzip(data: &[u8]) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(data).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn round_trips_a_script_body() {
+        let body = br#"{"name":"probe","commands":[{"t":0,"duration":2,"input":{"jump":true}}]}"#;
+        let inflated = gunzip_limited(&gzip(body), MAX_INFLATED_BYTES as usize).unwrap();
+        assert_eq!(inflated, body);
+    }
+
+    #[test]
+    fn refuses_data_that_is_not_gzip() {
+        // Тело без gzip-заголовка: мод обязан ответить 400, а не паниковать.
+        assert_eq!(
+            gunzip_limited(b"not gzip at all", MAX_INFLATED_BYTES as usize),
+            Err(InflateError::BadData)
+        );
+    }
+
+    #[test]
+    fn stops_a_zip_bomb_at_the_limit() {
+        // 1 МиБ нулей сжимается в килобайты: без лимита распаковка съела бы
+        // память 32-битного процесса. Проверяем, что обрыв происходит на лимите.
+        let bomb = gzip(&vec![0u8; 1024 * 1024]);
+        assert!(bomb.len() < 4096, "бомба должна быть маленькой на проводе");
+        assert_eq!(
+            gunzip_limited(&bomb, 64 * 1024),
+            Err(InflateError::TooLarge)
+        );
+        // Тот же поток с достаточным лимитом распаковывается целиком.
+        assert_eq!(gunzip_limited(&bomb, 2 * 1024 * 1024).unwrap().len(), 1024 * 1024);
+    }
+
+    #[test]
+    fn accepts_an_empty_body() {
+        assert_eq!(gunzip_limited(&gzip(b""), 1024).unwrap(), Vec::<u8>::new());
+    }
+}
+
+#[cfg(test)]
+mod ring_tests {
+    use super::*;
+
+    /// Размер кадра буфера логов в памяти — цифра, на которую опираются
+    /// `tools/script_size` (память буфера = `LOG_FRAME_BYTES` × `RING_CAPACITY`)
+    /// и README тула. Поля `LogFrame` меняются, а цифру там забывают
+    /// переизмерить, поэтому она пришпилена тестом: падение здесь означает,
+    /// что `tools/script_size/README.md` и `measure.py::LOG_FRAME_BYTES`
+    /// нужно пересчитать.
+    #[test]
+    fn log_frame_stays_216_bytes() {
+        assert_eq!(std::mem::size_of::<LogFrame>(), 216);
+    }
 }

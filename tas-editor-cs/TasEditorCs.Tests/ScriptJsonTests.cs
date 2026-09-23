@@ -161,9 +161,21 @@ public class ScriptJsonTests
     [InlineData("""{ "commands": [ { "t": 0, "duration": 0, "input": { "jump": true } } ] }""")]
     [InlineData("""{ "trigger": {}, "commands": [ { "t": 0, "duration": 1, "input": { "jump": true } } ] }""")]
     [InlineData("""{ "commands": [ { "t": 0, "duration": 1, "input": { "camera": [1, 2, 3] } } ] }""")]
-    [InlineData("""{ "commands": [ { "t": 10, "duration": 3591, "input": { "jump": true } } ] }""")]
     public void Refuses_what_the_mod_would_answer_400_on(string json) =>
         Assert.Throws<ScriptFormatException>(() => ScriptJson.Read(json));
+
+    [Fact]
+    public void Refuses_a_script_past_the_frame_ceiling()
+    {
+        // Named separately from the theory above because the ceiling is a constant, and an
+        // `InlineData` is frozen at compile time — this way the test follows `ScriptJson.MaxFrames`
+        // instead of pinning the number it happened to be.
+        var json = $$"""
+            { "commands": [ { "t": 10, "duration": {{ScriptJson.MaxFrames}}, "input": { "jump": true } } ] }
+            """;
+
+        Assert.Throws<ScriptFormatException>(() => ScriptJson.Read(json));
+    }
 
     [Fact]
     public void Refuses_a_name_longer_than_the_mod_allows()

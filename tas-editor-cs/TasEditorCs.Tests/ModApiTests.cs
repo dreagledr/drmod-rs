@@ -168,6 +168,24 @@ public class ModApiTests
     }
 
     [Fact]
+    public async Task A_body_goes_out_gzipped()
+    {
+        // The mod's 64 KiB body limit is on the compressed bytes, so a long script is only accepted
+        // gzipped (`docs/API.md` §6) — and the header has to say so, or the mod reads the bytes as
+        // JSON and refuses them.
+        using var mod = new StubMod();
+        using var api = new ModApi(mod.Url);
+
+        await api.RunAsync("""{"name":"probe"}""", CancellationToken.None);
+
+        var sent = Assert.Single(mod.Requests);
+        Assert.Equal("gzip", sent.ContentEncoding);
+        // A body that says it is gzip really has to be one: the stub reads it back through the
+        // header, so a plaintext body would fail to unpack instead of passing silently.
+        Assert.Equal("""{"name":"probe"}""", sent.Body);
+    }
+
+    [Fact]
     public async Task The_rules_are_applied_in_the_order_a_run_needs_them()
     {
         // The tick and the cap first, the seed **last**: the mod freezes the LCG on the first tick of
@@ -238,7 +256,7 @@ public class ModApiTests
         readonly TcpListener _listener;
         readonly Thread _worker;
         readonly Dictionary<string, (int Code, string Body)> _answers = new(StringComparer.Ordinal);
-        readonly List<(string Method, string Path, string Body)> _requests = [];
+        readonly List<(string Method, string Path, string Body, string? ContentEncoding)> _requests = [];
         readonly Lock _lock = new();
         volatile bool _stopping;
 
@@ -255,7 +273,7 @@ public class ModApiTests
 
         internal string Url => $"http://127.0.0.1:{Port}";
 
-        internal IReadOnlyList<(string Method, string Path, string Body)> Requests
+        internal IReadOnlyList<(string Method, string Path, string Body, string? ContentEncoding)> Requests
         {
             get
             {
@@ -321,12 +339,18 @@ public class ModApiTests
             var path = request[1];
 
             var length = 0;
+            var gzipped = false;
             foreach (var line in lines[1..])
             {
                 var field = line.Split(':', 2);
-                if (field.Length == 2 && field[0].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                if (field.Length != 2) continue;
+                if (field[0].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                 {
                     length = int.Parse(field[1].Trim());
+                }
+                else if (field[0].Trim().Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase))
+                {
+                    gzipped = field[1].Trim().Equals("gzip", StringComparison.OrdinalIgnoreCase);
                 }
             }
 
@@ -338,8 +362,12 @@ public class ModApiTests
                 received.AddRange(chunk[..read]);
             }
 
-            var body = Encoding.UTF8.GetString(received.GetRange(start, length).ToArray());
-            lock (_lock) _requests.Add((method, path, body));
+            // The client gzips every body (`ModApi.Gzipped`); the stub reads the
+            // script back as text, so the assertions stay about the script rather
+            // than about the bytes on the wire.
+            var wire = received.GetRange(start, length).ToArray();
+            var body = Encoding.UTF8.GetString(gzipped ? StubBodies.Inflate(wire) : wire);
+            lock (_lock) _requests.Add((method, path, body, gzipped ? "gzip" : null));
 
             (int Code, string Body) answer;
             lock (_lock)

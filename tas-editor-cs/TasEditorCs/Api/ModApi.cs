@@ -1,7 +1,9 @@
 using System;
 using System.IO;
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -114,7 +116,7 @@ internal sealed class ModApi : IDisposable
                 request.Headers.ConnectionClose = true;
                 if (body is not null)
                 {
-                    request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+                    request.Content = Gzipped(body);
                 }
 
                 using var response = await _http.SendAsync(request, ct);
@@ -149,6 +151,31 @@ internal sealed class ModApi : IDisposable
     }
 
     public void Dispose() => _http.Dispose();
+
+    /// The request body, gzipped, as the mod reads it (`Content-Encoding: gzip`,
+    /// <see cref="Send"/>): a script that fits a long run is far past 64 KiB of
+    /// JSON — the mod's body limit is on the *compressed* bytes — while the same
+    /// script gzipped is a few tens of KiB (`docs/API.md` §6).
+    ///
+    /// ⚠️ The body is a byte array, not a string: `Content-Length` has to be the
+    /// compressed length, and a `StringContent` would declare the readable one.
+    /// Compression is unconditional — every body this client sends is a small JSON
+    /// object, so the branch that measured compressibility would cost more than
+    /// the bytes it saves.
+    static ByteArrayContent Gzipped(string body)
+    {
+        var plain = Encoding.UTF8.GetBytes(body);
+        using var buffer = new MemoryStream();
+        using (var gzip = new GZipStream(buffer, CompressionLevel.Optimal, leaveOpen: true))
+        {
+            gzip.Write(plain, 0, plain.Length);
+        }
+
+        var content = new ByteArrayContent(buffer.ToArray());
+        content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
+        content.Headers.ContentEncoding.Add("gzip");
+        return content;
+    }
 }
 
 /// How a call to the mod ended: an answer, a refusal, or no answer at all.

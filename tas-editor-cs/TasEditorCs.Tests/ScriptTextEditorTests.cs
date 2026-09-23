@@ -101,12 +101,13 @@ public class ScriptTextEditorTests
     public void Names_the_last_frame_of_the_text_when_the_limits_refuse_the_document()
     {
         // The cross-field limits (`ScriptJson.Validate`) refuse a document, not a line: the frame is
-        // the last one the whole text had — the command starting at 3600 is the one that is too long,
-        // and the text ran up to 3600.
-        var refused = ScriptTextStatus.Of($"! trig=ticks:0\n3500 a:1\n3600 x:2\n");
+        // the last one the whole text had — the command starting at the ceiling is the one that is
+        // too long, and the text ran up to the ceiling.
+        var past = ScriptJson.MaxFrames;
+        var refused = ScriptTextStatus.Of($"! trig=ticks:0\n{past - 100} a:1\n{past} x:2\n");
 
-        Assert.StartsWith("commands[1]: t+duration exceeds max 3600", refused.Error);
-        Assert.EndsWith("· up to frame 3600", refused.Error);
+        Assert.StartsWith($"commands[1]: t+duration exceeds max {past}", refused.Error);
+        Assert.EndsWith($"· up to frame {past}", refused.Error);
     }
 
     [Fact]

@@ -20,8 +20,9 @@ use serde::Serialize;
 
 use super::dump::{Frame, RunMeta};
 
-/// Лимит длительности скрипта в кадрах — как `MAX_SCRIPT_FRAMES` в src/api.rs.
-const MAX_SCRIPT_FRAMES: u32 = 3600;
+/// Потолок длительности скрипта — общая константа с модом, а не своя копия:
+/// иначе выгрузка записи и приём её модом разъезжались бы по лимиту.
+use drmod_replay_types::script::MAX_SCRIPT_FRAMES;
 
 /// Вход одной команды скрипта — подмножество полей `ScriptInput` из
 /// `src/api.rs`, восстанавливаемое из записи.
@@ -199,7 +200,7 @@ pub(crate) fn build_script(meta: &RunMeta, frames: &[Frame], pretty: bool) -> Re
         && last.t + last.duration > MAX_SCRIPT_FRAMES
     {
         return Err(format!(
-            "запись длиннее лимита скрипта ({} кадров > {}) — обрежьте или разбейте",
+            "запись длиннее потолка скрипта ({} кадров > {}) — обрежьте или разбейте",
             last.t + last.duration,
             MAX_SCRIPT_FRAMES
         ));
@@ -416,7 +417,7 @@ mod tests {
         };
         let frames = vec![
             frame(0, InputUnit::default(), 0),
-            frame(4000, unit(input_bits::FORWARD, [0.0, -1000.0]), 0),
+            frame(MAX_SCRIPT_FRAMES as i64 + 1, unit(input_bits::FORWARD, [0.0, -1000.0]), 0),
         ];
         assert!(build_script(&meta, &frames, false).is_err());
     }

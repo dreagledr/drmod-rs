@@ -584,6 +584,7 @@ dependencies = [
  "chrono",
  "drmod-protocol",
  "drmod-replay-types",
+ "flate2",
  "hudhook",
  "imgui",
  "rusqlite",

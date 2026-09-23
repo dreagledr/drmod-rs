@@ -248,12 +248,18 @@ public class MenuSettlerTests
             var path = request[1];
 
             var length = 0;
+            var gzipped = false;
             foreach (var line in lines[1..])
             {
                 var field = line.Split(':', 2);
-                if (field.Length == 2 && field[0].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                if (field.Length != 2) continue;
+                if (field[0].Trim().Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                 {
                     length = int.Parse(field[1].Trim());
+                }
+                else if (field[0].Trim().Equals("Content-Encoding", StringComparison.OrdinalIgnoreCase))
+                {
+                    gzipped = field[1].Trim().Equals("gzip", StringComparison.OrdinalIgnoreCase);
                 }
             }
 
@@ -265,7 +271,10 @@ public class MenuSettlerTests
                 received.AddRange(chunk[..read]);
             }
 
-            var body = Encoding.UTF8.GetString(received.GetRange(start, length).ToArray());
+            // The client gzips every body (`ModApi.Gzipped`); this stub matches the
+            // script's `name=` in it, so it reads the plaintext back.
+            var wire = received.GetRange(start, length).ToArray();
+            var body = Encoding.UTF8.GetString(gzipped ? StubBodies.Inflate(wire) : wire);
 
             int code;
             string payload;

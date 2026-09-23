@@ -16,6 +16,9 @@ rusqlite = { version = "0.40.1", features = ["bundled"] }
 chrono = "0.4.45"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Приём `Content-Encoding: gzip` в HTTP API. Чистый Rust (miniz_oxide) — без
+# C-сборки: DLL инжектируется в 32-битный процесс, лишняя C-зависимость не нужна.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 
 [dependencies.windows]
 version = "0.62.2"

@@ -313,7 +313,8 @@ public class ScriptDslTests
         // The cross-field limits are the mod's own (`parse_script`): the editor checks them on the
         // way in, so a text can never describe a script the game answers 400 on.
         Assert.Contains("commands is empty", Assert.Throws<ScriptFormatException>(() => ScriptDsl.Parse("# nothing\n")).Message);
-        Assert.Contains("commands[0]: t+duration exceeds max", Assert.Throws<ScriptFormatException>(() => ScriptDsl.Parse("3500 a:200\n")).Message);
+        var past = ScriptJson.MaxFrames;
+        Assert.Contains("commands[0]: t+duration exceeds max", Assert.Throws<ScriptFormatException>(() => ScriptDsl.Parse($"{past - 100} a:200\n")).Message);
     }
 
     [Fact]
