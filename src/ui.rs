@@ -3,7 +3,6 @@ use crate::game;
 use crate::net;
 #[cfg(debug_assertions)]
 use crate::overlay;
-use crate::render_hooks;
 use crate::segment;
 use crate::HelloHud;
 use imgui::*;
@@ -326,25 +325,5 @@ fn render_tas_controls(ui: &Ui, base_addr: usize) {
     }
     if fmode == 2 && ui.input_int("FPS", &mut fvalue).step(10).build() {
         api::set_fps_cap(base_addr, 2, fvalue.clamp(1, 1000) as u32);
-    }
-
-    // Headless-режим (`POST /render`): снять отрисовку, сохранив логику кадра
-    // (скрипты, трекинг, запись/воспроизведение). При снятом overlay окно
-    // Settings тоже скрывается — вернуть можно только извне, см. подсказку ниже.
-    let (skip_overlay, skip_present, skip_draw) = render_hooks::state();
-    let mut overlay = skip_overlay;
-    let mut present = skip_present;
-    let mut draw = skip_draw;
-    ui.checkbox("Headless: без overlay", &mut overlay);
-    ui.checkbox("Headless: без Present", &mut present);
-    ui.checkbox("Headless: без геометрии игры", &mut draw);
-    if overlay != skip_overlay || present != skip_present || draw != skip_draw {
-        render_hooks::set_skip(Some(overlay), Some(present), Some(draw));
-    }
-    if overlay {
-        ui.text_colored(
-            [1.0, 0.7, 0.3, 1.0],
-            "окна мода скрыты — вернуть: POST /render {\"reset\": true}",
-        );
     }
 }
