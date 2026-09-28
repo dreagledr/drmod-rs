@@ -1,0 +1,16 @@
+[package]
+name = "tas-editor-spike"
+version = "0.1.0"
+edition = "2024"
+description = "Spike: dear-imgui-rs + dear-imgui-cte for the TAS editor (20k-row table + code editor)"
+
+[dependencies]
+# dear-app re-exports the matching core crate as `dear_app::imgui`, so the UI types
+# come from there and cannot drift out of version with the runtime.
+dear-app = "0.18"
+dear-imgui-cte = "0.18"
+# Выбор папки со скриптами. По умолчанию включены оба бэкенда (native-rfd и imgui);
+# `open_blocking` работает только на нативном — на ImGui-бэкенде он вернёт `Unsupported`.
+dear-file-browser = "0.18"
+
+[workspace]
