@@ -3,6 +3,16 @@
 /mods/cutscene_skip/target
 /tas-editor/target
 /tas-editor/dist
+/tas-editor-rs/target
+# Раскладка докспейса редактора: рабочий файл ImGui, перезаписывается на каждом запуске
+/tas-editor-rs/spike-layout.ini
+/tas-editor-rs/tas-editor-layout.ini
+# Mod payload the editor installs: staged by the same steps as build-mod.ps1, not committed
+/tas-editor-rs/Mod/
+/tas-editor-rs/*.log
+# Спайк стека, из которого вырос редактор: после переезда там остался только
+# `target/flycheck0` — его держит rust-analyzer, папку можно удалить вручную
+/tas-editor-spike/target
 /tas-editor-cs/**/bin
 /tas-editor-cs/**/obj
 /tas-editor-cs/**/publish

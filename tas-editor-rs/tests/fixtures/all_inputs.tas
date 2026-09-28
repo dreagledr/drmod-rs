@@ -1,0 +1,42 @@
+! name=all-inputs trig=ticks:0 restart
+# Every input of the script format, one frame line per group, in the canonical order the writer
+# spells its tokens. The `#` comment marker is the DSL's own (`docs/SCRIPT_DSL.md` §1).
+0 a
+1 x
+2 y
+3 b
+4 lt
+5 rt
+6 lb
+7 rb
+8 r
+9 lr
+10 ax
+11 du
+12 dd
+13 dl
+14 cd
+15 wk
+16 esc
+17 ok
+18 mu
+19 md
+20 ml
+21 mr
+# One token can stand for two inputs, and a duration lights the whole run.
+22 by
+23 by:3
+# The left stick, in both of its forms: a compass angle, and exact axes.
+30 ls:0:10
+42 ls:90:5
+50 lsx:-1000:4
+56 lsy:-1000:4
+60 lsx:500:2 lsy:-500:2
+# The right stick is the camera, with its own magnitudes.
+70 rs:180:3
+75 rsx:800:5
+82 rsy:-1200:5
+# Durations on ordinary tokens, and two tokens on one frame.
+90 lt:10 x:4
+# A walk bit, which the game reads as a magnitude rather than a key.
+110 wk:20

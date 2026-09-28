@@ -1,0 +1,4 @@
+! name=r03-barrier-ticks trig=ticks:0
+0 ls:0:6
+6 ls:0:2 a:2
+20 ls:0:24 y:24

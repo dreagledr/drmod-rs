@@ -1,0 +1,12 @@
+! name=all-inputs
+0 lsx:1000 lsy:-1000 a x y
+1 lr:2 lt:2 rt:2 wk:2 ax:2 rb:2 lb:2 dd:2
+3 du:3 dl:3 cd:3 b:3 r:3 esc:3 ok:3
+6 rsx:300:4 mu:4 md:4 ml:4 mr:4
+10 a
+11 ls:0:2
+13 lsx:-500:6 lsy:-866:6 rt:6
+15 y:10
+25 ls:0:10
+35 ls:0:10
+45 ls:0:5

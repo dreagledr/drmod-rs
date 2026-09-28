@@ -1,0 +1,12 @@
+{
+  "name": "script",
+  "commands": [
+    {
+      "t": 0,
+      "duration": 1,
+      "input": {
+        "jump": true
+      }
+    }
+  ]
+}

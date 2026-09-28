@@ -1,0 +1,43 @@
+[package]
+name = "tas-editor-rs"
+version = "0.1.0"
+edition = "2024"
+description = "TAS editor for Metal Gear Rising: the C# editor's functionality on the dear-app + dear-imgui-cte stack"
+
+# ⚠️ The crate is `tas-editor-rs` and the binary is `tas-editor-rs.exe`. The library target keeps
+# the same name, so its Rust path is `tas_editor_rs`.
+[lib]
+name = "tas_editor_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tas-editor-rs"
+path = "src/main.rs"
+
+[dependencies]
+# dear-app re-exports the matching core crate as `dear_app::imgui`, so the UI types
+# come from there and cannot drift out of version with the runtime.
+dear-app = "0.18"
+dear-imgui-cte = "0.18"
+# Выбор папки со скриптами. По умолчанию включены оба бэкенда (native-rfd и imgui);
+# `open_blocking` работает только на нативном — на ImGui-бэкенде он вернёт `Unsupported`.
+dear-file-browser = "0.18"
+# The script JSON is the mod's own format (`replay-types/src/script.rs`), and the editor's
+# documents are the same shapes.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Every request body goes out gzipped: the mod's 64 KiB body limit is measured on the
+# *compressed* bytes, so a script long enough to be worth storing is only accepted that way.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+# The mod's HTTP API client — blocking, on a worker thread.
+ureq = "3"
+# The game's window (bringing it to the foreground) and Steam's own records of where the game is.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[workspace]

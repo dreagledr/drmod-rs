@@ -1,0 +1,2 @@
+! name=r01-beach-restart trig=pos:-24.7,12.15,120.7 restart:ups=2,downs=1,hold=8,open_gap=25,gap=12,confirms=3,confirm_gap=30,tail=20
+0 ls:0:40

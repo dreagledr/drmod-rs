@@ -1,0 +1,31 @@
+{
+  "name": "r03-barrier-ticks",
+  "trigger": {
+    "ticks": 0
+  },
+  "commands": [
+    {
+      "t": 0,
+      "duration": 6,
+      "input": {
+        "forward": true
+      }
+    },
+    {
+      "t": 6,
+      "duration": 2,
+      "input": {
+        "forward": true,
+        "jump": true
+      }
+    },
+    {
+      "t": 20,
+      "duration": 24,
+      "input": {
+        "forward": true,
+        "heavy_attack": true
+      }
+    }
+  ]
+}

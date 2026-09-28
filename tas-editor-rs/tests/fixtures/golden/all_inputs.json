@@ -1,0 +1,121 @@
+{
+  "name": "all-inputs",
+  "commands": [
+    {
+      "t": 0,
+      "duration": 1,
+      "input": {
+        "forward": true,
+        "backward": true,
+        "left": true,
+        "right": true,
+        "jump": true,
+        "light_attack": true,
+        "heavy_attack": true,
+        "left_stick": [
+          1000.0,
+          -1000.0
+        ]
+      }
+    },
+    {
+      "t": 1,
+      "duration": 2,
+      "input": {
+        "ripper": true,
+        "blade": true,
+        "ninja_run": true,
+        "walk": true,
+        "dodge": true,
+        "lock_on": true,
+        "subweapon": true,
+        "item": true
+      }
+    },
+    {
+      "t": 3,
+      "duration": 3,
+      "input": {
+        "ar_mode": true,
+        "weapon_select": true,
+        "codec": true,
+        "zandatsu": true,
+        "camera_reset": true,
+        "pause": true,
+        "confirm": true
+      }
+    },
+    {
+      "t": 6,
+      "duration": 4,
+      "input": {
+        "camera": [
+          300.0,
+          0.0
+        ],
+        "menu_up": true,
+        "menu_down": true,
+        "menu_left": true,
+        "menu_right": true
+      }
+    },
+    {
+      "t": 10,
+      "duration": 1,
+      "input": {
+        "jump": true
+      }
+    },
+    {
+      "t": 11,
+      "duration": 2,
+      "input": {
+        "forward": true,
+        "left_stick": [
+          0.0,
+          -1000.0
+        ]
+      }
+    },
+    {
+      "t": 13,
+      "duration": 6,
+      "input": {
+        "forward": true,
+        "ninja_run": true,
+        "left_stick": [
+          -500.0,
+          -866.0
+        ]
+      }
+    },
+    {
+      "t": 15,
+      "duration": 10,
+      "input": {
+        "heavy_attack": true
+      }
+    },
+    {
+      "t": 25,
+      "duration": 10,
+      "input": {
+        "forward": true
+      }
+    },
+    {
+      "t": 35,
+      "duration": 10,
+      "input": {
+        "forward": true
+      }
+    },
+    {
+      "t": 45,
+      "duration": 5,
+      "input": {
+        "forward": true
+      }
+    }
+  ]
+}
