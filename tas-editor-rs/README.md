@@ -53,6 +53,7 @@ tas-editor-rs/
 │       ├── payload.rs       #   the two files, embedded from OUT_DIR (build.rs staged them)
 │       └── installer.rs     #   detect / install / remove, by content
 ├── build.rs                 # builds the mod, verifies the loader's arch, stages the payload
+├── pack.ps1                 # assembles out\ + the zip for a release (needs pwsh)
 ├── examples/                # example `.tas` scripts, opened on a first launch (copies of tools/demo)
 └── tests/
     ├── golden.rs            # the C# editor's own fixtures: byte-identical JSON and text out
@@ -80,6 +81,33 @@ build for.
 
 `SPIKE_SECONDS=10 cargo run` stops the frame loop after ten seconds — the way the spike measured
 itself, kept because it makes the app runnable from a script.
+
+## Packaging
+
+```powershell
+pwsh -File pack.ps1 -Build -Zip                        # build, assemble, zip
+pwsh -File pack.ps1 -SkipCargo -Build `
+    -OutDir .\out\tas-editor-rs -ZipPath .\out\tas-editor-rs.zip   # what CI runs
+```
+
+The distribution is **three files**: the release exe and an `examples/` folder. There is nothing to
+trim, because the payload is inside the exe — which is the whole reason the zip is 11 MB of a 21 MB
+executable.
+
+⚠️ **`-SkipCargo` sets `TAS_EDITOR_SKIP_MOD_BUILD=1`** for the editor's build script. That skips the
+*nested mod build*, not the check for the mod: the DLL still has to exist, and the build fails naming
+it if none does. The release job runs the root `build.ps1` first, so the DLL is there and the mod is
+not compiled twice.
+
+⚠️ **The exe's size is checked, not trusted.** A build made with `TAS_EDITOR_SKIP_MOD_BUILD` and no
+mod DLL anywhere else would produce an editor that installs nothing — the one failure that reaches a
+user as "the mod is broken" rather than "the build was wrong". `pack.ps1` refuses anything under
+10 MB, and the build script refuses a missing DLL with a message naming it. Both were exercised:
+hiding the DLL makes `cargo build --release` stop with
+
+```
+mod payload: the mod is not built: ...drmod_rs_lib.dll does not exist, so there is nothing to embed.
+```
 
 ## The window shell
 
