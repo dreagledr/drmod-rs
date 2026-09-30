@@ -2,7 +2,7 @@ services:
   server:
     build:
       context: ..
-      dockerfile: server/Dockerfile
+      dockerfile: drmod-server/Dockerfile
     ports:
       - "5222:5222/tcp"
       - "5222:5222/udp"

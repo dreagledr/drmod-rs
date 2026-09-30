@@ -26,7 +26,7 @@ jobs:
           host: ${{ steps.lockbox.outputs.VPS_HOST }}
           username: ${{ steps.lockbox.outputs.VPS_USER }}
           key: ${{ steps.lockbox.outputs.VPS_SSH_KEY }}
-          source: "protocol/,server/,.dockerignore"
+          source: "drmod-protocol/,drmod-server/,.dockerignore"
           target: "~/drmod-rs"
           overwrite: true
           rm: true
@@ -44,25 +44,25 @@ jobs:
             cd ~/drmod-rs
 
             echo "=== Generating .env ==="
-            cat > server/.env << 'ENVEOF'
+            cat > drmod-server/.env << 'ENVEOF'
             PUBLIC_ADDR=${{ steps.lockbox.outputs.VPS_HOST }}:5222
             HTTP_PORT=8080
             ENVEOF
 
             echo "=== docker compose down (if running) ==="
-            docker compose -f server/docker-compose.yml down --remove-orphans || true
+            docker compose -f drmod-server/docker-compose.yml down --remove-orphans || true
 
             echo "=== docker compose up --build -d ==="
-            docker compose -f server/docker-compose.yml up --build -d
+            docker compose -f drmod-server/docker-compose.yml up --build -d
 
             echo "=== Waiting 30s for containers to start ==="
             sleep 30
 
             echo "=== docker compose ps ==="
-            docker compose -f server/docker-compose.yml ps
+            docker compose -f drmod-server/docker-compose.yml ps
 
             echo "=== docker compose logs --tail=20 ==="
-            docker compose -f server/docker-compose.yml logs --tail=20
+            docker compose -f drmod-server/docker-compose.yml logs --tail=20
 
             echo "=== docker image prune -f ==="
             docker image prune -f

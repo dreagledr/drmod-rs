@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace TasEditorCs.Tests;
 
 /// The API JSON of a script. The fixtures come from the Rust tool
-/// (`tools/script_gen`), which builds them from the mod's own DTOs — so what these
+/// (`drmod-script-gen`), which builds them from the mod's own DTOs — so what these
 /// tests really check is that the editor agrees with the mod about the format.
 public class ScriptJsonTests
 {

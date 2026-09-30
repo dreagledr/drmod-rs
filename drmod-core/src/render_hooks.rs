@@ -6,7 +6,7 @@
 //! «headless» здесь не отдельный процесс, а три независимых выключателя
 //! отрисовки, каждый из которых логику сохраняет:
 //!
-//! * `overlay` — мод не строит свой UI и не рисует 3D-маркеры (плюс hudhook не
+//! * `overlay` — мод не строит свой UI и не рисует 3D-маркеры (плюс drmod-hudhook не
 //!   отправляет геометрию imgui в устройство). Логика в `render` — вся;
 //! * `present` — не вызывается настоящий `Present`: кадр не блитится в окно,
 //!   окно держит последнее показанное изображение. Игра результат `Present` не
@@ -32,8 +32,8 @@ use std::mem::offset_of;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use hudhook::mh::{MH_ApplyQueued, MhHook};
-use hudhook::windows::Win32::Graphics::Direct3D9::IDirect3DDevice9_Vtbl;
+use drmod_hudhook::mh::{MH_ApplyQueued, MhHook};
+use drmod_hudhook::windows::Win32::Graphics::Direct3D9::IDirect3DDevice9_Vtbl;
 
 use crate::logger;
 
@@ -128,10 +128,10 @@ pub(crate) fn draw_hooked() -> bool {
     DRAW_HOOKED.load(Ordering::Relaxed)
 }
 
-/// Включён ли пропуск настоящего `Present` (флаг живёт в hudhook — он владеет
+/// Включён ли пропуск настоящего `Present` (флаг живёт в drmod-hudhook — он владеет
 /// хуком `Present`).
 pub(crate) fn skip_present() -> bool {
-    hudhook::skip_present()
+    drmod_hudhook::skip_present()
 }
 
 /// Снимок выключателей: `(overlay, present, draw)` — «пропускать отрисовку».
@@ -147,10 +147,10 @@ pub(crate) fn set_skip(overlay: Option<bool>, present: Option<bool>, draw: Optio
         SKIP_OVERLAY.store(v, Ordering::SeqCst);
         // Геометрию imgui тоже не отправляем: даже если UI почему-то собран,
         // в устройство он не пойдёт.
-        hudhook::set_skip_draw(v);
+        drmod_hudhook::set_skip_draw(v);
     }
     if let Some(v) = present {
-        hudhook::set_skip_present(v);
+        drmod_hudhook::set_skip_present(v);
     }
     if let Some(v) = draw {
         SKIP_DRAW.store(v, Ordering::SeqCst);

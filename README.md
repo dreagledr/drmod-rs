@@ -13,14 +13,14 @@
 
 | Проект | Назначение |
 |--------|------------|
-| [hudhook](https://github.com/veeenu/hudhook) | DirectX 9 hooking и инжекция DLL (вендоренный форк 0.9.0 — `vendor/hudhook`) |
+| [hudhook](https://github.com/veeenu/hudhook) | DirectX 9 hooking и инжекция DLL (вендоренный форк 0.9.0 — `drmod-hudhook`) |
 | [imgui-rs](https://github.com/imgui-rs/imgui-rs) | ImGui-биндинги для Rust (`imgui` 0.12) |
 | `rusqlite` (0.40, bundled) | SQLite: прогоны сегментов и record/replay |
 | `windows` (0.62), `windows-numerics` (0.3) | WinAPI (окна, D3D9, загрузка модулей) |
 | `chrono` | Таймстампы прогонов |
 | `serde` / `serde_json` | JSON протокола мультиплеера и HTTP API |
-| `drmod-protocol` (`protocol/`) | Общие типы TCP/UDP-протокола |
-| `drmod-replay-types` (`replay-types/`) | Общие replay-DTO (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) |
+| `drmod-protocol` (`drmod-protocol/`) | Общие типы TCP/UDP-протокола |
+| `drmod-replay-types` (`drmod-replay-types/`) | Общие replay-DTO (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) |
 
 ## Документация
 
@@ -64,3 +64,9 @@ cargo build --release
 ```
 
 Требуется Rust с таргетом `i686-pc-windows-msvc` (32-bit MSVC).
+
+Корень — воркспейс: код мода лежит в `drmod-core/`, общие крейты — в
+`drmod-protocol/` и `drmod-replay-types/`, сервер — в `drmod-server/`. Из
+корневой сборки исключены x64-крейты `drmod-dbdump/` и `drmod-script-gen/`
+(arrow-rs только 64-битный) — они собираются из своей директории, где лежит
+собственный `.cargo/config.toml`.

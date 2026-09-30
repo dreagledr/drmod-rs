@@ -19,8 +19,8 @@
 //!    what the two forms are allowed to differ in.
 //!
 //! ⚠️ The fixtures are a **copy, not a link**. When the C# side adds a fixture, copy it here; when a
-//! golden changes, both editors changed the format and both goldens change. `tools/script_gen`
-//! regenerates the inputs from the shared DTOs (`tools/script_gen/README.md`).
+//! golden changes, both editors changed the format and both goldens change. `drmod-script-gen`
+//! regenerates the inputs from the shared DTOs (`drmod-script-gen/README.md`).
 
 use tas_editor_rs::script::frames;
 use tas_editor_rs::script::{dsl, json, ScriptDocument};

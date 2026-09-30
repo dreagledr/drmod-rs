@@ -82,7 +82,7 @@ py -3 tools/disasm/disasm.py --rva 0x64F560 --len 0x100   # тик симуля�
 
 ## 2. Что сделано
 
-Три независимых выключателя (`src/render_hooks.rs`, ручка `POST /render`, те же
+Три независимых выключателя (`drmod-core/src/render_hooks.rs`, ручка `POST /render`, те же
 галочки в окне Settings). Все по умолчанию выключены — обычная работа мода не
 меняется. Боевой режим (`{"headless": true}`) использует два из них
 (`skip_overlay` + `skip_draw`) вместе со снятым капом; про `skip_present` — §5.

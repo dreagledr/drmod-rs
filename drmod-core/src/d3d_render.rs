@@ -1,6 +1,6 @@
 //! 3D rendering helpers — cylinder primitive via D3D9 fixed-function pipeline.
 
-use hudhook::IDirect3DDevice9;
+use drmod_hudhook::IDirect3DDevice9;
 use windows::Win32::Graphics::Direct3D9::*;
 use windows_numerics::Matrix4x4;
 

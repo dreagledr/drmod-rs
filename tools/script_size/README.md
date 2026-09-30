@@ -1,11 +1,11 @@
-# script_size — замер размера скриптов
+﻿# script_size — замер размера скриптов
 
 Считает, сколько байт занимает скрипт в трёх представлениях (JSON
 `POST /script/run`, текст `.tas`, таблица команд), как он сжимается и сколько
 памяти занимает кольцевой буфер логов.
 
-Код мода не трогается: лимиты и схемы берутся из `src/api.rs` и
-`replay-types/src/script.rs` (см. §«Откуда цифры»).
+Код мода не трогается: лимиты и схемы берутся из `drmod-core/src/api.rs` и
+`drmod-replay-types/src/script.rs` (см. §«Откуда цифры»).
 
 ## Запуск
 
@@ -33,7 +33,7 @@ python -m pip install zstandard brotli
 ## Приём gzip: сквозная проверка
 
 `check_gzip_e2e.py` поднимает локальный сервер, повторяющий путь чтения тела из
-`src/api.rs` (`Content-Length` + `Content-Encoding` → `gunzip_limited` → `parse_script`),
+`drmod-core/src/api.rs` (`Content-Length` + `Content-Encoding` → `gunzip_limited` → `parse_script`),
 и проверяет контракт транспорта на скрипте длиннее старого потолка:
 
 | Проверка | Ожидание |
@@ -67,7 +67,7 @@ python -m pip install zstandard brotli
 | `logs_3600.json` | **ответ `GET /logs`**, не скрипт: 3600 кадров кольцевого буфера по схеме `LogFrameJson` |
 | `logs_216000.json` | то же ×60 (60 запросов подряд) |
 
-`--file` принимает готовый `.json`/`.tas` (в т. ч. выгрузку `tools/dbdump
+`--file` принимает готовый `.json`/`.tas` (в т. ч. выгрузку `drmod-dbdump
 --script` или эталон из `tas-editor-cs/TasEditorCs.Tests/Fixtures/`) и считает
 уже его. С `--file` замер логов не делается.
 
@@ -105,15 +105,15 @@ python -m pip install zstandard brotli
 
 | Величина | Источник |
 |----------|----------|
-| `MAX_BODY_BYTES` = 65536 | `src/api.rs` (лимит тела `POST /script/run`) |
-| `RING_CAPACITY` = 3600 | `src/api.rs` (60 FPS × 60 с) |
-| `MAX_LOG_LIMIT` = 5000 | `src/api.rs` (максимум кадров в ответе `/logs`) |
-| `MAX_SCRIPT_FRAMES` = 1 000 000 | `replay-types/src/script.rs` (верхняя страховка; практический ограничитель — лимит тела) |
-| `LOG_FRAME_BYTES` = 216 | размер `LogFrame` в памяти, пришпилен тестом `api::ring_tests::log_frame_stays_216_bytes` в `src/api.rs`; падение теста = цифру здесь и в `measure.py` надо пересчитать |
-| схема кадра скрипта | `ScriptCommand` / `ScriptInput` (`replay-types/src/script.rs`), `deny_unknown_fields` + `skip_serializing_if` |
-| схема кадра лога | `LogFrameJson` / `InputJson` (`src/api.rs`); `decode_buttons` отдаёт не более 10 имён |
+| `MAX_BODY_BYTES` = 65536 | `drmod-core/src/api.rs` (лимит тела `POST /script/run`) |
+| `RING_CAPACITY` = 3600 | `drmod-core/src/api.rs` (60 FPS × 60 с) |
+| `MAX_LOG_LIMIT` = 5000 | `drmod-core/src/api.rs` (максимум кадров в ответе `/logs`) |
+| `MAX_SCRIPT_FRAMES` = 1 000 000 | `drmod-replay-types/src/script.rs` (верхняя страховка; практический ограничитель — лимит тела) |
+| `LOG_FRAME_BYTES` = 216 | размер `LogFrame` в памяти, пришпилен тестом `api::ring_tests::log_frame_stays_216_bytes` в `drmod-core/src/api.rs`; падение теста = цифру здесь и в `measure.py` надо пересчитать |
+| схема кадра скрипта | `ScriptCommand` / `ScriptInput` (`drmod-replay-types/src/script.rs`), `deny_unknown_fields` + `skip_serializing_if` |
+| схема кадра лога | `LogFrameJson` / `InputJson` (`drmod-core/src/api.rs`); `decode_buttons` отдаёт не более 10 имён |
 | синтаксис `.tas` | `docs/SCRIPT_DSL.md` §3–§5 (канонический `Write`) |
-| реальный порядок размеров команд | `tools/dbdump --script` на живой записи (`docs/SCRIPT_DSL.md` §9) |
+| реальный порядок размеров команд | `drmod-dbdump --script` на живой записи (`docs/SCRIPT_DSL.md` §9) |
 
 ## Оговорки
 
@@ -130,6 +130,6 @@ python -m pip install zstandard brotli
   проценты. «Сколько бы сжал лучший кодек» — флаг `--high-effort`.
 - Сжатие скрипта — не потолок выигрыша, а текущее поведение транспорта: мод
   принимает `Content-Encoding: gzip` и считает лимит тела по сжатым байтам
-  (`src/api.rs`), поэтому `gzip`-колонка отчёта — это то, что реально влезает
+  (`drmod-core/src/api.rs`), поэтому `gzip`-колонка отчёта — это то, что реально влезает
   в 64 КиБ. Ответы (`GET /logs`) мод не сжимает — там цифры остаются оценкой
   выигрыша.

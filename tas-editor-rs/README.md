@@ -326,7 +326,7 @@ parse to the same value; only one matches the goldens. Reading goes through `ser
 direction is the one where tolerance is right.
 
 ⚠️ The fixtures are a **copy, not a link**: when the C# side adds a fixture, copy it here; when a
-golden changes, both editors changed the format and both goldens change. `tools/script_gen`
+golden changes, both editors changed the format and both goldens change. `drmod-script-gen`
 regenerates the inputs from the shared DTOs.
 
 **`tests/playback_rules.rs` — the run-rule bodies** (`PlaybackRulesTests.cs`). Every body asserted

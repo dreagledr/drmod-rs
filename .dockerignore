@@ -1,6 +1,5 @@
 /target
 /out
-/src
 /vendor
 /mgr-plugin-sdk
 /MGR-RedTrainer
@@ -8,6 +7,20 @@
 /game
 /.git
 /.qwen
+/.github
 /*.CT
 /*.md
 /*.ps1
+
+# x64 tools and the editors are not part of the server image; excluding them
+# keeps the build context small. drmod-hudhook and drmod-core are x86-only
+# (DX9 hook, Windows), so the server build must not pull them in either.
+/drmod-dbdump
+/drmod-script-gen
+/drmod-hudhook
+/drmod-core
+/tas-editor
+/tas-editor-cs
+/tas-editor-rs
+/ref
+/docs

@@ -4,7 +4,7 @@
 //! (`json`) and the command table's frames (`projection`). Only the JSON carries the whole
 //! format — `raw_key`, `dik_key` and `when_enemy` have no text spelling and no table column.
 //!
-//! Field names, order and defaults mirror the mod's own DTO (`replay-types/src/script.rs`),
+//! Field names, order and defaults mirror the mod's own DTO (`drmod-replay-types/src/script.rs`),
 //! because that is what the editor hands to the game: a value the mod would refuse must be
 //! refused here first.
 

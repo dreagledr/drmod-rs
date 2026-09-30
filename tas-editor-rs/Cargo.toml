@@ -22,7 +22,7 @@ dear-imgui-cte = "0.18"
 # Выбор папки со скриптами. По умолчанию включены оба бэкенда (native-rfd и imgui);
 # `open_blocking` работает только на нативном — на ImGui-бэкенде он вернёт `Unsupported`.
 dear-file-browser = "0.18"
-# The script JSON is the mod's own format (`replay-types/src/script.rs`), and the editor's
+# The script JSON is the mod's own format (`drmod-replay-types/src/script.rs`), and the editor's
 # documents are the same shapes.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

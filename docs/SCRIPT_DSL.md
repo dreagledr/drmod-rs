@@ -1,4 +1,4 @@
-# DSL скриптов ввода (`.tas`)
+﻿# DSL скриптов ввода (`.tas`)
 
 Текстовый формат скрипта — того же самого, который принимает `POST /script/run`
 (§4 в [`API.md`](API.md)). Файл читается человеком и LLM, а конвертер редактора
@@ -184,15 +184,15 @@ a stick token or `by``), лимит — команду (`commands[4]: t+duration
 |----------|------|
 | DSL → документ → DSL — байт-в-байт (для канонического текста) | `ScriptGoldenTests`, `ScriptDslTests` |
 | JSON фикстуры → документ → JSON — fixed point | `ScriptJsonTests` |
-| JSON, записанный редактором, принимается **модом** и совпадает с фикстурой | Rust-тест `tools/script_gen/tests/expected_json_is_accepted.rs` |
+| JSON, записанный редактором, принимается **модом** и совпадает с фикстурой | Rust-тест `drmod-script-gen/tests/expected_json_is_accepted.rs` |
 | Текст и JSON — один и тот же скрипт: правила точно, кадры совпадают (кроме битов направлений, которые текст несёт стиком) | `ScriptGoldenTests` |
 | Кадры таблицы: `Expand(Collapse(Expand(doc))) == Expand(doc)` | `ScriptFramesTests` |
 | Команды с `raw_key`/`dik_key`/`when_enemy` в кадры не попадают (нет колонки) | `ScriptFramesTests` |
 
 ## 9. Инструменты
 
-- **Фикстуры.** Rust-тул `tools/script_gen` собирает JSON-фикстуры **из общих DTO**
-  (`replay-types/src/script.rs`) — тех же, которыми мод десериализует запрос:
+- **Фикстуры.** Rust-тул `drmod-script-gen` собирает JSON-фикстуры **из общих DTO**
+  (`drmod-replay-types/src/script.rs`) — тех же, которыми мод десериализует запрос:
 
   ```bash
   cargo run -p drmod-script-gen            # в tas-editor-cs/TasEditorCs.Tests/Fixtures

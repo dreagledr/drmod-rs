@@ -133,7 +133,7 @@ call 0x785190           ; enableRipperMode()
 - прямой вызов `enableRipperMode()` @ `0x785190` / `disableRipperMode(false)` @ `0x7D9590` (`__thiscall`) — но **без условий и анимаций** (мгновенно, без fade) — только fallback;
 - ✅ **хук `isKeybindPressed` (0x61D2D0)** для ripper + **хук `isKeybindDown` (0x61D280)** для blade — детур возвращает `1` для нужного keybind → `handleActions` запускает штатную цепочку (условия + анимации).
 
-**Реализация** (`src/tas/hooks.rs`): обобщённая keybind-эмуляция — `set_keybind_pressed(keybind, frames)` (фронт `isKeybindPressed`) + `set_keybind_hold(keybind, on)` (удержание `isKeybindDown`) для произвольных индексов. NumPad7 = фронт ripper, NumPad8 = toggle blade-удержания.
+**Реализация** (`drmod-core/src/tas/hooks.rs`): обобщённая keybind-эмуляция — `set_keybind_pressed(keybind, frames)` (фронт `isKeybindPressed`) + `set_keybind_hold(keybind, on)` (удержание `isKeybindDown`) для произвольных индексов. NumPad7 = фронт ripper, NumPad8 = toggle blade-удержания.
 
 ### Гейт входа в Blade Mode (дизасм + watch, 2026-09-13)
 

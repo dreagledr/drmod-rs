@@ -52,7 +52,7 @@ LOG_FRAME_BYTES = 216
 LOG_BUTTON_NAMES = 10
 
 # --- порядок полей и порядок команд ----------------------------------------
-# Порядок сериализации ScriptInput = порядок объявления в replay-types/src/script.rs
+# Порядок сериализации ScriptInput = порядок объявления в drmod-replay-types/src/script.rs
 # (serde печатает поля в порядке объявления), после него — left_stick.
 INPUT_FIELD_ORDER = [
     "forward", "backward", "left", "right", "jump", "light_attack", "heavy_attack",
@@ -800,7 +800,7 @@ def write_report(rows: list[dict], out_dir: Path, frames: list[int],
     lines.append("")
     lines.append("## Что мерить на живой записи")
     lines.append("")
-    lines.append("Порядок — `tools/dbdump/README.md` (`--script`): выгрузить "
+    lines.append("Порядок — `drmod-dbdump/README.md` (`--script`): выгрузить "
                  "записанный прогон в JSON и подать здесь же как `--file`, "
                  "чтобы получить реальный `bytes/кадр` (эталонные `.tas` "
                  "находятся в `tas-editor-cs/TasEditorCs.Tests/Fixtures/`).")

@@ -1,5 +1,5 @@
 use drmod_rs_lib::DEFAULT_TITLE;
-use hudhook::inject::Process;
+use drmod_hudhook::inject::Process;
 use std::env;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -57,7 +57,7 @@ fn main() {
         }
     };
 
-    // Своя загрузка вместо `Process::inject`: hudhook не проверяет код выхода
+    // Своя загрузка вместо `Process::inject`: drmod-hudhook не проверяет код выхода
     // удалённого `LoadLibraryW`, поэтому неудачная загрузка DLL выглядит как
     // «инжект прошёл, а мода нет». Здесь код выхода печатается (HMODULE или 0).
     match inject_and_check(process.handle(), &dll_path) {

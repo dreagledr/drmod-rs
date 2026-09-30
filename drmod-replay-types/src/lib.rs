@@ -1,6 +1,6 @@
 //! DTO-типы снапшотов игры (ввод/состояние/камера) и их байт-конвертация.
 //!
-//! Разделяются между модом (`src/tas`) и инструментами (`tools/dbdump`):
+//! Разделяются между модом (`drmod-core/src/tas`) и инструментами (`drmod-dbdump`):
 //! `#[repr(C)]`-layout этих структур — это on-disk формат BLOB в таблицах
 //! `replay_*_frames` (SQLite), поэтому определение живёт в одном месте, а
 //! запись (`to_bytes`) и чтение (`from_bytes`) используют его напрямую.
@@ -8,7 +8,7 @@
 use serde::Serialize;
 
 /// DTO скрипта ввода (`POST /script/run`) — общие для мода и инструментов:
-/// мод десериализует запрос, `tools/script_gen` генерирует фикстуры.
+/// мод десериализует запрос, `drmod-script-gen` генерирует фикстуры.
 pub mod script;
 
 /// Нормализованный ввод игрока (cInput::InputUnit).
@@ -38,8 +38,8 @@ pub struct InputUnit {
 }
 
 /// Кодировка игровых кодов клавиш в словах `m_aKeysDown`/`m_aKeysPressed`
-/// (`cInput::ms_KeyInput`). Единый источник истины для мода (`src/tas`) и
-/// инструментов (`tools/dbdump`).
+/// (`cInput::ms_KeyInput`). Единый источник истины для мода (`drmod-core/src/tas`) и
+/// инструментов (`drmod-dbdump`).
 pub mod key_codes {
     /// Индекс слова: `code >> 5` (6 слов = 256 кодов).
     pub fn index(code: u32) -> usize {
@@ -57,8 +57,8 @@ pub mod key_codes {
 
 /// Биты действий в `InputUnit.buttons_down`/`buttons_pressed` (эмпирически,
 /// подтверждено сопоставлением с сырыми клавишами/мышью в debug-логе).
-/// Общие для мода (`src/tas/addresses.rs` — re-export) и инструментов
-/// (`tools/dbdump` — декодирование записей в скрипты API).
+/// Общие для мода (`drmod-core/src/tas/addresses.rs` — re-export) и инструментов
+/// (`drmod-dbdump` — декодирование записей в скрипты API).
 pub mod input_bits {
     /// Прыжок (Space) — бит 0x10 (эмпирически, 2026-08-18: ручной прыжок даёт
     /// `cur_in down=00000010 pressed=00000010` + `space=true`, y поднимается;

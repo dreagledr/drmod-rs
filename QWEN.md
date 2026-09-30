@@ -5,12 +5,12 @@
 A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**.
 
 - **Binary (`drmod`)**: injects the DLL into a running game process
-- **Library (`drmod_rs_lib`)**: DX9 hook + ImGui overlay, reads game memory live
-- **Server (`server/`)**: multiplayer relay (axum 0.8 + tokio, Docker, 64-bit)
-- **Protocol (`protocol/`)**: shared TCP (JSON) and UDP (binary `PositionPacket`) types
-- **Replay-types (`replay-types/`)**: shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout of replay BLOBs; `input_bits` — action bits in `InputUnit`; `key_codes` — encoding of game key codes in `m_aKeysDown` words (bit order reversed: `0x8000_0000 >> (code & 31)`); `script` — DTO of the `POST /script/run` body (`ScriptRequest`/`ScriptCommand`/`ScriptInput`/`ScriptTrigger`/`RestartSpec`/`EnemyCondition` + `MAX_SCRIPT_FRAMES`), shared by the mod and `tools/script_gen`
-- **dbdump (`tools/dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script)
-- **script_gen (`tools/script_gen/`)**: generates the JSON script fixtures for the editor's round-trip tests out of the shared DTOs (`replay-types::script`) and accepts the editor's own JSON back — `tools/script_gen/README.md`
+- **Library (`drmod_rs_lib`)**: DX9 hook + ImGui overlay, reads game memory live — both live in `drmod-core/`
+- **Server (`drmod-server/`)**: multiplayer relay (axum 0.8 + tokio, Docker, 64-bit)
+- **Protocol (`drmod-protocol/`)**: shared TCP (JSON) and UDP (binary `PositionPacket`) types
+- **Replay-types (`drmod-replay-types/`)**: shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout of replay BLOBs; `input_bits` — action bits in `InputUnit`; `key_codes` — encoding of game key codes in `m_aKeysDown` words (bit order reversed: `0x8000_0000 >> (code & 31)`); `script` — DTO of the `POST /script/run` body (`ScriptRequest`/`ScriptCommand`/`ScriptInput`/`ScriptTrigger`/`RestartSpec`/`EnemyCondition` + `MAX_SCRIPT_FRAMES`), shared by the mod and `drmod-script-gen`
+- **dbdump (`drmod-dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script)
+- **script_gen (`drmod-script-gen/`)**: generates the JSON script fixtures for the editor's round-trip tests out of the shared DTOs (`drmod-replay-types::script`) and accepts the editor's own JSON back — `drmod-script-gen/README.md`
 - **TAS Editor (`tas-editor/`)**: desktop TAS editor on WinUI 3 (`windows-reactor`, Rust, self-contained x64) — UI mock for now
 - **TAS Editor C# (`tas-editor-cs/`)**: the same editor rebuilt on WinUI 3 via `Microsoft.UI.Reactor` — self-contained + NativeAOT; two-pane shell over a real on-disk workspace (a picked folder of `.tas` files: new / duplicate / rename / delete, explicit save with Ctrl+S), a virtualized read-only command table that visualizes the text (one column per DSL token, read token by token so `ls:<angle>` and `lsx`/`lsy` stay as written), a `.tas` text region with a live parse and the format's command reference in a pane beside it (the docking host's own splitter), the script converter (API JSON ⇄ `.tas` text ⇄ table frames), and the **run controls**: the mod's HTTP API as a client (`/state` polled twice a second), the four run rules (fixed 1/60 tick, frame cap, frozen seed, headless) applied in the order a run needs, Run/Cancel, and the game window brought to the foreground so menu input lands. Packaged by its own `pack.ps1` (222 → 75 MB), published by CI on a `v*` tag alongside the mod. ⚠️ **Own conventions, English-only UI and comments: `tas-editor-cs/QWEN.md`**
 - **TAS Editor Rust (`tas-editor-rs/`)**: the C# editor **ported onto the stack its own spike proved out** — `dear-app` (window, dock space, wgpu) + `dear-imgui-cte` (text editor), no XAML. Same functionality: the script listing/buffers/settings, the three script representations with the same canonical write, the read-only command table reading the text token by token, the run controls (rules applied in order, menu settle + window focus, `409` retried once), the mod installer (Steam discovery), and **six separate dockable panels** (mod, scripts, run, frames, script, commands) — none grouped into tabs. Own `[workspace]` and x64 `.cargo/config.toml` (the root forces i686). One crate, binary + library; **60 tests in five suites**, four of them ports of `tas-editor-cs/TasEditorCs.Tests/` files (golden fixtures byte for byte, `PlaybackRulesTests`, `EditorSettingsTests`, `SteamLibraryTests`) — which is what makes them a check against a *different implementation* rather than a mirror. ⚠️ **Porting `SteamLibraryTests` found a real bug**: `parse_library_paths` paired quoted strings by position, so the old numbered `libraryfolders.vdf` shape was silently ignored. ⚠️ **`build.rs` builds the mod and embeds it**: it runs `cargo build --release --lib -p drmod-rs` at the root, verifies the vendored loader is PE32, and stages both into `OUT_DIR/Mod/` for `include_bytes!` — so there is no `build-mod.ps1` and no `Mod/` folder, and a nested build that fails falls back to the last good DLL with a warning (`TAS_EDITOR_SKIP_MOD_BUILD=1` skips the build, not the check). ⚠️ **The nested build strips the flags cargo leaked into it** (`RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, the jobserver) — otherwise the two builds fingerprint differently and invalidate each other's `target/` (measured: `Dirty drmod-rs: the rustflags changed`, a 31 s rebuild on every editor build). ⚠️ The rules' seed goes **last**, the window focus and the menu settle come first, and `Run`/`Apply` run on a worker thread (every step blocks). ⚠️ Headless is armed from the status poll and only once the script is really `running` (`docs/HEADLESS.md` §5). ⚠️ The buffer the text editor is handed is **`\n`-separated** — `dear-imgui-cte` is not a WinUI `TextBox`, and a `\r` renders a whole script as one line. ⚠️ The fps line's window starts at the first *frame*, not at process start, or the initialization dilutes the first window's rate. ⚠️ The table's header is frozen (`freeze(1,1)`) — `headers(true)` alone scrolls away. — `tas-editor-rs/README.md`
@@ -45,8 +45,8 @@ Deep dives and chronicles live in `docs/` and the tool READMEs — this file onl
 | Lightning strike (`forward-forward-heavy`, `anim 110`) | `docs/LIGHTNING_STRIKE.md` |
 | Core-script tuning (chronicle, dead ends) | `docs/SCRIPT_TUNING.md` |
 | Project-wide "what does not work" summary | `docs/PITFALLS.md` |
-| dbdump: columns, `--script` | `tools/dbdump/README.md` |
-| script_gen: script fixtures for the editor, order of format changes | `tools/script_gen/README.md` |
+| dbdump: columns, `--script` | `drmod-dbdump/README.md` |
+| script_gen: script fixtures for the editor, order of format changes | `drmod-script-gen/README.md` |
 | script_tuning: tools, reference recipe | `tools/script_tuning/README.md` |
 | script_size: script/log sizes, gzip acceptance, what fits the body limit | `tools/script_size/README.md` |
 | The ASI distribution: loader provenance, both files Win32, why nothing is UPX-packed | `vendor/asi-loader/README.md` |
@@ -58,40 +58,43 @@ Deep dives and chronicles live in `docs/` and the tool READMEs — this file onl
 ## Architecture
 
 ```
-src/
-├── main.rs          # Injector binary — finds the game process, injects the DLL
-├── lib.rs           # HUD library — DX9 hook, ImGui overlay, game memory, main loop
-├── api.rs           # HTTP API (127.0.0.1:5223) — scripts, state, ring-buffer logs
-├── segment.rs       # Segment tracking — start conditions, ASL-based finish triggers, DB cleanup
-├── ui.rs            # ImGui windows — debug panel (debug only), multiplayer, settings
-├── game/            # Game entities — player (Pl0000), camera (cCameraGame), menu status, phases, cutscene skip
-│   ├── mod.rs       #   GameMenuStatus enum, is_readable_ptr, re-exports Player/Camera/phase/cutscene_skip
-│   ├── player.rs    #   Player object cache, read_player_state/read_current_input/read_pl_input/read_enemies/read_skeleton
-│   ├── camera.rs    #   Camera — read_camera_state/view_proj/pos
-│   ├── phase.rs     #   Phases/subphases: hash_name + order_subphase (requesting a subphase change = cutscene skip)
-│   ├── cutscene_skip.rs #  Console-style in-engine cutscene skip (per-frame state machine in the render loop)
-│   └── intro_skip.rs #  Startup logo-sequence skip: manual E9 patch on the logo task loop (on by default)
-├── net.rs           # TCP + UDP client for multiplayer
-├── overlay.rs       # world_to_screen projection, draw_world_pos
-├── render_hooks.rs  # Headless mode (`POST /render`): overlay/Present/game-geometry skip flags + MinHook stubs on the live device vtable
-├── settings.rs      # User settings (ghost opacity, show ghost toggle, cutscene skip toggle, startup-logo skip toggle)
-├── d3d_render.rs    # CylinderRenderer, SphereRenderer for 3D overlays
-├── skeleton.rs      # Bone/skeleton data structures
-├── logger.rs        # Logging to %LOCALAPPDATA%\drmod\ (debug.log + buffered state.log); debug builds always on, release only under DRMOD_LOG
-├── tas/             # TAS (tool-assisted speedrun) — input record/replay
-│   ├── addresses.rs #   Input memory addresses/constants
-│   ├── db.rs        #   Replay SQLite tables, column migration + bulk insert
-│   ├── replay.rs    #   Record/playback logic, input override
-│   ├── hooks.rs     #   MinHook input hooks (updateInputUnit/isKeybindPressed/isKeybindDown), frame updater, randRange/randFloat, ripper/blade emulation, raw input readers
-│   ├── watch.rs     #   (debug) hardware write breakpoint: DR0 on all threads + VEH, writer stack chain
-│   └── types.rs     #   Re-export of replay-types DTOs + ReplayFrame/internal types
-server/              # Multiplayer server (axum 0.8 + tokio, 64-bit, Docker)
-protocol/            # Shared protocol types (TCP JSON + UDP binary PositionPacket)
-replay-types/        # Shared replay DTOs + to_bytes/from_bytes + input_bits + script DTOs
+Cargo.toml           # [workspace] only — members listed, [profile.release] lives here
+drmod-core/          # The mod: injector binary + HUD library (was src/ + main.rs)
+├── src/
+│   ├── main.rs      # Injector binary — finds the game process, injects the DLL (embeds the DLL via include_bytes!)
+│   ├── lib.rs       # HUD library — DX9 hook, ImGui overlay, game memory, main loop
+│   ├── api.rs       # HTTP API (127.0.0.1:5223) — scripts, state, ring-buffer logs
+│   ├── segment.rs   # Segment tracking — start conditions, ASL-based finish triggers, DB cleanup
+│   ├── ui.rs        # ImGui windows — debug panel (debug only), multiplayer, settings
+│   ├── game/        # Game entities — player (Pl0000), camera (cCameraGame), menu status, phases, cutscene skip
+│   │   ├── mod.rs       #   GameMenuStatus enum, is_readable_ptr, re-exports Player/Camera/phase/cutscene_skip
+│   │   ├── player.rs    #   Player object cache, read_player_state/read_current_input/read_pl_input/read_enemies/read_skeleton
+│   │   ├── camera.rs    #   Camera — read_camera_state/view_proj/pos
+│   │   ├── phase.rs     #   Phases/subphases: hash_name + order_subphase (requesting a subphase change = cutscene skip)
+│   │   ├── cutscene_skip.rs #  Console-style in-engine cutscene skip (per-frame state machine in the render loop)
+│   │   └── intro_skip.rs #  Startup logo-sequence skip: manual E9 patch on the logo task loop (on by default)
+│   ├── net.rs       # TCP + UDP client for multiplayer
+│   ├── overlay.rs   # world_to_screen projection, draw_world_pos
+│   ├── render_hooks.rs # Headless mode (`POST /render`): overlay/Present/game-geometry skip flags + MinHook stubs on the live device vtable
+│   ├── settings.rs  # User settings (ghost opacity, show ghost toggle, cutscene skip toggle, startup-logo skip toggle)
+│   ├── d3d_render.rs # CylinderRenderer, SphereRenderer for 3D overlays
+│   ├── skeleton.rs  # Bone/skeleton data structures
+│   ├── logger.rs    # Logging to %LOCALAPPDATA%\drmod\ (debug.log + buffered state.log); debug builds always on, release only under DRMOD_LOG
+│   └── tas/         # TAS (tool-assisted speedrun) — input record/replay
+│       ├── addresses.rs #   Input memory addresses/constants
+│       ├── db.rs        #   Replay SQLite tables, column migration + bulk insert
+│       ├── replay.rs    #   Record/playback logic, input override
+│       ├── hooks.rs     #   MinHook input hooks (updateInputUnit/isKeybindPressed/isKeybindDown), frame updater, randRange/randFloat, ripper/blade emulation, raw input readers
+│       ├── watch.rs     #   (debug) hardware write breakpoint: DR0 on all threads + VEH, writer stack chain
+│       └── types.rs     #   Re-export of drmod-replay-types DTOs + ReplayFrame/internal types
+drmod-server/        # Multiplayer server (axum 0.8 + tokio, 64-bit, Docker)
+drmod-protocol/      # Shared protocol types (TCP JSON + UDP binary PositionPacket)
+drmod-replay-types/  # Shared replay DTOs + to_bytes/from_bytes + input_bits + script DTOs
+drmod-dbdump/        # Replay frames → CSV/Parquet + --script (HTTP API JSON) (x64, own .cargo/config.toml)
+drmod-script-gen/    # Script JSON fixtures for tas-editor-cs round-trip tests (x64, own .cargo/config.toml)
+drmod-hudhook/       # Vendored hudhook fork, cut to DirectX 9 only (own README)
 tools/
 ├── demo/            # TAS demo: demo_r03_tas.py — runs the first R-03 segment 3 times (`--headless`/`--uncapped`)
-├── dbdump/          # Replay frames → CSV/Parquet + --script (HTTP API JSON) (x64, own .cargo/config.toml)
-├── script_gen/      # Script JSON fixtures for tas-editor-cs round-trip tests (x64, own .cargo/config.toml)
 ├── desync_analysis/ # pandas scripts analyzing Record→Playback desync (CSV from dbdump)
 ├── script_tuning/   # Core-script timing and cutscene-skip scripts (python) — see tools/script_tuning/README.md
 ├── script_size/     # Script/log byte sizes, gzip acceptance check, "what fits the body limit" (python)
@@ -100,8 +103,22 @@ tas-editor/          # TAS Editor: desktop editor on WinUI 3 (windows-reactor), 
 tas-editor-cs/       # TAS Editor in C#: WinUI 3 via Microsoft.UI.Reactor, self-contained + NativeAOT; own QWEN.md (English-only); installs the mod into the game (payload embedded under TasEditorCs/Mod/, staged by build-mod.ps1, not committed); pack.ps1 thins a publish into a zip (~222 → 75 MB)
 tas-editor-rs/       # TAS Editor Rust: full port of tas-editor-cs on dear-app + dear-imgui-cte (no XAML); own [workspace] and x64 config; build.rs builds the mod and embeds it (OUT_DIR/Mod/ → include_bytes!), so one `cargo build` stages the payload; golden-tested against the C# fixtures
 ref/                 # Git submodules — read-only reference projects
-vendor/              # Third-party binaries, checked in — asi-loader/ (Ultimate-ASI-Loader d3d9.dll + license + provenance)
+vendor/              # Third-party binaries and C sources, checked in — asi-loader/ (Ultimate-ASI-Loader d3d9.dll + license + provenance), minhook/ (single copy, built by drmod-hudhook/build.rs)
+├── asi-loader/
+└── minhook/
 ```
+
+⚠️ **Invariant: the package name equals the directory name.** `target/` stays at the
+workspace root (the home of the i686 mod), so `drmod-core/src/main.rs` reaches the
+embedded DLL through `include_bytes!("../target/i686-pc-windows-msvc/{debug,release}/drmod_rs_lib.dll")`
+and `build.ps1` keeps working unchanged.
+
+⚠️ **The x64 crates do not build from the root** (`drmod-dbdump`, `drmod-script-gen`,
+`drmod-server`): Cargo merges `.cargo/config.toml` by **cwd ancestors**, not by
+manifest path, so they pick up the root's `i686-pc-windows-msvc` target unless you
+`cd` into their directory, where each one keeps its own `.cargo/config.toml`. This
+is not a bug and `--manifest-path` does not fix it — `Push-Location` in
+`build_tools.ps1` is the load-bearing construct (it carries a comment saying so).
 
 ## Memory Offsets
 
@@ -203,11 +220,11 @@ Derived from [livesplit_asl_mgrr](https://github.com/hau5test/livesplit_asl_mgrr
 
 ### Database
 
-SQLite at `%LOCALAPPDATA%\drmod\runs.db` (schemas and migrations — `src/tas/db.rs`).
+SQLite at `%LOCALAPPDATA%\drmod\runs.db` (schemas and migrations — `drmod-core/src/tas/db.rs`).
 
 - **Segments:** `runs` → `segments` (`mission_id`, `mission_name`, `started_at`, `duration_ms`) → `segment_positions` (position per frame). On flush, only the best (lowest `duration_ms`) segment per `mission_id` is kept; the ghost reads it via `load_best_ghost()`. WAL + NORMAL synchronous for fast bulk inserts.
-- **Record/Playback:** `replay_runs` (`kind` = `record`/`playback`, `source_replay_id` for playback) → `replay_record_frames` / `replay_playback_frames` (per frame: `input_unit` BLOB 48 B, `state` 88 B, `camera` 92 B, `enemy` 32 B, `blade_down`, `ripper_pressed`, `raw_down`, `raw_pressed`). BLOBs are raw bytes of the `replay-types/` structs; layout is versioned by size (camera 76 B = legacy before 2026-08-18, not read by dbdump). Old databases are migrated by `ensure_replay_frame_columns` (`ALTER TABLE`).
-- The mod never reads the DB (playback comes from session memory) — the tables are for history/analytics only; export goes through `tools/dbdump`.
+- **Record/Playback:** `replay_runs` (`kind` = `record`/`playback`, `source_replay_id` for playback) → `replay_record_frames` / `replay_playback_frames` (per frame: `input_unit` BLOB 48 B, `state` 88 B, `camera` 92 B, `enemy` 32 B, `blade_down`, `ripper_pressed`, `raw_down`, `raw_pressed`). BLOBs are raw bytes of the `drmod-replay-types/` structs; layout is versioned by size (camera 76 B = legacy before 2026-08-18, not read by dbdump). Old databases are migrated by `ensure_replay_frame_columns` (`ALTER TABLE`).
+- The mod never reads the DB (playback comes from session memory) — the tables are for history/analytics only; export goes through `drmod-dbdump`.
 
 ## Building and Running
 
@@ -224,6 +241,20 @@ cargo build --release
 
 The project is configured to compile for `i686-pc-windows-msvc` (32-bit), as specified in `.cargo/config.toml`. This is required because MGR:R is a 32-bit application.
 
+The root manifest is a pure `[workspace]` (no `[package]`); every crate lives in
+its own top-level directory and **the package name equals the directory name**.
+The root `cargo build` covers the i686 mod and the server/protocol crates only —
+it skips the x64 crates (`drmod-dbdump`, `drmod-script-gen`) and the standalone
+editors (`tas-editor/`, `tas-editor-cs/`, `tas-editor-rs/`, each with its own
+`[workspace]`), all of which carry their own x64 `.cargo/config.toml`.
+
+⚠️ **The root config wins by cwd, not by manifest path.** Cargo merges
+`.cargo/config.toml` from the **ancestors of the working directory**, so an x64
+crate is built for `i686-pc-windows-msvc` unless you actually `cd` into it —
+`--manifest-path` does not help. That is why `build_tools.ps1` wraps the x64
+builds in `Push-Location` (there is a comment there saying so). Build an x64
+crate as `cd drmod-dbdump && cargo build --release`, not from the root.
+
 ### Run
 
 ```bash
@@ -238,7 +269,8 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 ### Output
 
-- `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary (DLL embedded via `include_bytes!`, extracted to `%TEMP%` at runtime)
+- `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary (DLL embedded via `include_bytes!` from `drmod-core/src/main.rs`, extracted to `%TEMP%` at runtime)
+- `target/i686-pc-windows-msvc/release/drmod_rs_lib.dll` — the injected library
 
 ### Smoke tests
 
@@ -268,37 +300,37 @@ The ASI form needs an ASI loader the game does not ship with: `vendor/asi-loader
 
 | Crate | Purpose |
 |-------|---------|
-| `hudhook` (0.9.0, vendored fork — `vendor/hudhook`) | DirectX hooking and injection |
+| `drmod-hudhook` (0.9.0, vendored fork, DX9-only — `drmod-hudhook/`) | DirectX 9 hooking and injection (upstream `hudhook` cut to one backend) |
 | `imgui` (0.12.0) | ImGui bindings for UI rendering |
 | `windows` (0.62.2) | Windows API (UI windows, module loading) |
 | `windows-numerics` (0.3) | Vector/matrix math for D3D projections |
 | `rusqlite` (0.40.1, bundled) | SQLite for persisting run data |
 | `chrono` (0.4.45) | Time formatting for run timestamps |
 | `serde` / `serde_json` (1) | JSON serialization for multiplayer protocol and HTTP API |
-| `flate2` (1, `rust_backend`) | `Content-Encoding: gzip` on request bodies (`src/api.rs`); pure Rust (`miniz_oxide`), no C toolchain |
+| `flate2` (1, `rust_backend`) | `Content-Encoding: gzip` on request bodies (`drmod-core/src/api.rs`); pure Rust (`miniz_oxide`), no C toolchain |
 | `drmod-protocol` | Shared types for client-server communication |
-| `drmod-replay-types` | Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) + `to_bytes`/`from_bytes` + `input_bits` (`InputUnit` bits) + `script` (the `POST /script/run` DTO, shared with `tools/script_gen`) |
+| `drmod-replay-types` | Shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) + `to_bytes`/`from_bytes` + `input_bits` (`InputUnit` bits) + `script` (the `POST /script/run` DTO, shared with `drmod-script-gen`) |
 
-`tools/dbdump` additionally pulls (for itself only, x64): `rusqlite`, `csv`, `arrow` + `parquet` (59.x) — CSV/Parquet export; `serde` + `serde_json` — `--script` mode (JSON for the HTTP API). `tools/script_gen` pulls (x64): `drmod-replay-types` + `serde_json` — script fixtures for the editor.
+`drmod-dbdump` additionally pulls (for itself only, x64): `rusqlite`, `csv`, `arrow` + `parquet` (59.x) — CSV/Parquet export; `serde` + `serde_json` — `--script` mode (JSON for the HTTP API). `drmod-script-gen` pulls (x64): `drmod-replay-types` + `serde_json` — script fixtures for the editor.
 
 ### Notes
 
 - **Thread safety**: `HelloHud` has `unsafe impl Send/Sync` for hudhook's render loop; safe because all static addresses are computed once in `new()`, never per frame.
 - **Debug-only features** (`#[cfg(debug_assertions)]`): `DrmodDebug` window (record/playback status, segment timer, mission/menu status, compact player state), `Actions` window (numpad hotkey reference), numpad hotkeys, saved position. Release builds keep only Multiplayer and Settings.
-- **Settings window is also the TAS control panel** (`src/ui.rs` → `render_tas_controls`, both builds): fixed `dt`, RNG pin, frame cap. It writes the same runtime state as the HTTP handlers through shared setters, so it cannot drift from the API — `docs/API.md` §2. The headless switches (`POST /render`) are **not** in the UI: they live in the API only. **Settings persist** (`src/settings.rs`): the UI checkboxes/slider and the TAS controls (`/dt`, `/rng`, `/fps`) are saved as key/value rows in the `settings` table of the same `runs.db`. ⚠️ They are read and applied on the **first `render` frame** (`HelloHud::restore_settings_once`), **not** in `HelloHud::new`: doing it at startup stalled game load and wrote engine fields (`cSlowRateManager`/pacer) before the engine initialized them. A `settings_dirty` flag batches writes to one SQLite packet per changed frame (via `persist_settings` at the end of `render`, plus a final flush in `eject`) instead of one per slider tick. Key/value, not columns, so a new setting needs no `ALTER TABLE` migration.
-- **Headless runs** (`src/render_hooks.rs`, `POST /render`): three independent switches — `skip_overlay`, `skip_present`, `skip_draw` (MinHook stubs on the live device's `DrawPrimitive*` vtable entries). Production mode = `skip_overlay` + `skip_draw` with the cap lifted; ⚠️ `skip_present` is not part of it — no gain, and combined with `skip_draw` it crashes the game (AV in `d3d9.dll`). ≈×1.25 over a lifted cap, ≈×1.5 over a normal run; beyond that the limit is simulation (~9.7 ms/tick). ⚠️ `skip_overlay` also hides the Settings window — only `POST /render {"reset": true}` brings rendering back. `docs/HEADLESS.md`.
-- **HTTP API** (`src/api.rs`, both builds): hand-rolled single-threaded server on `127.0.0.1:5223` (raw `TcpListener`, non-blocking accept, 1 s timeouts, `shutdown()` returns in bounded time so eject does not hang). `GET`-style state: `/state`, `/logs`, `/health`, `/script/{id}`; `POST` actions: `/script/run`, `/script/stop`, `/dt`, `/fps`, `/rng`, `/render`, `/eject`, `/order`, `/phase`, `/watch`. Ring buffer of 3600 frames (60 s). **A script frame is a simulation tick** (fed from the `updateInputUnit` detour, `api::feed_tick`). ⚠️ **Script length is bounded by the request body, not by frames**: `Content-Encoding: gzip` is accepted (only gzip; anything else → `415`), the 64 KiB `MAX_BODY_BYTES` limit is measured on the *compressed* bytes, and the inflated body has its own cap (`MAX_INFLATED_BYTES` 8 MiB — zip-bomb guard; over → `413`, bad gzip → `400`); `MAX_SCRIPT_FRAMES` is now only an overflow guard (1 000 000). Responses are never compressed. The ring buffer stays 3600 frames, so a script longer than 60 s shows up in `/logs` as its last ~60 s. Full spec — `docs/API.md`.
-- **Console-style cutscene skip** (`src/game/cutscene_skip.rs`; on by default, Settings checkbox turns it off): in the `P370_RESTART`/`P370_IN` scenes it holds the console-menu flags in `staFlags` (`base + 0x17EA060`) and removes the menu through the engine's own path, then requests `P370_EVENT` on a confirmed SKIP. ⚠️ Requesting a subphase loads the scene only while unpaused; ⚠️ while the flags are held, the normal pause menu cannot be opened in that scene. Stage in `GET /state` → `cutscene_skip` (`off`/`armed`/`closing`/`skipped`). `docs/PHASE.md`.
-- **Startup logo-sequence skip** (`src/game/intro_skip.rs`; on by default, Settings checkbox turns it off, state in `GET /state` → `intro_skip`): the game's logo task loop is patched by hand — a 6-byte `E9 rel32` (+`nop`) at `base + 0x652C92` (`mov ecx, [ebp+0x8C]`, the only instruction wide enough there), jumping to a stub in a private RWX page that reads the original `ecx` back from `[ebp+0x8C]`; with `ecx = 0` the loop takes `mov esi, 1` (`mov esi, [eax+0x1A0]` otherwise) and the logo pass is considered done. ⚠️ `0x652C30` (the loop) is called **only** from the logo wrapper `0x652D80` (`--- START LOGO SEQUENCE ---`, `ExecStartupShader`), so the patch touches nothing else. ⚠️ The technique comes from the third-party `winmm.dll` ac-mod, which only skips **while the player holds a button** (`0x8E12F0` is a keybind check, codes `0xA`/`0xB5`); here the condition is dropped (always replace). ⚠️ The mod must be loaded **before** the logos — the Ultimate-ASI-Loader works under any of its names (verified on a live game 2026-09-30 with `d3d9.dll`; `winmm.dll` also works and covers all 192 winmm exports); what matters is that the loader sits next to the exe and the `.asi` in `plugins/`. Mechanics, RVAs and the proxy-DLL analysis — `docs/PHASE.md`.
+- **Settings window is also the TAS control panel** (`drmod-core/src/ui.rs` → `render_tas_controls`, both builds): fixed `dt`, RNG pin, frame cap. It writes the same runtime state as the HTTP handlers through shared setters, so it cannot drift from the API — `docs/API.md` §2. The headless switches (`POST /render`) are **not** in the UI: they live in the API only. **Settings persist** (`drmod-core/src/settings.rs`): the UI checkboxes/slider and the TAS controls (`/dt`, `/rng`, `/fps`) are saved as key/value rows in the `settings` table of the same `runs.db`. ⚠️ They are read and applied on the **first `render` frame** (`HelloHud::restore_settings_once`), **not** in `HelloHud::new`: doing it at startup stalled game load and wrote engine fields (`cSlowRateManager`/pacer) before the engine initialized them. A `settings_dirty` flag batches writes to one SQLite packet per changed frame (via `persist_settings` at the end of `render`, plus a final flush in `eject`) instead of one per slider tick. Key/value, not columns, so a new setting needs no `ALTER TABLE` migration.
+- **Headless runs** (`drmod-core/src/render_hooks.rs`, `POST /render`): three independent switches — `skip_overlay`, `skip_present`, `skip_draw` (MinHook stubs on the live device's `DrawPrimitive*` vtable entries). Production mode = `skip_overlay` + `skip_draw` with the cap lifted; ⚠️ `skip_present` is not part of it — no gain, and combined with `skip_draw` it crashes the game (AV in `d3d9.dll`). ≈×1.25 over a lifted cap, ≈×1.5 over a normal run; beyond that the limit is simulation (~9.7 ms/tick). ⚠️ `skip_overlay` also hides the Settings window — only `POST /render {"reset": true}` brings rendering back. `docs/HEADLESS.md`.
+- **HTTP API** (`drmod-core/src/api.rs`, both builds): hand-rolled single-threaded server on `127.0.0.1:5223` (raw `TcpListener`, non-blocking accept, 1 s timeouts, `shutdown()` returns in bounded time so eject does not hang). `GET`-style state: `/state`, `/logs`, `/health`, `/script/{id}`; `POST` actions: `/script/run`, `/script/stop`, `/dt`, `/fps`, `/rng`, `/render`, `/eject`, `/order`, `/phase`, `/watch`. Ring buffer of 3600 frames (60 s). **A script frame is a simulation tick** (fed from the `updateInputUnit` detour, `api::feed_tick`). ⚠️ **Script length is bounded by the request body, not by frames**: `Content-Encoding: gzip` is accepted (only gzip; anything else → `415`), the 64 KiB `MAX_BODY_BYTES` limit is measured on the *compressed* bytes, and the inflated body has its own cap (`MAX_INFLATED_BYTES` 8 MiB — zip-bomb guard; over → `413`, bad gzip → `400`); `MAX_SCRIPT_FRAMES` is now only an overflow guard (1 000 000). Responses are never compressed. The ring buffer stays 3600 frames, so a script longer than 60 s shows up in `/logs` as its last ~60 s. Full spec — `docs/API.md`.
+- **Console-style cutscene skip** (`drmod-core/src/game/cutscene_skip.rs`; on by default, Settings checkbox turns it off): in the `P370_RESTART`/`P370_IN` scenes it holds the console-menu flags in `staFlags` (`base + 0x17EA060`) and removes the menu through the engine's own path, then requests `P370_EVENT` on a confirmed SKIP. ⚠️ Requesting a subphase loads the scene only while unpaused; ⚠️ while the flags are held, the normal pause menu cannot be opened in that scene. Stage in `GET /state` → `cutscene_skip` (`off`/`armed`/`closing`/`skipped`). `docs/PHASE.md`.
+- **Startup logo-sequence skip** (`drmod-core/src/game/intro_skip.rs`; on by default, Settings checkbox turns it off, state in `GET /state` → `intro_skip`): the game's logo task loop is patched by hand — a 6-byte `E9 rel32` (+`nop`) at `base + 0x652C92` (`mov ecx, [ebp+0x8C]`, the only instruction wide enough there), jumping to a stub in a private RWX page that reads the original `ecx` back from `[ebp+0x8C]`; with `ecx = 0` the loop takes `mov esi, 1` (`mov esi, [eax+0x1A0]` otherwise) and the logo pass is considered done. ⚠️ `0x652C30` (the loop) is called **only** from the logo wrapper `0x652D80` (`--- START LOGO SEQUENCE ---`, `ExecStartupShader`), so the patch touches nothing else. ⚠️ The technique comes from the third-party `winmm.dll` ac-mod, which only skips **while the player holds a button** (`0x8E12F0` is a keybind check, codes `0xA`/`0xB5`); here the condition is dropped (always replace). ⚠️ The mod must be loaded **before** the logos — the Ultimate-ASI-Loader works under any of its names (verified on a live game 2026-09-30 with `d3d9.dll`; `winmm.dll` also works and covers all 192 winmm exports); what matters is that the loader sits next to the exe and the `.asi` in `plugins/`. Mechanics, RVAs and the proxy-DLL analysis — `docs/PHASE.md`.
 - **Record→Playback desync** (`docs/DESYNC_ANALYSIS.md`): the main source is a **one-frame input feed lag** — a render(K) override lands on tick K+1 — plus Present↔tick phase uncertainty. Fixed by feeding frames from the `updateInputUnit` detour (`replay::PLAYBACK_FEED`) plus heading compensation (`rsx_correction`) → **record 110 → 111/112/113/114: 4/4 success, |Δpos| 0.7–1.0 m, |Δyaw| median 0.12–0.26°**.
 - **Two game copies on one machine do not work**: the second MGR:R copy dies with exit code 0 ~100 ms after `steam_api.dll` loads; saves are Steam Cloud, one file per (steamid, appid) pair. `docs/PITFALLS.md`.
-- **dbdump** (`tools/dbdump/`): Record/Playback frames → CSV/Parquet (90 flat columns, incl. the nearest enemy as `enemy_*`) and `--script` (recording → JSON for `POST /script/run`). x64-only and self-contained in its directory (arrow-rs is 64-bit; the root `cargo build` skips it) — `tools/dbdump/README.md`.
-- **Script DSL and the converter** (`docs/SCRIPT_DSL.md`): a script has three representations — the API JSON (`POST /script/run`), the `.tas` text (one line per frame; tokens are console pad names — `a`/`x`/`y`/`b`, `lt`/`rt`/`lb`/`rb`, `lr`, `ax`, `du`…`mr`, `ok`, `esc`, `cd`, `wk` — which are also the command table's column headers, and movement is the stick: `ls:<angle>` on the compass, `lsx`/`lsy` exact values, `wk` halving) and the command table's frames. JSON is the only complete one: `raw_key`, `dik_key` and `when_enemy` have no text spelling and no column, so writing them out as text is an error rather than a silent loss, and a `forward` flag is written as the stick it stands for. The DTO lives in `replay-types/src/script.rs` (shared by the mod and the tool, so the generated JSON is accepted by construction); `tools/script_gen` (Rust) writes the JSON fixtures into `tas-editor-cs/TasEditorCs.Tests/Fixtures/`, the editor writes `.expected.json`/`.expected.tas` goldens next to them, and a Rust test deserializes the editor's JSON with the mod's own types. Order of changes and commands — `tools/script_gen/README.md`.
+- **dbdump** (`drmod-dbdump/`): Record/Playback frames → CSV/Parquet (90 flat columns, incl. the nearest enemy as `enemy_*`) and `--script` (recording → JSON for `POST /script/run`). x64-only and self-contained in its directory (arrow-rs is 64-bit; the root `cargo build` skips it) — `drmod-dbdump/README.md`.
+- **Script DSL and the converter** (`docs/SCRIPT_DSL.md`): a script has three representations — the API JSON (`POST /script/run`), the `.tas` text (one line per frame; tokens are console pad names — `a`/`x`/`y`/`b`, `lt`/`rt`/`lb`/`rb`, `lr`, `ax`, `du`…`mr`, `ok`, `esc`, `cd`, `wk` — which are also the command table's column headers, and movement is the stick: `ls:<angle>` on the compass, `lsx`/`lsy` exact values, `wk` halving) and the command table's frames. JSON is the only complete one: `raw_key`, `dik_key` and `when_enemy` have no text spelling and no column, so writing them out as text is an error rather than a silent loss, and a `forward` flag is written as the stick it stands for. The DTO lives in `drmod-replay-types/src/script.rs` (shared by the mod and the tool, so the generated JSON is accepted by construction); `drmod-script-gen` (Rust) writes the JSON fixtures into `tas-editor-cs/TasEditorCs.Tests/Fixtures/`, the editor writes `.expected.json`/`.expected.tas` goldens next to them, and a Rust test deserializes the editor's JSON with the mod's own types. Order of changes and commands — `drmod-script-gen/README.md`.
 - **script_tuning** (`tools/script_tuning/`, python): core-script timings for the `P310_RESTART` barrier flight, run speedup (`/dt` + `/fps`), restart/menu/fail-recovery automation, cutscene skip — `tools/script_tuning/README.md`, `docs/SCRIPT_TUNING.md`, `docs/PITFALLS.md`.
 - **script_size** (`tools/script_size/`, python): how many bytes a script takes in JSON/`.tas`/gzip/zstd/brotli, the log ring's RAM footprint, and what now fits the 64 KiB body limit (≈19 000 worst-case frames gzipped); `check_gzip_e2e.py` is the end-to-end check of the gzip acceptance path — `tools/script_size/README.md`.
-- **`tas-editor/`** (standalone crate: own `[workspace]`, `target/` and x64 `.cargo/config.toml` — the root forces i686, which WinUI 3 does not build for; lives at the repo root, not `tools/`): WinUI 3 via `windows-reactor` **0.100**, declarative, no XAML, **self-contained** via `windows-reactor-setup` in `build.rs`. `cargo run --release` to run, `pwsh -File pack.ps1 -Build -Zip` to ship (~56 MB, zip ≈20 MB). Status: UI mock; the on-disk workspace (`src/workspace.rs`) is not wired up. ⚠️ Self-contained gotchas (a truncated `.nupkg` = "green" build with no runtime) and Reactor rendering — `tas-editor/README.md`.
+- **`tas-editor/`** (standalone crate: own `[workspace]`, `target/` and x64 `.cargo/config.toml` — the root forces i686, which WinUI 3 does not build for; lives at the repo root, not `tools/`): WinUI 3 via `windows-reactor` **0.100**, declarative, no XAML, **self-contained** via `windows-reactor-setup` in `build.rs`. `cargo run --release` to run, `pwsh -File pack.ps1 -Build -Zip` to ship (~56 MB, zip ≈20 MB). Status: UI mock; the on-disk workspace (`tas-editor/src/workspace.rs`) is not wired up. ⚠️ Self-contained gotchas (a truncated `.nupkg` = "green" build with no runtime) and Reactor rendering — `tas-editor/README.md`.
 - **`tas-editor-rs/`** (standalone crate: own `[workspace]` and x64 `.cargo/config.toml`, for the i686 reason above; lives at the repo root, not `tools/`): the full port of `tas-editor-cs/` onto `dear-app` **0.18** + `dear-imgui-cte` **0.18** — no XAML, no XAML compiler, no WinUI. One `Cargo.toml`, a binary (`main.rs`: the window, the frame loop, the CTE editor) and a library (`lib.rs`: the same modules, so the script formats are testable headlessly). `cargo run` to run, `cargo test` for the formats. ⚠️ **Every section is its own dockable panel** (mod, scripts, run, frames, script, commands), and the declared layout groups nothing into tabs — the default shape is a starting arrangement, not a cage. ⚠️ A click is **recorded** into `FrameActions` and applied after the frame — the panels draw from `&`-borrows, so the borrow checker is what enforces the C# sibling's `View(props)` rule; a panel window must be opened **through its `WindowKey`**, or the dock space cannot address it. ⚠️ **`build.rs` builds the mod and embeds the payload**: it runs `cargo build --release --lib -p drmod-rs` at the root, verifies the vendored loader is PE32, and stages both into `OUT_DIR/Mod/` for `include_bytes!` — so there is no `build-mod.ps1` and no `Mod/` folder, and a nested build that fails falls back to the last good DLL with a warning (`TAS_EDITOR_SKIP_MOD_BUILD=1` skips the build, not the check). ⚠️ **The nested build strips the flags cargo leaked into it** (`RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, the jobserver) — otherwise the two builds fingerprint differently and invalidate each other's `target/` (measured: `Dirty drmod-rs: the rustflags changed`, a 31 s rebuild on every editor build). ⚠️ The rules' seed goes **last**, the window focus and the menu settle come first, and `Run`/`Apply` run on a worker thread (every step blocks). ⚠️ Headless is armed from the status poll and only once the script is really `running` (`docs/HEADLESS.md` §5). ⚠️ The buffer the text editor is handed is **`\n`-separated** — `dear-imgui-cte` is not a WinUI `TextBox`, and a `\r` renders a whole script as one line. ⚠️ The fps line's window starts at the first *frame*, not at process start, or the initialization dilutes the first window's rate. ⚠️ The table's header is frozen (`freeze(1,1)`) — `headers(true)` alone scrolls away. — `tas-editor-rs/README.md`.
-- **File logs are gated** (`src/logger.rs`): `debug.log`/`state.log` in `%LOCALAPPDATA%\drmod\` are always written in debug builds; in release they stay silent unless `DRMOD_LOG` is set to a non-empty value (read once in `HelloHud::new` via `logger::init_enabled`, so end users get no log files). Every write path — `log_line`, `log_state_line`, `init_state_log` — checks `logger::enabled()` first.
+- **File logs are gated** (`drmod-core/src/logger.rs`): `debug.log`/`state.log` in `%LOCALAPPDATA%\drmod\` are always written in debug builds; in release they stay silent unless `DRMOD_LOG` is set to a non-empty value (read once in `HelloHud::new` via `logger::init_enabled`, so end users get no log files). Every write path — `log_line`, `log_state_line`, `init_state_log` — checks `logger::enabled()` first.
 - User-facing errors use Windows `MessageBoxW`; the library is built as both `cdylib` (injection) and `rlib`.
 
 ### Reference Projects

@@ -237,7 +237,7 @@ Commands, publish gotchas and measurements: `README.md` in this folder.
   token have to be renamed together**. Movement is the stick there (`ls:<angle>` on the compass,
   `lsx`/`lsy` exact values, `wk` halving); a direction flag from a JSON script is written as the stick
   it stands for, which is why the text has no direction tokens and the table no direction columns.
-  Fixtures come from the Rust tool `tools/script_gen`, the editor's goldens sit next to them in
+  Fixtures come from the Rust tool `drmod-script-gen`, the editor's goldens sit next to them in
   `TasEditorCs.Tests/Fixtures/`, and format, guarantees and commands are in `../docs/SCRIPT_DSL.md`
   and `README.md` (*Script formats*). ⚠️ Read the `default`-overwrite gotcha there before trusting a
   property initializer to survive deserialization.

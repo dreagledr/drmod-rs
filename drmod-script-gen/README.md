@@ -7,7 +7,7 @@ round-trip тестов редактора `tas-editor-cs`: редактор ч�
 тест-приёмка читает это золото обратно.
 
 Ключевое: фикстуры строятся **теми же типами**, которыми мод десериализует
-запрос, — `drmod_replay_types::script` (`replay-types/src/script.rs`, общий крейт).
+запрос, — `drmod_replay_types::script` (`drmod-replay-types/src/script.rs`, общий крейт).
 Поэтому «примет ли мод этот JSON» решает определение типа, а не сверка текста:
 поля команд, `trigger`, `restart` и `when_enemy` описаны в одном месте на мод и
 на тул.
@@ -61,7 +61,7 @@ cargo test            # из этой директории или `cargo test -p
 
 ## Порядок при изменениях формата
 
-1. Правите общие DTO (`replay-types/src/script.rs`) или сам мод (`src/api.rs`).
+1. Правите общие DTO (`drmod-replay-types/src/script.rs`) или сам мод (`drmod-core/src/api.rs`).
 2. `cargo run -p drmod-script-gen` — перегенерировать фикстуры.
 3. В редакторе: `set TAS_REGEN_GOLDENS=1 && dotnet test TasEditorCs.slnx` —
    перезаписать золотые файлы, затем глазами прочитать `.expected.tas`

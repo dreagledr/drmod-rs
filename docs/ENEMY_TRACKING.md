@@ -44,7 +44,7 @@
   EmSetCorps`. `+0x50` у частей — локальная позиция (0); мировая — из матрицы
   cParts (+0x10 → m[3] = +0x40/+0x44/+0x48).
 - Фильтр врагов: имена `Em*`/`Ba*`/`Pl001*` (не игрок), pos != (0,0,0),
-  HP 1..1_000_000 (см. `read_enemies` в `src/game/player.rs`).
+  HP 1..1_000_000 (см. `read_enemies` в `drmod-core/src/game/player.rs`).
 
 ## ИИ врага: анимация и RNG (дизасм + `POST /watch`, 2026-09-12)
 
@@ -89,22 +89,22 @@
 
 ## Реализация
 
-1. **`replay-types/src/lib.rs`** — `EnemyState` (pos/blade_y/r_anim/frame/hp/
+1. **`drmod-replay-types/src/lib.rs`** — `EnemyState` (pos/blade_y/r_anim/frame/hp/
    found). BLOB-колонка `enemy` в таблицах `replay_*_frames` (32 байта,
    версионирование по размеру, как camera).
-2. **`src/game/player.rs`** — `EnemyInfo` дополнен `anim_frame` (+0x8B4);
+2. **`drmod-core/src/game/player.rs`** — `EnemyInfo` дополнен `anim_frame` (+0x8B4);
    новый `read_nearest_enemy() -> EnemyState` переиспользует обход
    `read_enemies` и выбирает ближайшего по `dist`.
-3. **Запись (`src/tas/replay.rs`)** — `ReplayFrame.enemy`; `update` принимает
+3. **Запись (`drmod-core/src/tas/replay.rs`)** — `ReplayFrame.enemy`; `update` принимает
    `EnemyState` и пишет его и в record-кадры (`capture_frame`), и в
    playback-лог (`playback_tick` — фактическое состояние врага во время
    воспроизведения).
-4. **`src/lib.rs`** — чтение врага гейтится: только пока активны
+4. **`drmod-core/src/lib.rs`** — чтение врага гейтится: только пока активны
    запись/воспроизведение (`replay.is_active()`) и не loading
    (`menu_status`), чтобы не гонять обход EntitySystem каждый кадр.
-5. **`src/tas/db.rs`** — колонка `enemy BLOB` в CREATE + миграция
+5. **`drmod-core/src/tas/db.rs`** — колонка `enemy BLOB` в CREATE + миграция
    (`ensure_replay_frame_columns`) + bulk-insert.
-6. **`tools/dbdump`** — колонки `enemy_pos_x/y/z`, `enemy_blade_y`,
+6. **`drmod-dbdump`** — колонки `enemy_pos_x/y/z`, `enemy_blade_y`,
    `enemy_anim`, `enemy_frame`, `enemy_hp` (83 → 90). Старые БД без колонки
    дают NULL (динамическое чтение, как raw_down).
 7. **`tools/desync_analysis/analyze_enemy.py`** — окна air-атаки игрока

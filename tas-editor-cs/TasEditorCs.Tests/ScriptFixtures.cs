@@ -6,7 +6,7 @@ using System.Runtime.CompilerServices;
 
 namespace TasEditorCs.Tests;
 
-/// The fixture files shared with the Rust tool (`tools/script_gen` in the sibling
+/// The fixture files shared with the Rust tool (`drmod-script-gen` in the sibling
 /// repo): JSON generated there from the mod's own DTOs, plus the goldens the
 /// editor writes next to them (`.tas` for the DSL, `.expected.json` for the JSON).
 ///

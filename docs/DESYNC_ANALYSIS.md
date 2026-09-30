@@ -4,7 +4,7 @@
 
 Данные: `C:\temp\dbdump_out_release\` — record `73` (1021 кадров, P118_BEACH) и
 playbacks `74..82` (1021 кадров каждый, все с `source_replay_id = 73`).
-Экспорт: `tools/dbdump` (CSV/Parquet; на момент анализа схема была 83 колонки,
+Экспорт: `drmod-dbdump` (CSV/Parquet; на момент анализа схема была 83 колонки,
 сейчас — 90). Анализ: pandas-скрипты
 `tools/desync_analysis/`.
 
@@ -109,7 +109,7 @@ fi≈259, потом выросло лишь до 1.38 м.
 на тике N+1. Со сдвигом индексации тик N+1 применит `frame[N+1]` — фазы сойдутся.
 
 - `frame[0]` записи — нулевой ввод спавна (кадры 0–2 пустые), потеря безвредна.
-- Реализация: в `src/tas/replay.rs::playback_tick` — гейт `frame_idx + 1 < len`,
+- Реализация: в `drmod-core/src/tas/replay.rs::playback_tick` — гейт `frame_idx + 1 < len`,
   доступ `frames[frame_idx + 1]`; лог кадра — `frame_idx + 1`.
 - **Результат (record 87 → 88/89/90):** лаг 0 = 100% (было 18.7%), лучший прогон
   88 — макс |Δpos| 2.7 м (было ~17 м), r_anim совпадает до fi=533. НО

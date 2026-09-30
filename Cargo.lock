@@ -554,10 +554,10 @@ name = "drmod-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "drmod-hudhook",
  "drmod-protocol",
  "drmod-replay-types",
  "flate2",
- "hudhook",
  "imgui",
  "rusqlite",
  "serde",
@@ -577,6 +577,23 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "drmod-hudhook"
+version = "0.9.0"
+dependencies = [
+ "bitflags 2.13.2",
+ "cc",
+ "dotenv",
+ "image",
+ "imgui",
+ "once_cell",
+ "parking_lot",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+ "windows-numerics",
 ]
 
 [[package]]
@@ -784,17 +801,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gl_generator"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1a95dfc23a2b4a9a2f5ab41d194f8bfda3cabec42af4e39f08c339eb2a0c124d"
-dependencies = [
- "khronos_api",
- "log",
- "xml-rs",
-]
-
-[[package]]
 name = "half"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -877,24 +883,6 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
-
-[[package]]
-name = "hudhook"
-version = "0.9.0"
-dependencies = [
- "bitflags 2.13.2",
- "cc",
- "dotenv",
- "gl_generator",
- "image",
- "imgui",
- "once_cell",
- "parking_lot",
- "tracing",
- "tracing-subscriber",
- "windows",
- "windows-numerics",
-]
 
 [[package]]
 name = "hyper"
@@ -1044,12 +1032,6 @@ dependencies = [
  "futures-util",
  "wasm-bindgen",
 ]
-
-[[package]]
-name = "khronos_api"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "lazy_static"
@@ -2120,12 +2102,6 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
-
-[[package]]
-name = "xml-rs"
-version = "0.8.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "zerocopy"

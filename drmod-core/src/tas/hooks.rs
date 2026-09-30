@@ -2,7 +2,7 @@
 //! эмуляция ripper/blade через `isKeybindPressed`/`isKeybindDown`,
 //! чтение сырого ввода (клавиатура/мышь).
 
-use hudhook::mh::{MH_ApplyQueued, MhHook};
+use drmod_hudhook::mh::{MH_ApplyQueued, MhHook};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 

@@ -1,5 +1,5 @@
 use chrono::Local;
-use hudhook::{IDirect3DDevice9, ImguiRenderLoop, RenderContext};
+use drmod_hudhook::{IDirect3DDevice9, ImguiRenderLoop, RenderContext};
 use imgui::*;
 use rusqlite::Connection;
 use std::time::Instant;
@@ -632,7 +632,7 @@ impl HelloHud {
     }
 
     /// Выгрузка DLL: отключение сети, остановка HTTP-потока (снятие override
-    /// ввода), затем флаг eject для hudhook (обрабатывается в render-цикле
+    /// ввода), затем флаг eject для drmod-hudhook (обрабатывается в render-цикле
     /// после Present). Единая точка для кнопки «Выход» и `POST /eject`.
     fn eject(&mut self) {
         // Последний шанс сохранить настройки, если кадр с изменением не успел
@@ -640,7 +640,7 @@ impl HelloHud {
         self.persist_settings();
         self.net_client = None;
         self.api.shutdown();
-        hudhook::eject();
+        drmod_hudhook::eject();
     }
 
     /// Помечает настройки «грязными» — UI-контролы зовут это при изменении,
@@ -1174,4 +1174,4 @@ impl ImguiRenderLoop for HelloHud {
     }
 }
 
-hudhook::hudhook!(hudhook::hooks::dx9::ImguiDx9Hooks, HelloHud::new());
+drmod_hudhook::drmod_hudhook!(drmod_hudhook::hooks::dx9::ImguiDx9Hooks, HelloHud::new());

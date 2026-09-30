@@ -108,7 +108,7 @@ fn script_phase_name(status: ScriptStatus) -> &'static str {
 
 /// DTO скрипта (`commands`/`input`/`trigger`/`restart`) живут в
 /// `drmod_replay_types::script` — общие с инструментами, чтобы сгенерированный
-/// `tools/script_gen` JSON гарантированно принимался модом (docs/API.md §4).
+/// `drmod-script-gen` JSON гарантированно принимался модом (docs/API.md §4).
 /// Семантика входов и признак пустоты — там же.
 
 /// Условие по врагу (`EnemyCondition`) описано в `drmod_replay_types::script`;
@@ -1240,7 +1240,7 @@ struct SharedState {
     next_script_id: u32,
     /// Запрос eject через `POST /eject`: HTTP-поток ставит флаг и успевает
     /// ответить, render-цикл проверяет его каждый кадр и выполняет
-    /// `shutdown()` + `hudhook::eject()` (из HTTP-потока это невозможно —
+    /// `shutdown()` + `drmod_hudhook::eject()` (из HTTP-потока это невозможно —
     /// `shutdown()` джойнит сам себя).
     eject_requested: bool,
     /// Запрос смены подфазы через `POST /phase`: id и аргументы кладёт
@@ -1669,7 +1669,7 @@ impl ApiServer {
     }
 
     /// Останавливает HTTP-поток и снимает override ввода. Вызывается перед
-    /// `hudhook::eject()` и в `Drop` — без этого поток останется висеть
+    /// `drmod_hudhook::eject()` и в `Drop` — без этого поток останется висеть
     /// на выгруженном коде DLL, а игра — с залипшим вводом.
     pub fn shutdown(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -2515,9 +2515,9 @@ fn handle_script_stop(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
 }
 
 /// `POST /eject` — запрос выгрузки DLL. Только ставит флаг: сам eject
-/// (`shutdown()` + `hudhook::eject()`) выполняет render-цикл, когда увидит
+/// (`shutdown()` + `drmod_hudhook::eject()`) выполняет render-цикл, когда увидит
 /// флаг в следующем кадре. Из HTTP-потока это невозможно — `shutdown()`
-/// джойнит сам себя, а `hudhook::eject()` обрабатывается в render-цикле.
+/// джойнит сам себя, а `drmod_hudhook::eject()` обрабатывается в render-цикле.
 /// Идемпотентно: повторный запрос до обработки флага тоже возвращает 200.
 fn handle_eject(state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     let mut guard = state.lock().unwrap();

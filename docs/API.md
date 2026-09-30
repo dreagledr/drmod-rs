@@ -67,9 +67,9 @@
 **Жизненный цикл:**
 - **Старт:** `ApiServer` создаётся в `HelloHud::new()` — bind `127.0.0.1:5223`, запуск потока.
 - **Loading (рестарт/меню):** **выполняющийся** (`running`) скрипт автоматически останавливается (override снимается) — иначе залипший ввод сломает пересоздающийся игрок (см. `docs/REPLAY_FINDINGS.md`). **Взведённый** (`armed`) скрипт загрузку **переживает** и стартует уже в новой миссии — на этом построен тиковый триггер (§3.3); авто-стоп стоит только на `running`.
-- **Eject (выгрузка DLL):** перед `hudhook::eject()` вызывается `api.shutdown()` — stop-флаг + join потока + снятие override. Поток — неблокирующий accept с опросом флага (10 мс) и таймауты read/write (1 с) на каждом соединении, поэтому join гарантированно завершается за ограниченное время; внутренних потоков (как у tiny_http) нет — выгрузка DLL безопасна.
+- **Eject (выгрузка DLL):** перед `drmod_hudhook::eject()` вызывается `api.shutdown()` — stop-флаг + join потока + снятие override. Поток — неблокирующий accept с опросом флага (10 мс) и таймауты read/write (1 с) на каждом соединении, поэтому join гарантированно завершается за ограниченное время; внутренних потоков (как у tiny_http) нет — выгрузка DLL безопасна.
 
-**Окно Settings как пульт.** Ручки `/dt`, `/rng`, `/fps`, `/render` продублированы в меню Settings (`src/ui.rs` → `render_tas_controls`, обе сборки): чекбокс «Фиксированный dt» + слайдер `dt, мс` + «Синтетические часы (m_fTicks)», комбо пина RNG (`off/lo/mid/hi/seed/freeze` + поле сида), комбо капа кадров («как в игре/снят/свой лимит» + поле FPS) и три чекбокса headless-прогона (при `skip_overlay` окно Settings тоже скрывается — возврат только извне, `POST /render {"reset": true}`). Контролы пишут **тот же** runtime-стейт, что и HTTP-ручки, через общие сеттеры (`api::set_fixed_dt`, `api::set_fixed_dt_ms`, `api::set_rng_pin`, `api::set_fps_cap`, `render_hooks::set_skip` — источник истины у `render_hooks`), поэтому значения не рассинхронизируются с API; `base_addr` для адресов пацера/`cSlowRateManager` берётся из `HelloHud`.
+**Окно Settings как пульт.** Ручки `/dt`, `/rng`, `/fps`, `/render` продублированы в меню Settings (`drmod-core/src/ui.rs` → `render_tas_controls`, обе сборки): чекбокс «Фиксированный dt» + слайдер `dt, мс` + «Синтетические часы (m_fTicks)», комбо пина RNG (`off/lo/mid/hi/seed/freeze` + поле сида), комбо капа кадров («как в игре/снят/свой лимит» + поле FPS) и три чекбокса headless-прогона (при `skip_overlay` окно Settings тоже скрывается — возврат только извне, `POST /render {"reset": true}`). Контролы пишут **тот же** runtime-стейт, что и HTTP-ручки, через общие сеттеры (`api::set_fixed_dt`, `api::set_fixed_dt_ms`, `api::set_rng_pin`, `api::set_fps_cap`, `render_hooks::set_skip` — источник истины у `render_hooks`), поэтому значения не рассинхронизируются с API; `base_addr` для адресов пацера/`cSlowRateManager` берётся из `HelloHud`.
 
 **Настройки переживают перезапуск игры.** Галочки/слайдер окна Settings (`show_best_ghost`, `ghost_opacity`, `cutscene_skip`, `skip_intro`) и TAS-контролы (`/dt`, `/rng`, `/fps`) сохраняются в таблицу `settings` (`key TEXT PRIMARY KEY, value TEXT`) той же `runs.db`. Формат key/value выбран вместо именованных колонок, чтобы новая настройка не требовала `ALTER TABLE`-миграции. Запись батчится: UI-контролы помечают настройки «грязными» (`settings_dirty`), флаш — один SQLite-пакет в конце кадра `render` (и финальный — при выгрузке DLL в `eject`), а не на каждое движение слайдера. ⚠️ **Здесь истории нет** — сохраняется только последнее значение (перезапись upsert'ом).
 
@@ -312,7 +312,7 @@ X/Z, ±1.0 м по Y), либо через `trigger.ticks` тиков симул
 { "ejecting": true }
 ```
 
-**Механизм:** HTTP-поток **только ставит флаг** в `SharedState` и успевает ответить. Render-цикл проверяет флаг каждый кадр и выполняет ту же последовательность, что и кнопка: отключение сети → `api.shutdown()` (stop-флаг + join HTTP-потока + снятие override ввода) → `hudhook::eject()`. Вызов eject из HTTP-потока невозможен: `shutdown()` джойнит сам себя (deadlock), а `hudhook::eject()` обрабатывается в render-цикле после Present. Кнопка «Выход / Выгрузить DLL» в UI ставит тот же флаг (`ApiServer::request_eject()`) — единый путь выгрузки.
+**Механизм:** HTTP-поток **только ставит флаг** в `SharedState` и успевает ответить. Render-цикл проверяет флаг каждый кадр и выполняет ту же последовательность, что и кнопка: отключение сети → `api.shutdown()` (stop-флаг + join HTTP-потока + снятие override ввода) → `drmod_hudhook::eject()`. Вызов eject из HTTP-потока невозможен: `shutdown()` джойнит сам себя (deadlock), а `drmod_hudhook::eject()` обрабатывается в render-цикле после Present. Кнопка «Выход / Выгрузить DLL» в UI ставит тот же флаг (`ApiServer::request_eject()`) — единый путь выгрузки.
 
 **Поведение после eject:**
 - API перестаёт отвечать (порт 5223 освобождается) — клиент должен учитывать: таймауты на запросы, повторный инжект для продолжения работы.
@@ -660,7 +660,7 @@ AV в `d3d9.dll` (`0xC0000005`, запись по `esi = 0x3FF` в методе-
 
 ### 4.5. Встроенный скрипт NumPad4
 
-NumPad4 запускает тот же механизм, что и `POST /script/run`, со встроенным скриптом «run-jump-attack» (бег ~1 сек → прыжок на бегу → лёгкий удар → поворот камеры) — ровно текущее поведение `update_input_injection` (`src/tas/replay.rs`), но через общий `ScriptRunner`.
+NumPad4 запускает тот же механизм, что и `POST /script/run`, со встроенным скриптом «run-jump-attack» (бег ~1 сек → прыжок на бегу → лёгкий удар → поворот камеры) — ровно текущее поведение `update_input_injection` (`drmod-core/src/tas/replay.rs`), но через общий `ScriptRunner`.
 
 ### 4.6. Текстовый DSL (`.tas`)
 
@@ -688,7 +688,7 @@ DSL — **срез** формата: `raw_key`, `dik_key` и `when_enemy` в н�
 по-прежнему единственный носитель полного §4.2). Формат, таблица токенов, точность
 стиков и гарантии round trip — [`SCRIPT_DSL.md`](SCRIPT_DSL.md); конвертер и golden-файлы
 фикстур живут в редакторе (`tas-editor-cs/`), а сами фикстуры генерирует Rust-тул
-`tools/script_gen` **из общих DTO** (`replay-types/src/script.rs`), поэтому его JSON
+`drmod-script-gen` **из общих DTO** (`drmod-replay-types/src/script.rs`), поэтому его JSON
 гарантированно принимается модом.
 
 ---
@@ -721,13 +721,13 @@ DSL — **срез** формата: `raw_key`, `dik_key` и `when_enemy` в н�
 
 | Файл | Изменение |
 |------|-----------|
-| `Cargo.toml` | `serde_json` (tiny_http убран — собственный HTTP-сервер в `src/api.rs`); `flate2` (rust_backend) — приём `Content-Encoding: gzip` |
-| `src/tas/types.rs` | `#[derive(Serialize)]` для `InputUnit`, `PlayerState`, `CameraState` |
-| `src/api.rs` (новый) | `ScriptRunner`, `RingBuffer`, `ApiServer` (TcpListener, поток, `Arc<Mutex<SharedState>>`), обработчики эндпоинтов |
-| `src/lib.rs` | `mod api;` (без cfg); поле `api: ApiServer`; `api.frame_update(...)` в `render()`; `api.stop_script()` в `stop_on_loading`; NumPad4 → `api.start_builtin_script()`; перед `hudhook::eject()` — `api.shutdown()` |
-| `src/render_hooks.rs` (новый) | Headless-режим (§3.14): флаги скипа overlay/`Present`/геометрии игры + ленивая установка MinHook-заглушек `DrawPrimitive*` на vtable устройства |
-| `vendor/hudhook` (форк) | `set_skip_draw` — не подавать геометрию imgui (логика `render` при этом выполняется); `set_skip_present` — не вызывать настоящий `Present` |
-| `src/tas/replay.rs` | `update_input_injection` остаётся для debug-кнопок (W/camera/jump); при активном API-скрипте debug-инжекция не вмешивается |
+| `Cargo.toml` | `serde_json` (tiny_http убран — собственный HTTP-сервер в `drmod-core/src/api.rs`); `flate2` (rust_backend) — приём `Content-Encoding: gzip` |
+| `drmod-core/src/tas/types.rs` | `#[derive(Serialize)]` для `InputUnit`, `PlayerState`, `CameraState` |
+| `drmod-core/src/api.rs` (новый) | `ScriptRunner`, `RingBuffer`, `ApiServer` (TcpListener, поток, `Arc<Mutex<SharedState>>`), обработчики эндпоинтов |
+| `drmod-core/src/lib.rs` | `mod api;` (без cfg); поле `api: ApiServer`; `api.frame_update(...)` в `render()`; `api.stop_script()` в `stop_on_loading`; NumPad4 → `api.start_builtin_script()`; перед `drmod_hudhook::eject()` — `api.shutdown()` |
+| `drmod-core/src/render_hooks.rs` (новый) | Headless-режим (§3.14): флаги скипа overlay/`Present`/геометрии игры + ленивая установка MinHook-заглушек `DrawPrimitive*` на vtable устройства |
+| `drmod-hudhook` (форк) | `set_skip_draw` — не подавать геометрию imgui (логика `render` при этом выполняется); `set_skip_present` — не вызывать настоящий `Present` |
+| `drmod-core/src/tas/replay.rs` | `update_input_injection` остаётся для debug-кнопок (W/camera/jump); при активном API-скрипте debug-инжекция не вмешивается |
 
 **Release:** `ReplayState` (record/playback) остаётся `#[cfg(debug_assertions)]`; скрипты, API и подача ввода — общий код (примитивы `set_input_override`, `set_ripper_frames`, `set_blade_hold`, `read_player_state` уже не под cfg).
 
@@ -738,8 +738,8 @@ DSL — **срез** формата: `raw_key`, `dik_key` и `when_enemy` в н�
 ### Этап 1 ✅ — HTTP-сервер + запуск скрипта + кольцевой буфер (реализован)
 
 1. `Cargo.toml`: `serde_json`, `Serialize` для типов ввода.
-2. `src/api.rs`: `ScriptRunner` (обобщение `update_input_injection`), `RingBuffer`, `ApiServer` (собственный HTTP-сервер на `TcpListener`, поток, `Arc<Mutex<SharedState>>`), обработчики `/health /state /script/run /script/stop /script/{id} /logs`.
-3. `src/lib.rs`: интеграция (render, loading, NumPad4, eject).
+2. `drmod-core/src/api.rs`: `ScriptRunner` (обобщение `update_input_injection`), `RingBuffer`, `ApiServer` (собственный HTTP-сервер на `TcpListener`, поток, `Arc<Mutex<SharedState>>`), обработчики `/health /state /script/run /script/stop /script/{id} /logs`.
+3. `drmod-core/src/lib.rs`: интеграция (render, loading, NumPad4, eject).
 4. Верификация: build debug+release, ручной тест с `curl`.
 
 ### Этап 2 🔧 — расширение набора входов (частично реализован, ТРЕБУЕТ ДОРАБОТОК — НЕ СЧИТАТЬ РЕАЛИЗОВАННЫМ, 2026-08-18)
@@ -747,9 +747,9 @@ DSL — **срез** формата: `raw_key`, `dik_key` и `when_enemy` в н�
 Полный набор входов: движение в 4 стороны, hold-действия (`ninja_run`/`walk`/`dodge`/`blade`), pressed-действия (`ripper`/`lock_on`/`subweapon`/`item`/`weapon_select`/`codec`/`pause`/`camera_reset`/`zandatsu`), битовые (`jump`/`light_attack`/`heavy_attack`/`ar_mode`), меню-клавиши (`confirm`/`menu_up`/`menu_down`/`menu_left`/`menu_right`).
 
 1. **Дизассемблирование** (`tools/disasm`): call sites `isKeybindDown` (0x61D280) / `isKeybindPressed` (0x61D2D0) — **все** действия, кроме ripper, активируются через `isKeybindDown` (движение 1/2/3, ninja_run 9, dodge 21, execution 20, цикл 5..22); `isKeybindPressed` вызывается только для ripper (11). Биты движения подтверждены логом (`cur_in down`): `0x400000`=W, `0x800000`=S, `0x200000`=A, `0x100000`=D.
-2. `src/tas/hooks.rs`: обобщённая keybind-эмуляция — `set_keybind_hold(keybind, on)` / `set_keybind_pressed(keybind, frames)` для произвольных индексов (вместо жёстко зашитых ripper/blade) + raw-клавиши меню `set_raw_key(code, pressed)` (запись в кэш `ms_KeyInput` с заморозкой `ms_bUpdateKeyboard`).
-3. `src/tas/addresses.rs`: константы `KEYBIND_*` (полный enum `eSaveKeybind` из SDK), биты движения, игровые коды клавиш меню.
-4. `src/api.rs`: новые ключи в `ScriptInput`, обработка в `script_tick`, декодирование в логах (`backward`/`left`/`right`/`ninja_run`).
+2. `drmod-core/src/tas/hooks.rs`: обобщённая keybind-эмуляция — `set_keybind_hold(keybind, on)` / `set_keybind_pressed(keybind, frames)` для произвольных индексов (вместо жёстко зашитых ripper/blade) + raw-клавиши меню `set_raw_key(code, pressed)` (запись в кэш `ms_KeyInput` с заморозкой `ms_bUpdateKeyboard`).
+3. `drmod-core/src/tas/addresses.rs`: константы `KEYBIND_*` (полный enum `eSaveKeybind` из SDK), биты движения, игровые коды клавиш меню.
+4. `drmod-core/src/api.rs`: новые ключи в `ScriptInput`, обработка в `script_tick`, декодирование в логах (`backward`/`left`/`right`/`ninja_run`).
 5. Верификация: build debug+release, ручной тест с `curl` (см. §9).
 
 **Статус верификации (2026-08-18, сессия валидации «выбор → скрипт → логи → фидбек», P118_BEACH):**
@@ -788,12 +788,12 @@ WebSocket или long-polling для «дождись события» (HP уп�
 
 `POST /eject` — выгрузка DLL без кнопки в UI:
 
-1. `src/api.rs`: поле `eject_requested` в `SharedState`, методы `ApiServer::eject_requested()` / `request_eject()`, обработчик `POST /eject` (ставит флаг, возвращает `{"ejecting": true}`).
-2. `src/lib.rs`: метод `HelloHud::eject()` (единая точка: сеть → `api.shutdown()` → `hudhook::eject()`); проверка флага в конце `render()` — там же, где обрабатывается кнопка «Выход».
-3. `src/ui.rs`: обе кнопки «Выход / Выгрузить DLL» → `hud.api.request_eject()` (тот же флаг, что и HTTP — единый путь выгрузки через render-цикл).
+1. `drmod-core/src/api.rs`: поле `eject_requested` в `SharedState`, методы `ApiServer::eject_requested()` / `request_eject()`, обработчик `POST /eject` (ставит флаг, возвращает `{"ejecting": true}`).
+2. `drmod-core/src/lib.rs`: метод `HelloHud::eject()` (единая точка: сеть → `api.shutdown()` → `drmod_hudhook::eject()`); проверка флага в конце `render()` — там же, где обрабатывается кнопка «Выход».
+3. `drmod-core/src/ui.rs`: обе кнопки «Выход / Выгрузить DLL» → `hud.api.request_eject()` (тот же флаг, что и HTTP — единый путь выгрузки через render-цикл).
 4. Верификация: build debug+release, ручной тест `curl -X POST .../eject`, `test_api.ps1 -Eject`.
 
-**Почему флаг, а не вызов из HTTP-потока:** `hudhook::eject()` ставит флаг, обрабатываемый в render-цикле (Present); `api.shutdown()` из HTTP-потока джойнит сам себя (deadlock). Флаг в `SharedState` — минимальный механизм: render-цикл и так опрашивает состояние каждый кадр, задержка в 1 кадр несущественна.
+**Почему флаг, а не вызов из HTTP-потока:** `drmod_hudhook::eject()` ставит флаг, обрабатываемый в render-цикле (Present); `api.shutdown()` из HTTP-потока джойнит сам себя (deadlock). Флаг в `SharedState` — минимальный механизм: render-цикл и так опрашивает состояние каждый кадр, задержка в 1 кадр несущественна.
 
 ### Этап 5 — полная поддержка всего ввода (реальный ввод → логи) (план, требуется проработка)
 
@@ -893,7 +893,7 @@ WebSocket или long-polling для «дождись события» (HP уп�
 3. **Правильная кодировка бит клавиш** (найдена по логу и исправлена): игра
    кодирует игровой код как `0x8000_0000 >> (code & 31)` (обратный порядок), а
    не `1 << (code & 31)` — общий источник истины теперь
-   `drmod_replay_types::key_codes` (используется модом и `tools/dbdump`).
+   `drmod_replay_types::key_codes` (используется модом и `drmod-dbdump`).
 4. **Рабочий канал — DirectInput.** Игра забирает клавиатуру в функции
    `base+0x9D9670` (`Acquire` + `GetDeviceState(0x100, ms_InputKeys)`), причём
    **только когда окно игры в фокусе** (иначе выходит раньше). Хук этой функции

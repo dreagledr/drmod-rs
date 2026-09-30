@@ -6,9 +6,19 @@ members = [
     "drmod-server",
     "drmod-dbdump",
     "drmod-script-gen",
+    "drmod-hudhook",
 ]
 
 [profile.release]
 strip = true
 opt-level = "s"
 lto = true
+
+# Test profile for the whole workspace. `overflow-checks` are off and LTO is on
+# because drmod-hudhook's DX9 test harness drives a real device; a debug-speed
+# build there is pointlessly slow. Profiles live at the workspace root — a
+# `[profile.test]` inside a member manifest is ignored.
+[profile.test]
+opt-level = 3
+overflow-checks = false
+lto = "thin"
