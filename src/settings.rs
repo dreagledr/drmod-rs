@@ -5,6 +5,9 @@ pub struct Settings {
     /// консольного меню, по подтверждённому SKIP убираем меню, снимаем паузу и
     /// заказываем следующую подфазу (см. `game::cutscene_skip`).
     pub cutscene_skip: bool,
+    /// Скип стартовой лого-секвенции при загрузке игры: ручной патч цикла
+    /// лого-задачи (`game::intro_skip`). Включён по умолчанию.
+    pub skip_intro: bool,
 }
 
 impl Default for Settings {
@@ -13,6 +16,7 @@ impl Default for Settings {
             show_best_ghost: true,
             ghost_opacity: 0.5,
             cutscene_skip: true,
+            skip_intro: true,
         }
     }
 }

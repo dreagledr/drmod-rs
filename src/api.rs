@@ -436,6 +436,8 @@ struct StateResponse {
     /// Скип катсцены «как на консоли» (`game::cutscene_skip`):
     /// `off`/`armed`/`closing`/`skipped`.
     cutscene_skip: String,
+    /// Скип стартовой лого-секвенции (`game::intro_skip`): `on`/`off`.
+    intro_skip: String,
     /// Кап кадров (`POST /fps`).
     fps_cap: FpsCapSnapshot,
     /// Headless-режим (`POST /render`).
@@ -1913,6 +1915,11 @@ fn state_json(state: &Arc<Mutex<SharedState>>) -> StateResponse {
         rng_pin: rng_pin_name().to_string(),
         rng_seed: RNG_SEED.load(Ordering::Relaxed),
         cutscene_skip: crate::game::cutscene_skip_status().to_string(),
+        intro_skip: if crate::game::intro_skip::enabled() {
+            "on".to_string()
+        } else {
+            "off".to_string()
+        },
         fps_cap: FpsCapSnapshot {
             cap: fps_cap_name(),
             limit: fps_cap_limit(guard.base_addr),

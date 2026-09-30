@@ -1047,6 +1047,10 @@ impl ImguiRenderLoop for HelloHud {
             self.settings.cutscene_skip,
         );
 
+        // --- Скип стартовой лого-секвенции: ручной патч цикла лого-задачи,
+        // ставится/снимается здесь, в потоке игры (см. game::intro_skip). ---
+        game::intro_skip::update(self.base_addr, self.settings.skip_intro);
+
         // --- Смена фазы/подфазы через API: POST /phase кладёт id и аргументы,
         // здесь (в потоке игры) вызываем движковый changePhase — движок не
         // потокобезопасен, из HTTP-потока вызывать нельзя. ---

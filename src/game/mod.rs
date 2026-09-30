@@ -4,6 +4,7 @@
 
 mod camera;
 mod cutscene_skip;
+pub(crate) mod intro_skip;
 mod phase;
 mod player;
 

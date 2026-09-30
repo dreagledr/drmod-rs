@@ -257,6 +257,11 @@ pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
             ui.slider("Ghost opacity", 0.0f32, 1.0f32, &mut settings.ghost_opacity);
 
             ui.separator();
+            ui.checkbox("Скип заставок (лого при запуске)", &mut settings.skip_intro);
+            let intro_status = game::intro_skip::status();
+            if !intro_status.is_empty() {
+                ui.text_colored([0.5, 1.0, 0.5, 1.0], intro_status);
+            }
             ui.checkbox(
                 "Скип катсцен (P370: Esc → SKIP)",
                 &mut settings.cutscene_skip,
