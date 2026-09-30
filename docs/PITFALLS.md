@@ -9,8 +9,6 @@
 
 - **`tools/dbdump` и `server/` — под x64**, у каждого свой `.cargo/config.toml` (arrow-rs только
   64-bit). Корневой `cargo build --release` (i686) их **не** собирает — только из своей директории.
-- **`mods/cutscene_skip/`** — отдельный крейт со своим `[workspace]`/`target`, в корневой
-  workspace не входит.
 - **Запуск мода для тестов:** инжектить через `cargo run` (прямой запуск `drmod.exe` тригерит
   подтверждение пользователя); саму игру поднимать `py -3 tools/script_tuning/launch_game.py`
   (`--no-inject`, мод потом отдельно). См. `../tools/script_tuning/README.md`.

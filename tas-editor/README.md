@@ -151,7 +151,7 @@ pwsh -File pack.ps1 -Build -Zip
 
 Файл фиксирует `x86_64-pc-windows-msvc`: корневой конфиг drmod-rs задаёт `i686-pc-windows-msvc` (32-битная
 игра), а WinUI 3 / Windows App SDK под i686 не собирается. Крейт — собственный `[workspace]`, в корневой
-workspace не входит (как `mods/cutscene_skip`).
+workspace не входит.
 
 ## Грабли Reactor (найдены при отладке, 2026-09-20)
 

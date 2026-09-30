@@ -7,7 +7,7 @@
 - Мультиплеер (TCP + UDP) — синхронизация позиций игроков
 - Record/Replay ввода (TAS) с хранением кадров в SQLite
 - HTTP API автоматизации на `127.0.0.1:5223` — скрипты ввода, состояние, логи, диагностика
-- Скип in-engine катсцен «как на консоли» (в DLL и отдельным модом `mods/cutscene_skip/`)
+- Скип in-engine катсцен «как на консоли» (в DLL)
 
 ## Зависимости
 
@@ -38,7 +38,7 @@
 | [`docs/INPUT_STATUS.md`](docs/INPUT_STATUS.md) | **История:** статус команд ввода |
 | [`docs/DESYNC_ANALYSIS.md`](docs/DESYNC_ANALYSIS.md) | **История:** анализ десинка Record→Playback |
 | [`docs/REPLAY_CROSS_REVIEW.md`](docs/REPLAY_CROSS_REVIEW.md) | **История:** кросс-ревью replay |
-| `tools/*/README.md`, `mods/cutscene_skip/README.md` | Инструменты и отдельный мод |
+| `tools/*/README.md` | Инструменты |
 
 ## Референс-проекты
 

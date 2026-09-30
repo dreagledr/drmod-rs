@@ -9,7 +9,7 @@ script formats, same run controls — rebuilt on the Rust stack instead of WinUI
 the reference for what the editor *does*; this one is what it does *on this stack*, and its own
 fixtures pin the two together byte for byte (`cargo test`).
 
-The project grew out of the stack spike that used to live at `tas-editor-spike/`: it began as a
+The project grew out of a stack spike: it began as a
 measurement of `dear-app` + `dear-imgui-cte` (a dock space, a 20 000-row table, a code editor) and is
 now the editor. What the spike established — that this stack holds the editor's three hardest things
 at once — is why the port is on it.
