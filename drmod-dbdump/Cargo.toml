@@ -8,7 +8,7 @@ name = "dbdump"
 path = "src/main.rs"
 
 [dependencies]
-drmod-replay-types = { path = "../../replay-types" }
+drmod-replay-types = { path = "../drmod-replay-types" }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 csv = "1"
 arrow = "59"

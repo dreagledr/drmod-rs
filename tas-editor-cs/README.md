@@ -619,7 +619,7 @@ Fixtures/all_inputs.expected.tas   # from the editor: the same script as text
 - `dotnet test TasEditorCs.slnx` compares the goldens;
   `set TAS_REGEN_GOLDENS=1 && dotnet test TasEditorCs.slnx` rewrites them — the way to bless a
   deliberate format change.
-- `cd ../tools/script_gen && cargo test` (re)generates the fixtures and accepts the editor's JSON:
+- `cd ../drmod-script-gen && cargo test` (re)generates the fixtures and accepts the editor's JSON:
   `expected_json_is_accepted.rs` deserializes every `*.expected.json` with the mod's own types and
   asserts it equals the fixture it came from.
 - Fixtures are read from the **source** directory (`CallerFilePath`), not from the build output, so

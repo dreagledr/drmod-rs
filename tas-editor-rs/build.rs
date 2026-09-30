@@ -69,12 +69,12 @@ fn main() {
     // on every run — which changes the very mtime cargo is watching, and the build never settles
     // (measured: a permanent recompile loop).
     for watched in [
-        "../src",
+        "../drmod-core/src",
         "../Cargo.toml",
         "../Cargo.lock",
         "../.cargo/config.toml",
-        "../protocol/src",
-        "../replay-types/src",
+        "../drmod-protocol/src",
+        "../drmod-replay-types/src",
         "../vendor/asi-loader/d3d9.dll",
     ] {
         println!("cargo:rerun-if-changed={watched}");

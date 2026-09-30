@@ -8,7 +8,7 @@
 //!
 //! Пример:
 //!     cargo run -p drmod-script-gen
-//!     cargo run -p drmod-script-gen -- --out ..\..\tas-editor-cs\TasEditorCs.Tests\Fixtures
+//!     cargo run -p drmod-script-gen -- --out ..\tas-editor-cs\TasEditorCs.Tests\Fixtures
 
 mod fixtures;
 

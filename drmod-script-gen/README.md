@@ -15,11 +15,11 @@ round-trip тестов редактора `tas-editor-cs`: редактор ч�
 ## Сборка и запуск
 
 Тул — workspace-член корневого проекта, собирается под **x64** (свой
-`.cargo/config.toml`, как у `dbdump` и `server/`):
+`.cargo/config.toml`, как у `drmod-dbdump` и `drmod-server`):
 
 ```bash
 cargo run -p drmod-script-gen                     # из корня репозитория
-cd tools/script_gen && cargo run                  # или из своей директории
+cd drmod-script-gen && cargo run                  # или из своей директории
 
 # куда писать
 cargo run -p drmod-script-gen -- --out <каталог>
@@ -66,4 +66,4 @@ cargo test            # из этой директории или `cargo test -p
 3. В редакторе: `set TAS_REGEN_GOLDENS=1 && dotnet test TasEditorCs.slnx` —
    перезаписать золотые файлы, затем глазами прочитать `.expected.tas`
    (это и есть текст DSL) и `.expected.json`.
-4. `cd tools/script_gen && cargo test` — приёмка со стороны мода.
+4. `cd drmod-script-gen && cargo test` — приёмка со стороны мода.

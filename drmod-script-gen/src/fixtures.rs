@@ -20,7 +20,7 @@ use serde_json::Value;
 /// Каталог фикстур редактора по умолчанию — относительно этого крейта, чтобы
 /// `cargo run` из любого каталога писал туда же.
 pub const DEFAULT_OUT: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tas-editor-cs/TasEditorCs.Tests/Fixtures");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../tas-editor-cs/TasEditorCs.Tests/Fixtures");
 
 /// Все фикстуры в порядке записи: (имя файла, тело).
 pub fn all() -> Vec<(&'static str, Fixture)> {

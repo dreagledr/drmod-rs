@@ -8,7 +8,10 @@ $projectRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $projectRoot
 
 Write-Host "==> Building dbdump (x64)..." -ForegroundColor Cyan
-Push-Location "$projectRoot/tools/dbdump"
+# Push-Location обязателен: корневой .cargo/config.toml фиксирует i686, а
+# dbdump-у нужен x64 (arrow-rs только 64-битный) — свой конфиг подхватывается
+# лишь когда cwd внутри крейта.
+Push-Location "$projectRoot/drmod-dbdump"
 cargo build --release
 $code = $LASTEXITCODE
 Pop-Location

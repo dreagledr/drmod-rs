@@ -16,16 +16,17 @@ use windows::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 use windows::core::{PCWSTR, h, s, w};
 
 // DLL embedded at compile time. Binary crate compiles after the library,
-// so the DLL already exists in the target directory.
+// so the DLL already exists in the target directory. `target/` stays at the
+// workspace root, one level above this crate.
 #[cfg(debug_assertions)]
 const EMBEDDED_DLL: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/target/i686-pc-windows-msvc/debug/drmod_rs_lib.dll"
+    "/../target/i686-pc-windows-msvc/debug/drmod_rs_lib.dll"
 ));
 #[cfg(not(debug_assertions))]
 const EMBEDDED_DLL: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/target/i686-pc-windows-msvc/release/drmod_rs_lib.dll"
+    "/../target/i686-pc-windows-msvc/release/drmod_rs_lib.dll"
 ));
 
 fn main() {

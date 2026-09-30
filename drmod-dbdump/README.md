@@ -10,12 +10,12 @@
 ## Сборка
 
 Тул — workspace-член корневого проекта, но собирается под **x64** (arrow-rs/
-parquet — только 64-bit; свой `.cargo/config.toml` как у `server/`):
+parquet — только 64-bit; свой `.cargo/config.toml` как у `drmod-server/`):
 
 ```bash
-cd tools/dbdump
+cd drmod-dbdump
 cargo build --release
-# бинарь: ../../target/x86_64-pc-windows-msvc/release/dbdump.exe
+# бинарь: ../target/x86_64-pc-windows-msvc/release/dbdump.exe
 ```
 
 Корневой `cargo build --release` (i686) тул **не** собирает — только из этой

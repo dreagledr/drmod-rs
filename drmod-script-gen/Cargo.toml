@@ -8,5 +8,5 @@ name = "script_gen"
 path = "src/main.rs"
 
 [dependencies]
-drmod-replay-types = { path = "../../replay-types" }
+drmod-replay-types = { path = "../drmod-replay-types" }
 serde_json = "1"

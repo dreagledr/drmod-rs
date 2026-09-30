@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 /// Каталог фикстур редактора — тот же, куда пишет `script_gen`.
 const FIXTURES: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../tas-editor-cs/TasEditorCs.Tests/Fixtures");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../tas-editor-cs/TasEditorCs.Tests/Fixtures");
 
 /// Суффикс JSON, записанного редактором (совпадает с `fixtures::EXPECTED_SUFFIX`).
 const EXPECTED_SUFFIX: &str = ".expected.json";
