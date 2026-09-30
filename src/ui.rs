@@ -247,6 +247,17 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
 pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
     let base_addr = hud.base_addr;
     let settings = &mut hud.settings;
+    // Значения до кадра — чтобы пометить настройки «грязными» только при
+    // реальном изменении (не на каждую перерисовку окна).
+    let before = (
+        settings.show_best_ghost,
+        settings.ghost_opacity,
+        settings.cutscene_skip,
+        settings.skip_intro,
+    );
+    // TAS-контролы пишут в статики `api`, а не в `settings`, — их изменения
+    // отслеживаем отдельным флагом внутри замыкания.
+    let tas_changed = std::cell::Cell::new(false);
     ui.window("Settings")
         .size([320.0, 430.0], Condition::FirstUseEver)
         .position([320.0, 30.0], Condition::FirstUseEver)
@@ -272,20 +283,36 @@ pub fn render_settings_window(ui: &Ui, hud: &mut HelloHud) {
             }
 
             ui.separator();
-            render_tas_controls(ui, base_addr);
+            if render_tas_controls(ui, base_addr) {
+                tas_changed.set(true);
+            }
 
             ui.separator();
             if ui.button("Выход / Выгрузить DLL") {
                 hud.api.request_eject();
             }
         });
+    // Сравнение снимков: пишем только если пользователь реально поменял
+    // значение (слайдер, вернувшийся в исходное, — не изменение).
+    let after = (
+        settings.show_best_ghost,
+        settings.ghost_opacity,
+        settings.cutscene_skip,
+        settings.skip_intro,
+    );
+    if before != after || tas_changed.get() {
+        hud.mark_settings_dirty();
+    }
 }
 
 /// Быстрые настройки TAS-автоматизации (`POST /dt`, `/rng`, `/fps`) прямо в
 /// меню Settings. Пишут тот же runtime-стейт, что и HTTP-ручки, — источник
 /// истины один, поэтому значения не рассинхронизируются с API. `base_addr`
 /// нужен для адресов `cSlowRateManager` (фиксированный шаг) и пацера (кап).
-fn render_tas_controls(ui: &Ui, base_addr: usize) {
+/// Возвращает `true`, если пользователь что-то поменял за этот кадр (тогда
+/// настройки персистятся в `runs.db`).
+fn render_tas_controls(ui: &Ui, base_addr: usize) -> bool {
+    let mut changed = false;
     // Фиксированный шаг времени движка (`POST /dt`).
     let (dt_fixed, dt_ms, dt_ticks) = api::fixed_dt_state();
     let mut fixed = dt_fixed;
@@ -298,8 +325,10 @@ fn render_tas_controls(ui: &Ui, base_addr: usize) {
     // слайдер дельты перезахват не делает.
     if fixed != dt_fixed || ticks != dt_ticks {
         api::set_fixed_dt(base_addr, fixed, None, Some(ticks));
+        changed = true;
     } else if ms != dt_ms {
         api::set_fixed_dt_ms(ms);
+        changed = true;
     }
 
     // Пин RNG решений ИИ (`POST /rng`).
@@ -309,10 +338,12 @@ fn render_tas_controls(ui: &Ui, base_addr: usize) {
     let mut seed = rng_seed as i32;
     if ui.combo_simple_string("RNG", &mut mode, &RNG_MODES[..]) {
         api::set_rng_pin(mode as u32, seed.max(0) as u32);
+        changed = true;
     }
     if mode == 4 || mode == 5 {
         if ui.input_int("seed", &mut seed).build() {
             api::set_rng_pin(mode as u32, seed.max(0) as u32);
+            changed = true;
         }
         ui.text_colored(
             [0.6, 0.6, 0.6, 1.0],
@@ -327,8 +358,11 @@ fn render_tas_controls(ui: &Ui, base_addr: usize) {
     let mut fvalue = fps_value as i32;
     if ui.combo_simple_string("Кап FPS", &mut fmode, &FPS_MODES[..]) {
         api::set_fps_cap(base_addr, fmode as u32, fvalue.max(1) as u32);
+        changed = true;
     }
     if fmode == 2 && ui.input_int("FPS", &mut fvalue).step(10).build() {
         api::set_fps_cap(base_addr, 2, fvalue.clamp(1, 1000) as u32);
+        changed = true;
     }
+    changed
 }

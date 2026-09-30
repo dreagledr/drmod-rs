@@ -27,6 +27,7 @@ use crate::ui::UiState;
 use drmod_replay_types::script::{
     EnemyCondition, MAX_SCRIPT_FRAMES, RestartSpec, ScriptCommand, ScriptInput, ScriptRequest,
 };
+use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
@@ -1105,6 +1106,58 @@ pub(crate) fn set_rng_pin(mode: u32, seed: u32) {
     }
     RNG_PIN.store(mode, Ordering::Relaxed);
     logger::log_line(&format!("api: rng pin = '{}'", rng_pin_name()));
+}
+
+/// Восстанавливает TAS-контролы (`/dt`, `/rng`, `/fps`) из сохранённых настроек
+/// при старте мода. Идёт тем же путём, что и меню Settings: фиксированный шаг —
+/// через `set_fixed_dt` (с перезахватом базы синтетических часов от текущего
+/// `m_fTicks`), кап — записью периода пацера по `base_addr`.
+pub(crate) fn restore_persistent_settings(base_addr: usize, map: &HashMap<String, String>) {
+    use crate::settings;
+
+    let ms = settings::get_f32(map, settings::K_FIXED_DT_MS, NOMINAL_FRAME_MS);
+    let ticks = settings::get_bool(map, settings::K_SYNTH_TICKS, true);
+    let fixed = settings::get_bool(map, settings::K_FIXED_DT, false);
+    set_fixed_dt(base_addr, fixed, Some(ms), Some(ticks));
+
+    set_rng_pin(
+        settings::get_u32(map, settings::K_RNG_PIN, 0),
+        settings::get_u32(map, settings::K_RNG_SEED, 0),
+    );
+
+    // Кап кадров пишем сразу (сеттер вернёт период пацера в поле памяти).
+    set_fps_cap(
+        base_addr,
+        settings::get_u32(map, settings::K_FPS_CAP_MODE, 0),
+        settings::get_u32(map, settings::K_FPS_CAP_VALUE, 60),
+    );
+
+    let (fps_mode, fps_value) = fps_cap_state();
+    logger::log_line(&format!(
+        "api: настройки восстановлены из runs.db: dt={}{} ms={ms:.3}, rng={}, fps_mode={fps_mode} fps_value={fps_value}",
+        if fixed { "on" } else { "off" },
+        if ticks { " (synth)" } else { "" },
+        rng_pin_name(),
+    ));
+}
+
+/// Сохраняет TAS-контролы (`/dt`, `/rng`, `/fps`) в БД настроек. Зовётся из
+/// `HelloHud::persist_settings` при изменениях (UI) или выгрузке DLL.
+pub(crate) fn save_persistent_settings(conn: &Connection) {
+    use crate::settings;
+
+    let (fixed, ms, ticks) = fixed_dt_state();
+    settings::save(conn, settings::K_FIXED_DT, if fixed { "1" } else { "0" });
+    settings::save(conn, settings::K_FIXED_DT_MS, &ms.to_string());
+    settings::save(conn, settings::K_SYNTH_TICKS, if ticks { "1" } else { "0" });
+
+    let (rng_mode, rng_seed) = rng_pin_state();
+    settings::save(conn, settings::K_RNG_PIN, &rng_mode.to_string());
+    settings::save(conn, settings::K_RNG_SEED, &rng_seed.to_string());
+
+    let (fps_mode, fps_value) = fps_cap_state();
+    settings::save(conn, settings::K_FPS_CAP_MODE, &fps_mode.to_string());
+    settings::save(conn, settings::K_FPS_CAP_VALUE, &fps_value.to_string());
 }
 
 /// Очередь ввода активного скрипта для подачи из детура `updateInputUnit`, то

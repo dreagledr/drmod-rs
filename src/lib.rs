@@ -77,6 +77,10 @@ fn init_db() -> (String, Option<String>, Option<Connection>) {
         return (current, None, Some(conn));
     }
 
+    if settings::create_settings_table(&conn).is_err() {
+        return (current, None, Some(conn));
+    }
+
     let prev = conn
         .query_row(
             "SELECT started_at FROM runs ORDER BY id DESC LIMIT 1",
@@ -111,6 +115,14 @@ struct HelloHud {
     pub(crate) ghost_positions: Vec<(segment::Vec3, i64)>,
     pub(crate) ghost_label: String,
     pub(crate) settings: settings::Settings,
+    /// Есть несохранённые изменения настроек (галочки/слайдер/TAS-контролы) —
+    /// флашится в БД на следующем кадре и на выгрузке DLL (`eject`).
+    settings_dirty: bool,
+    /// Настройки уже прочитаны из БД и применены (делается один раз на первом
+    /// кадре `render`, а не в `new()`: чтение БД и запись в поля движка на
+    /// старте давали заметный ступор при загрузке игры и трогали ещё не
+    /// инициализированные `cSlowRateManager`/пацер).
+    settings_restored: bool,
     // Скип катсцены «как на консоли» — кадровый автомат, живёт в потоке игры.
     pub(crate) cutscene_skip: game::CutsceneSkip,
     // 3D test dummy
@@ -277,6 +289,11 @@ impl HelloHud {
         // перезатирается при старте мода — см. `logger::init_state_log`.
         logger::init_state_log();
 
+        // Сохранённые настройки (окно Settings + TAS-контролы) читаем не здесь:
+        // чтение БД и запись в поля движка на старте давали ступор при загрузке
+        // и трогали ещё не инициализированные `cSlowRateManager`/пацер. Читаем
+        // их один раз на первом кадре `render` — см. `restore_settings_once`.
+
         // HTTP API автоматизации — работает в debug и release.
         let api = api::ApiServer::new(base_addr);
 
@@ -299,6 +316,8 @@ impl HelloHud {
             ghost_positions: Vec::new(),
             ghost_label: String::new(),
             settings: settings::Settings::default(),
+            settings_dirty: false,
+            settings_restored: false,
             cutscene_skip: game::CutsceneSkip::new(),
             dummy: CylinderRenderer::new(24, 0xFFFFFFFF), // white → colour via TFACTOR
             remote_sphere: SphereRenderer::new(16, 8, 0xFFFFFFFF),
@@ -606,17 +625,83 @@ impl HelloHud {
         ui::render_multiplayer_window(ui, self);
 
         ui::render_settings_window(ui, self);
+
+        // Настройки/TAS-контролы могли измениться в этом кадре — сохраняем
+        // пакетом (не на каждое движение слайдера, см. `settings_dirty`).
+        self.persist_settings();
     }
 
     /// Выгрузка DLL: отключение сети, остановка HTTP-потока (снятие override
     /// ввода), затем флаг eject для hudhook (обрабатывается в render-цикле
     /// после Present). Единая точка для кнопки «Выход» и `POST /eject`.
     fn eject(&mut self) {
+        // Последний шанс сохранить настройки, если кадр с изменением не успел
+        // дойти до `persist_settings`.
+        self.persist_settings();
         self.net_client = None;
         self.api.shutdown();
         hudhook::eject();
     }
 
+    /// Помечает настройки «грязными» — UI-контролы зовут это при изменении,
+    /// флаш происходит в конце кадра (`render`) и на `eject`.
+    pub(crate) fn mark_settings_dirty(&mut self) {
+        self.settings_dirty = true;
+    }
+
+    /// Однократно (на первом кадре) читает сохранённые настройки из БД и
+    /// применяет их: галочки/слайдер — в `self.settings`, TAS-контролы — через
+    /// `api::restore_persistent_settings` (пишет поля движка по `base_addr`).
+    /// Отдельный от `new()` шаг: на старте игры эта работа давала ступор.
+    fn restore_settings_once(&mut self) {
+        if self.settings_restored {
+            return;
+        }
+        self.settings_restored = true;
+        let Some(conn) = &self.db_conn else {
+            return;
+        };
+        let map = settings::load_all(conn);
+        if map.is_empty() {
+            return;
+        }
+        settings::apply_to(&mut self.settings, &map);
+        api::restore_persistent_settings(self.base_addr, &map);
+    }
+
+    /// Сохраняет настройки в `runs.db`, если были изменения. Один `UPDATE`-пакет
+    /// на кадр, где что-то реально поменялось, — не на каждое движение слайдера.
+    fn persist_settings(&mut self) {
+        if !self.settings_dirty {
+            return;
+        }
+        self.settings_dirty = false;
+        let Some(conn) = &self.db_conn else {
+            return;
+        };
+        settings::save(
+            conn,
+            settings::K_SHOW_BEST_GHOST,
+            if self.settings.show_best_ghost { "1" } else { "0" },
+        );
+        settings::save(
+            conn,
+            settings::K_GHOST_OPACITY,
+            &self.settings.ghost_opacity.to_string(),
+        );
+        settings::save(
+            conn,
+            settings::K_CUTSCENE_SKIP,
+            if self.settings.cutscene_skip { "1" } else { "0" },
+        );
+        settings::save(
+            conn,
+            settings::K_SKIP_INTRO,
+            if self.settings.skip_intro { "1" } else { "0" },
+        );
+        // TAS-контролы (`/dt`, `/rng`, `/fps`) — их состояние живёт в статиках `api`.
+        api::save_persistent_settings(conn);
+    }
 }
 
 unsafe impl Send for HelloHud {}
@@ -768,6 +853,12 @@ impl ImguiRenderLoop for HelloHud {
     }
 
     fn render(&mut self, ui: &mut Ui) {
+        // Первый кадр: читаем сохранённые настройки из БД и применяем их. Здесь,
+        // а не в `new()`, потому что к этому моменту движок уже инициализирован
+        // (`cSlowRateManager`/пацер), а сам render идёт в потоке игры — то есть
+        // запись в поля движка безопасна. До этого кадра работают дефолты.
+        self.restore_settings_once();
+
         // Кап кадров (`POST /fps`): render идёт внутри Present, то есть после
         // того, как движок выставил период пацера, и до его ожидания — запись
         // успевает всегда. В режиме «как в игре» вызов ничего не делает.
