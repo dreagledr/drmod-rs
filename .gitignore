@@ -1,6 +1,8 @@
 /target
 /tools/disasm/target
 /drmod-tas-editor/target
+# xtask is its own workspace root (see xtask/Cargo.toml), so it gets a target/ of its own
+/xtask/target
 # Раскладка докспейса редактора: рабочий файл ImGui, перезаписывается на каждом запуске
 /drmod-tas-editor/drmod-tas-editor-layout.ini
 # Mod payload the editor installs: staged by build.rs into OUT_DIR, not committed

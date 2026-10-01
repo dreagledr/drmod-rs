@@ -791,7 +791,7 @@ WebSocket или long-polling для «дождись события» (HP уп�
 1. `drmod-core/src/api.rs`: поле `eject_requested` в `SharedState`, методы `ApiServer::eject_requested()` / `request_eject()`, обработчик `POST /eject` (ставит флаг, возвращает `{"ejecting": true}`).
 2. `drmod-core/src/lib.rs`: метод `HelloHud::eject()` (единая точка: сеть → `api.shutdown()` → `drmod_hudhook::eject()`); проверка флага в конце `render()` — там же, где обрабатывается кнопка «Выход».
 3. `drmod-core/src/ui.rs`: обе кнопки «Выход / Выгрузить DLL» → `hud.api.request_eject()` (тот же флаг, что и HTTP — единый путь выгрузки через render-цикл).
-4. Верификация: build debug+release, ручной тест `curl -X POST .../eject`, `test_api.ps1 -Eject`.
+4. Верификация: build debug+release, ручной тест `curl -X POST .../eject`, `cargo xtask test-api --eject`.
 
 **Почему флаг, а не вызов из HTTP-потока:** `drmod_hudhook::eject()` ставит флаг, обрабатываемый в render-цикле (Present); `api.shutdown()` из HTTP-потока джойнит сам себя (deadlock). Флаг в `SharedState` — минимальный механизм: render-цикл и так опрашивает состояние каждый кадр, задержка в 1 кадр несущественна.
 
@@ -807,7 +807,7 @@ WebSocket или long-polling для «дождись события» (HP уп�
 ## 9. Верификация
 
 - `cargo build` (debug) и `cargo build --release` — компиляция без ошибок.
-- **Смок-тест:** `.\test_api.ps1` (игра запущена, мод инжектирован) — health/state/script run+get+stop/logs, error-пути (400/404), нагрузка 20 параллельных запросов.
+- **Смок-тест:** `cargo xtask test-api` (игра запущена, мод инжектирован) — health/state/script run+get+stop/logs, error-пути (400/404), нагрузка 20 параллельных запросов.
 - Ручной тест (игра запущена, мод инжектирован):
   1. `curl http://127.0.0.1:5223/health` → `{"status":"ok",...}`.
   2. `curl http://127.0.0.1:5223/state` → снимок с позицией/HP/миссией.
@@ -820,7 +820,7 @@ WebSocket или long-polling для «дождись события» (HP уп�
   7. `POST /script/stop` → скрипт останавливается, ввод возвращается игроку.
   8. Вход в loading → скрипт авто-стоп (статус `stopped`).
   9. Eject (кнопка «Выход») → порт 5223 освобождается (повторный инжект не падает с «address in use»).
-  10. `POST /eject` → `{"ejecting": true}`, игра выгружает DLL, порт 5223 освобождается (проверка: `/health` перестаёт отвечать), повторный инжект работает. Автоматически — `.\test_api.ps1 -Eject` (финальный шаг, выгружает DLL).
+  10. `POST /eject` → `{"ejecting": true}`, игра выгружает DLL, порт 5223 освобождается (проверка: `/health` перестаёт отвечать), повторный инжект работает. Автоматически — `cargo xtask test-api --eject` (финальный шаг, выгружает DLL).
 
 ---
 

@@ -3,3 +3,16 @@ target = "i686-pc-windows-msvc"
 
 [target.i686-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# `cargo xtask <command>` — the build automation that used to be a set of PowerShell scripts
+# (`build.ps1`, `build_tools.ps1`, `drmod-tas-editor/pack.ps1`, `test_api.ps1`, `test_connect.ps1`).
+#
+# ⚠️ `--manifest-path` and not `--package`: the xtask crate is its own workspace root (`xtask/`), so
+# a package selector cannot reach it from here — cargo resolves `--package` against *this* workspace,
+# where the crate is deliberately absent. The trailing `--` is what keeps the xtask command's own
+# first argument from being eaten by cargo.
+#
+# `--release` is not for speed alone: `target/xtask` shares nothing with the mod's `target/`, and a
+# release xtask avoids a debug rebuild of the whole dependency graph on every invocation.
+[alias]
+xtask = "run --release --manifest-path xtask/Cargo.toml --"

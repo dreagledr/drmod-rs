@@ -17,22 +17,13 @@ jobs:
       - name: Add i686 target
         run: rustup target add i686-pc-windows-msvc
 
-      - name: Install UPX
-        run: choco install upx -y
-
-      - name: Build, compress, package
+      - name: Build and package the mod
         shell: pwsh
-        run: .\build.ps1
+        run: cargo xtask build
 
-      - name: Build TAS editor (Rust)
+      - name: Build and package the TAS editor (Rust)
         shell: pwsh
-        run: |
-          .\drmod-tas-editor\pack.ps1 `
-            -SkipCargo `
-            -Build `
-            -OutDir .\out\drmod-tas-editor `
-            -Zip `
-            -ZipPath .\out\drmod-tas-editor.zip
+        run: cargo xtask pack-editor --skip-cargo
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5

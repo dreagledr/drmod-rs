@@ -1,0 +1,3 @@
+# xtask is a host tool, not part of the game: the root config forces i686, this one does not.
+[build]
+target = "x86_64-pc-windows-msvc"

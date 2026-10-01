@@ -71,3 +71,18 @@ cargo build --release
 корневой сборки исключены x64-крейты `drmod-dbdump/` и `drmod-script-gen/`
 (arrow-rs только 64-битный) — они собираются из своей директории, где лежит
 собственный `.cargo/config.toml`.
+
+## Сборка артефактов (`cargo xtask`)
+
+Упаковка релиза — в `xtask/`, а не в PowerShell-скриптах. Всё, что публикуется,
+складывается в `out/` в корне:
+
+| Команда | Что делает |
+|---------|------------|
+| `cargo xtask build` | `out/drmod-rs.zip` (лаунчер) и `out/drmod-asi.zip` (ASI-набор с загрузчиком) |
+| `cargo xtask build-tools` | `out/dbdump.exe` (x64) и `out/dump-replay-input.exe` (i686) |
+| `cargo xtask pack-editor` | `out/drmod-tas-editor/` и `out/drmod-tas-editor.zip` |
+| `cargo xtask test-api` | смок-тест HTTP API (нужна запущенная игра с инжектированным модом) |
+| `cargo xtask test-connect` | смок-тест сервера мультиплеера |
+
+Подробности и грабли — `QWEN.md`, §Build automation.

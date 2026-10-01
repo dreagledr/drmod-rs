@@ -218,7 +218,7 @@ py -3 tools\script_tuning\sweep.py --run --repeat 3 --step 1 --jump 45:45 --atta
 ```
 
 Без `--run` утилита только раскладывает варианты в `out\tuning\*.json` —
-их можно запускать вручную (`run_json.py`, `POST /script/run` или `test_api.ps1`).
+их можно запускать вручную (`run_json.py`, `POST /script/run` или `cargo xtask test-api`).
 
 ## Подброс, ninja run и адаптивный удар — история
 

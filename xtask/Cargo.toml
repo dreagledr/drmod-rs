@@ -1,0 +1,40 @@
+# ⚠️ The crate is deliberately **not** a member of the root workspace: cargo then never tries to
+# build it as part of a plain `cargo build --release` at the root, which is what keeps the mod's own
+# build untouched. The `[workspace]` table at the bottom is what makes that explicit — see its own
+# comment. Reached through the `xtask` alias in the root `.cargo/config.toml`.
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2024"
+description = "Build automation for drmod-rs — the replacement for the PowerShell packaging scripts"
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+[dependencies]
+# The multiplayer smoke test speaks the server's own protocol rather than hand-written JSON, so a
+# message shape that changes in the game's client cannot leave this test behind.
+drmod-protocol = { path = "../drmod-protocol" }
+# The HTTP smoke test builds `POST /script/run` bodies out of the mod's own DTOs, for the same
+# reason: the test then exercises the format the mod actually accepts.
+drmod-replay-types = { path = "../drmod-replay-types" }
+serde_json = "1"
+# Blocking HTTP client for both smoke tests. Already in the tree through `drmod-tas-editor`.
+ureq = "3"
+# Zip writing for the release artifacts, and nothing else: the PowerShell scripts shelled out to
+# `Compress-Archive`, which a Rust build tool should not need.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+# ⚠️ `members` lists this crate itself, and that one line is what makes the crate its own workspace
+# root. A package in a subdirectory is otherwise adopted by the nearest ancestor workspace; naming it
+# as a member of its own workspace is how cargo is told "this tree ends here". The table cannot be
+# left empty either — cargo rejects a `[workspace]` without members beside a `[package]`, and
+# `package.workspace` is not allowed together with a `[workspace]` table at all.
+#
+# The root's `[workspace] members` is untouched by this, so `cargo build --release` there never builds
+# this crate; and the crate gets its own `target/` plus its own `.cargo/config.toml` (x64 — see
+# `.cargo/`), which is what the tests need (they speak to a 64-bit-only dev machine's tooling, not to
+# the 32-bit game).
+[workspace]
+members = ["."]

@@ -98,6 +98,10 @@ tools/
 ├── script_size/     # Script/log byte sizes, gzip acceptance check, "what fits the body limit" (python)
 └── disasm/          # Disassembly scripts: scan_srm, disasm (llvm-objdump by RVA), find_vtable, find_strings, peek, mem_find_u32
 drmod-tas-editor/    # TAS Editor: dear-app + dear-imgui-cte (no XAML); own [workspace] and x64 config; build.rs builds the mod and embeds it (OUT_DIR/Mod/ → include_bytes!), so one `cargo build` stages the payload; tests/fixtures/golden/ holds the canonical script fixtures
+xtask/               # Build automation: build / build-tools / pack-editor / test-api / test-connect.
+                     # Own [workspace] (members = ["."]) so the root build never builds it; reached
+                     # through `cargo xtask` (alias in the root .cargo/config.toml). Everything it
+                     # publishes lands in out/ at the root. Replaces the five PowerShell scripts.
 ref/                 # Git submodules — read-only reference projects
 vendor/              # Third-party binaries and C sources, checked in — asi-loader/ (Ultimate-ASI-Loader d3d9.dll + license + provenance), minhook/ (single copy, built by drmod-hudhook/build.rs)
 ├── asi-loader/
@@ -107,7 +111,7 @@ vendor/              # Third-party binaries and C sources, checked in — asi-lo
 ⚠️ **Invariant: the package name equals the directory name.** `target/` stays at the
 workspace root (the home of the i686 mod), so `drmod-injector/src/main.rs` reaches the
 embedded DLL through `include_bytes!("../target/i686-pc-windows-msvc/{debug,release}/drmod_rs_lib.dll")`
-and `build.ps1` keeps working unchanged. The `drmod-core` library target keeps its
+and `cargo xtask build` keeps working unchanged. The `drmod-core` library target keeps its
 distinct name `drmod_rs_lib` (the `target/…/drmod_rs_lib.dll` contract), and the
 injector's binary is `drmod` (the `target/…/drmod.exe` contract).
 
@@ -115,8 +119,9 @@ injector's binary is `drmod` (the `target/…/drmod.exe` contract).
 `drmod-server`): Cargo merges `.cargo/config.toml` by **cwd ancestors**, not by
 manifest path, so they pick up the root's `i686-pc-windows-msvc` target unless you
 `cd` into their directory, where each one keeps its own `.cargo/config.toml`. This
-is not a bug and `--manifest-path` does not fix it — `Push-Location` in
-`build_tools.ps1` is the load-bearing construct (it carries a comment saying so).
+is not a bug and `--manifest-path` does not fix it — but an explicit
+`--target x86_64-pc-windows-msvc` **does**, which is how `xtask build-tools` builds
+them from the root without a `Push-Location`.
 
 ## Memory Offsets
 
@@ -248,10 +253,10 @@ editor (`drmod-tas-editor/`, with its own
 
 ⚠️ **The root config wins by cwd, not by manifest path.** Cargo merges
 `.cargo/config.toml` from the **ancestors of the working directory**, so an x64
-crate is built for `i686-pc-windows-msvc` unless you actually `cd` into it —
-`--manifest-path` does not help. That is why `build_tools.ps1` wraps the x64
-builds in `Push-Location` (there is a comment there saying so). Build an x64
-crate as `cd drmod-dbdump && cargo build --release`, not from the root.
+crate is built for `i686-pc-windows-msvc` unless you either actually `cd` into it
+or pass the triple explicitly. Build an x64 crate by hand as
+`cd drmod-dbdump && cargo build --release`, or let `cargo xtask build-tools` do
+it — that is what the `--target` argument there is for.
 
 ### Run
 
@@ -270,14 +275,51 @@ cargo run --release -- -n "Custom Window Name.exe"
 - `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary (DLL embedded via `include_bytes!` from `drmod-injector/src/main.rs`, extracted to `%TEMP%` at runtime)
 - `target/i686-pc-windows-msvc/release/drmod_rs_lib.dll` — the injected library
 
+### Build automation (`xtask`, both builds)
+
+Everything that used to be a PowerShell script is now the `xtask` crate
+(`xtask/`, its own `[workspace]` via `members = ["."]` so `cargo build` at the root
+never builds it). The alias lives in the root `.cargo/config.toml` and reaches it with
+`--manifest-path`, **not** `--package`: the crate is its own workspace root, so a package
+selector cannot see it from here.
+
+| Command | Was | Produces |
+|---------|-----|----------|
+| `cargo xtask build` | `build.ps1` | `out/drmod-rs.zip` (launcher) + `out/drmod-asi.zip` (`plugins/drmod_rs_lib.asi` + `d3d9.dll` + `readme.txt`) |
+| `cargo xtask build-tools` | `build_tools.ps1` | `out/dbdump.exe` (x64) + `out/dump-replay-input.exe` (i686) |
+| `cargo xtask pack-editor [--skip-cargo]` | `drmod-tas-editor/pack.ps1` | `out/drmod-tas-editor/` + `out/drmod-tas-editor.zip` |
+| `cargo xtask test-api [--eject]` | `test_api.ps1` | HTTP API smoke test (game running, mod injected) |
+| `cargo xtask test-connect` | `test_connect.ps1` | multiplayer server smoke test |
+
+⚠️ **One layout: everything publishes into `<root>/out/`.** `pack-editor` used to assemble
+into the editor's own `out/`; it now fills the root's `out/` like the other two, so the whole
+release is one directory.
+
+⚠️ **Nothing is UPX-packed any more** (the `upx --best --lzma` steps and CI's
+`choco install upx` are gone). ⚠️ Not even by accident: the ASI payload must stay
+byte-identical to `drmod_rs_lib.dll` (verified by SHA256, 2026-10-01), because
+`drmod.exe` embeds that same DLL and extracts it verbatim — `vendor/asi-loader/README.md`.
+Also ⚠️ **`pack-editor` always builds** — it has no "pack whatever exe is in `target/`"
+mode, because a release must archive a build rather than last week's binary. `--skip-cargo`
+is the only knob: it sets `TAS_EDITOR_SKIP_MOD_BUILD=1` for that one nested invocation (never
+in the parent process, or it would leak into everything after it), so the editor embeds the
+i686 DLL the root's `cargo xtask build` just made instead of compiling the mod a second time.
+
+⚠️ **Both smoke tests go through the project's own DTOs** — `test-api` builds its request
+bodies from `drmod-replay-types::script` and `test-connect` speaks `drmod_protocol::TcpMessage`,
+instead of the hand-written JSON strings the scripts used. A protocol or script-format change
+is now a compile error there rather than a test that quietly sends the old shape. ⚠️ Every
+request carries a timeout: the API lives in the game's render loop and stops answering when the
+game is paused, so a client without one hangs instead of reporting.
+
 ### Smoke tests
 
-- `test_connect.ps1` — multiplayer server (TCP connect/disconnect, dashboard)
-- `test_api.ps1` — HTTP API (health/state/script run+get+stop/logs, error paths, 20 parallel requests, optional `-Eject` final step that unloads the DLL); requires the game running with the mod injected
+- `cargo xtask test-connect` — multiplayer server (TCP connect/disconnect, dashboard)
+- `cargo xtask test-api` — HTTP API (health/state/script run+get+stop/logs, error paths, 20 parallel requests, optional `--eject` final step that unloads the DLL); requires the game running with the mod injected
 
 ### CI
 
-`.github/workflows/build.yml` runs on a `v*` tag and produces **three** zips: `build.ps1` packages the mod **both ways** — `out/drmod-rs.zip` (the self-injecting launcher) and `out/drmod-asi.zip` (the same DLL as `plugins/drmod_rs_lib.asi` plus the vendored ASI loader, which the TAS editor also embeds) — then `drmod-tas-editor/pack.ps1 -SkipCargo -Build` packages the editor as `out/drmod-tas-editor.zip`. All three go to the workflow artifacts and the GitHub Release. ⚠️ The editor step runs **after** the root `build.ps1` and passes `-SkipCargo`: that is what makes it reuse the i686 `drmod_rs_lib.dll` the root script just built instead of compiling the mod again (it sets `TAS_EDITOR_SKIP_MOD_BUILD=1`, which skips the build but not the check for the DLL). ⚠️ The editor and the ASI archive are **not** uploaded to Yandex S3 — the mod's S3 step uses `clear: true`, which that action implements as an unfiltered bucket wipe, so a second upload would delete the mod's files. `.github/workflows/deploy.yml` deploys the multiplayer server to the VPS on pushes to `main`.
+`.github/workflows/build.yml` runs on a `v*` tag and produces **three** zips: `cargo xtask build` packages the mod **both ways** — `out/drmod-rs.zip` (the self-injecting launcher) and `out/drmod-asi.zip` (the same DLL as `plugins/drmod_rs_lib.asi` plus the vendored ASI loader, which the TAS editor also embeds) — then `cargo xtask pack-editor --skip-cargo` packages the editor as `out/drmod-tas-editor.zip`. All three go to the workflow artifacts and the GitHub Release. ⚠️ The editor step runs **after** `cargo xtask build` and passes `--skip-cargo`: that is what makes it reuse the i686 `drmod_rs_lib.dll` the first command just built instead of compiling the mod again (it sets `TAS_EDITOR_SKIP_MOD_BUILD=1`, which skips the build but not the check for the DLL). ⚠️ The editor and the ASI archive are **not** uploaded to Yandex S3 — the mod's S3 step uses `clear: true`, which that action implements as an unfiltered bucket wipe, so a second upload would delete the mod's files. `.github/workflows/deploy.yml` deploys the multiplayer server to the VPS on pushes to `main`.
 
 The ASI form needs an ASI loader the game does not ship with: `vendor/asi-loader/` holds the Win32 build of [Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) with its MIT license and the SHA512 of the release it came from. ⚠️ Take the asset from the rolling `Win32-latest` tag (`d3d9-Win32.zip`) — the versioned release's only file is `dinput8.dll`, and both files must be Win32 (the game is a 32-bit process and silently never loads a 64-bit `d3d9.dll`). `vendor/asi-loader/README.md`.
 
