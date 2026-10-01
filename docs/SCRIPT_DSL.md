@@ -2,12 +2,12 @@
 
 Текстовый формат скрипта — того же самого, который принимает `POST /script/run`
 (§4 в [`API.md`](API.md)). Файл читается человеком и LLM, а конвертер редактора
-(`tas-editor-cs/`) держит его в обе стороны с JSON.
+(`tas-editor-rs/`) держит его в обе стороны с JSON.
 
 > **Статус:** формат v2 (консольная лексика, движение стиком). Изменения — только
-> через этот документ. Реализация: `tas-editor-cs/TasEditorCs/Script/`
-> (`ScriptDsl.cs` — текст, `ScriptJson.cs` — JSON, `ScriptDocument.cs` /
-> `ScriptCommand.cs` — модель, `ScriptFrames.cs` — проекция в кадры таблицы).
+> через этот документ. Реализация: `tas-editor-rs/src/script/`
+> (`dsl.rs` — текст, `json.rs` — JSON, `model.rs` / `commands.rs` — модель,
+> `frames.rs` — проекция в кадры таблицы).
 
 Пример (он же golden-файл `Fixtures/rules_ticks.expected.tas`):
 
@@ -195,24 +195,22 @@ a stick token or `by``), лимит — команду (`commands[4]: t+duration
   (`drmod-replay-types/src/script.rs`) — тех же, которыми мод десериализует запрос:
 
   ```bash
-  cargo run -p drmod-script-gen            # в tas-editor-cs/TasEditorCs.Tests/Fixtures
+  cargo run -p drmod-script-gen            # в tas-editor-rs/tests/fixtures/golden
   cargo run -p drmod-script-gen -- --out <каталог>
   ```
 
-- **Golden-файлы редактора.** Рядом с фикстурой `<имя>.json` редактор пишет
+- **Golden-файлы редактора.** Рядом с фикстурой `<имя>.json` редактор держит
   `<имя>.expected.json` (её же JSON) и `<имя>.expected.tas` (её же текст).
-  Перегенерация — после осознанного изменения формата:
+  Это эталон, а не выход генератора: `tas-editor-rs/tests/golden.rs` пишет каждую
+  фикстуру своим конвертером и сверяет с ним байт в байт. После осознанного
+  изменения формата золотые файлы правятся руками и коммитятся вместе с фикстурой
+  (`cd tas-editor-rs && cargo test`).
 
-  ```bash
-  set TAS_REGEN_GOLDENS=1 && dotnet test TasEditorCs.slnx
-  ```
+- **Конвертер.** `tas-editor-rs/src/script/dsl.rs` (`Write`/`Parse`),
+  `json.rs` (`Read`/`Write` + лимиты), `frames.rs` (`Expand`/`Collapse`).
 
-- **Конвертер.** `TasEditorCs/Script/ScriptDsl.cs` (`Write`/`Parse`),
-  `ScriptJson.cs` (`Read`/`Write` + лимиты), `ScriptFrames.cs` (`Expand`/`Collapse`).
-
-- **Редактор.** Нижний регион `tas-editor-cs/` правит `.tas` этим же конвертером: текст
+- **Редактор.** Панель скрипта в `tas-editor-rs/` правит `.tas` этим же конвертером: текст
   перечитывается на каждое нажатие, и строка над полем — либо сводка
   (`имя · N команд · последний кадр M`), либо сообщение парсера с номером строки.
-  Строки текстбокс отдаёт через `\r`, поэтому в парсер они уходят после
-  нормализации (`ScriptTextEditor.Lines`); черновик по каждому скрипту живёт в
-  состоянии панели, а не в файле.
+  Буфер текстбоксу отдаётся через `\n` (не `\r` — иначе вся строка склеивается);
+  черновик по каждому скрипту живёт в состоянии панели, а не в файле.

@@ -803,7 +803,7 @@ def write_report(rows: list[dict], out_dir: Path, frames: list[int],
     lines.append("Порядок — `drmod-dbdump/README.md` (`--script`): выгрузить "
                  "записанный прогон в JSON и подать здесь же как `--file`, "
                  "чтобы получить реальный `bytes/кадр` (эталонные `.tas` "
-                 "находятся в `tas-editor-cs/TasEditorCs.Tests/Fixtures/`).")
+                 "находятся в `tas-editor-rs/tests/fixtures/golden/`).")
     (HERE / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

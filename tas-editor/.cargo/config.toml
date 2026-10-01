@@ -1,3 +1,0 @@
-# WinUI 3 / Windows App SDK не собирается под i686, который задаёт корневой .cargo/config.toml drmod-rs.
-[build]
-target = "x86_64-pc-windows-msvc"

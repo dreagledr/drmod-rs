@@ -2,7 +2,7 @@
 name = "tas-editor-rs"
 version = "0.1.0"
 edition = "2024"
-description = "TAS editor for Metal Gear Rising: the C# editor's functionality on the dear-app + dear-imgui-cte stack"
+description = "TAS editor for Metal Gear Rising, on the dear-app + dear-imgui-cte stack"
 
 # ⚠️ The crate is `tas-editor-rs` and the binary is `tas-editor-rs.exe`. The library target keeps
 # the same name, so its Rust path is `tas_editor_rs`.

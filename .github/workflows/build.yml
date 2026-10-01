@@ -24,21 +24,6 @@ jobs:
         shell: pwsh
         run: .\build.ps1
 
-      - name: Build TAS editor (C#)
-        shell: pwsh
-        run: |
-          .\tas-editor-cs\pack.ps1 `
-            -BuildMod `
-            -SkipCargo `
-            -Build `
-            -PublishDir .\tas-editor-cs\publish `
-            -OutDir .\tas-editor-cs\out\tas-editor `
-            -Zip `
-            -ZipPath .\out\tas-editor-cs.zip
-
-      # ⚠️ -SkipCargo reuses the drmod_rs_lib.dll that `build.ps1` just built in the same run, the
-      # same way the C# step above does. Without it this would rebuild the i686 mod a second time
-      # for no new result.
       - name: Build TAS editor (Rust)
         shell: pwsh
         run: |
@@ -61,12 +46,6 @@ jobs:
           name: drmod-asi
           path: out/drmod-asi.zip
 
-      - name: Upload TAS editor artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: tas-editor-cs
-          path: out/tas-editor-cs.zip
-
       - name: Upload TAS editor (Rust) artifact
         uses: actions/upload-artifact@v5
         with:
@@ -79,7 +58,6 @@ jobs:
           files: |
             out/drmod-rs.zip
             out/drmod-asi.zip
-            out/tas-editor-cs.zip
             out/tas-editor-rs.zip
 
   upload-s3:

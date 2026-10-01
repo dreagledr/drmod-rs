@@ -1,7 +1,7 @@
 # script_gen — JSON-фикстуры скрипта для редактора
 
 Генерирует набор JSON-скриптов (`POST /script/run`, формат `docs/API.md` §4) для
-round-trip тестов редактора `tas-editor-cs`: редактор читает фикстуру, пишет рядом
+round-trip тестов редактора `tas-editor-rs`: редактор читает фикстуру, пишет рядом
 своё золото (`<имя>.expected.json` — тот же JSON, `<имя>.expected.tas` — тот же
 скрипт текстом, формат [`docs/SCRIPT_DSL.md`](../../docs/SCRIPT_DSL.md)), а здешний
 тест-приёмка читает это золото обратно.
@@ -25,7 +25,7 @@ cd drmod-script-gen && cargo run                  # или из своей ди�
 cargo run -p drmod-script-gen -- --out <каталог>
 ```
 
-По умолчанию фикстуры пишутся в `tas-editor-cs/TasEditorCs.Tests/Fixtures` —
+По умолчанию фикстуры пишутся в `tas-editor-rs/tests/fixtures/golden` —
 путь считается от `CARGO_MANIFEST_DIR`, поэтому работать можно из любого каталога.
 Файлы редактора (`*.expected.json`, `*.expected.tas`) тул **не** трогает: их
 пишет сам редактор.
@@ -54,7 +54,7 @@ cargo test            # из этой директории или `cargo test -p
   MAX_SCRIPT_FRAMES` — верхняя страховка в 1 000 000 кадров, `duration ≥ 1`,
   непустой `input`, `name ≤ 64`; практический ограничитель приёма — размер тела
   запроса, `API.md` §6).
-- `tests/expected_json_is_accepted.rs` — **приёмка C#**: каждый
+- `tests/expected_json_is_accepted.rs` — **приёмка редактора**: каждый
   `*.expected.json` из каталога фикстур десериализуется типами мода и сверяется с
   фикстурой, из которой редактор его собрал. Пропуск файла — провал теста, а не
   «нет проверки»: комплект золотых файлов должен быть полным.
@@ -63,7 +63,7 @@ cargo test            # из этой директории или `cargo test -p
 
 1. Правите общие DTO (`drmod-replay-types/src/script.rs`) или сам мод (`drmod-core/src/api.rs`).
 2. `cargo run -p drmod-script-gen` — перегенерировать фикстуры.
-3. В редакторе: `set TAS_REGEN_GOLDENS=1 && dotnet test TasEditorCs.slnx` —
+3. В редакторе `tas-editor-rs`: `TAS_EDITOR_REGEN_GOLDENS=1 cargo test` —
    перезаписать золотые файлы, затем глазами прочитать `.expected.tas`
    (это и есть текст DSL) и `.expected.json`.
 4. `cd drmod-script-gen && cargo test` — приёмка со стороны мода.

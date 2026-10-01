@@ -1,5 +1,5 @@
 //! Генератор JSON-фикстур скрипта (`POST /script/run`, docs/API.md §4) для
-//! round-trip тестов редактора (`tas-editor-cs`).
+//! round-trip тестов редактора `tas-editor-rs`.
 //!
 //! Формат гарантирован определением типа: фикстуры строятся
 //! `drmod_replay_types::script` — теми же DTO, которыми мод десериализует
@@ -8,7 +8,7 @@
 //!
 //! Пример:
 //!     cargo run -p drmod-script-gen
-//!     cargo run -p drmod-script-gen -- --out ..\tas-editor-cs\TasEditorCs.Tests\Fixtures
+//!     cargo run -p drmod-script-gen -- --out ..\tas-editor-rs\tests\fixtures\golden
 
 mod fixtures;
 
@@ -17,13 +17,13 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const USAGE: &str = "\
-Генерация JSON-фикстур скрипта (POST /script/run) для round-trip тестов tas-editor-cs.
+Генерация JSON-фикстур скрипта (POST /script/run) для round-trip тестов tas-editor-rs.
 
 Использование:
     script_gen [--out <каталог>]
 
     --out <каталог>  куда писать фикстуры
-                     (по умолчанию tas-editor-cs/TasEditorCs.Tests/Fixtures)
+                     (по умолчанию tas-editor-rs/tests/fixtures/golden)
     -h, --help       эта справка
 ";
 

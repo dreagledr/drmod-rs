@@ -1,10 +1,12 @@
-//! The port's contract with the C# editor: the same script in, the same text and the same JSON out,
+//! The port's contract with the format: the same script in, the same text and the same JSON out,
 //! byte for byte.
 //!
-//! These are the C# editor's own fixtures — copied from `tas-editor-cs/TasEditorCs.Tests/Fixtures/`,
-//! where `ScriptGoldenTests.cs` asserts the same pairs. That makes this the strongest check the port
-//! has: not "the format reads back as itself", which a private dialect would also pass, but "the
-//! text and the JSON this editor writes are the ones the other editor writes".
+//! These fixtures were the C# editor's own — copied from its `TasEditorCs.Tests/Fixtures/`, where
+//! `ScriptGoldenTests.cs` asserted the same pairs. ⚠️ That editor has since been removed from the
+//! repository; the fixtures here are now the only copy, and `tests/fixtures/golden/` is the
+//! canonical location. That still makes this the strongest check the port has: not "the format reads
+//! back as itself", which a private dialect would also pass, but "the text and the JSON written here
+//! are exactly the ones the format was pinned to".
 //!
 //! The three assertions are the C# test's own, and they say exactly how much each view can lose:
 //!
@@ -18,9 +20,9 @@
 //!    JSON moves with the direction flags. Both drive the character; the four movement bits are
 //!    what the two forms are allowed to differ in.
 //!
-//! ⚠️ The fixtures are a **copy, not a link**. When the C# side adds a fixture, copy it here; when a
-//! golden changes, both editors changed the format and both goldens change. `drmod-script-gen`
-//! regenerates the inputs from the shared DTOs (`drmod-script-gen/README.md`).
+//! ⚠️ The goldens are the **reference, not generator output**: a format change means editing them by
+//! hand alongside the fixtures. `drmod-script-gen` regenerates only the inputs (`*.json`) from the
+//! shared DTOs (`drmod-script-gen/README.md`).
 
 use tas_editor_rs::script::frames;
 use tas_editor_rs::script::{dsl, json, ScriptDocument};

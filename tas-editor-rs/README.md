@@ -4,10 +4,11 @@ Desktop TAS editor for Metal Gear Rising: Revengeance, on the stack the spike pr
 [`dear-app`](https://github.com/dear-imgui-rs/dear-app) (window, dock space, wgpu) plus
 [`dear-imgui-cte`](https://github.com/dear-imgui-rs/dear-imgui-cte) (the text editor).
 
-This is a **full port of the C# editor** (`../tas-editor-cs/`) — same panels, same workspace, same
-script formats, same run controls — rebuilt on the Rust stack instead of WinUI 3. The C# editor is
-the reference for what the editor *does*; this one is what it does *on this stack*, and its own
-fixtures pin the two together byte for byte (`cargo test`).
+This is a **full port of the C# editor** (formerly `../tas-editor-cs/`, since removed from the
+repository) — same panels, same workspace, same script formats, same run controls — rebuilt on the
+Rust stack instead of WinUI 3. That editor was the reference for what the editor *does*; this one is
+what it does *on this stack*, and its own fixtures pin the format down byte for byte (`cargo test`).
+This crate is now the only editor here.
 
 The project grew out of a stack spike: it began as a
 measurement of `dear-app` + `dear-imgui-cte` (a dock space, a 20 000-row table, a code editor) and is
@@ -64,7 +65,7 @@ tas-editor-rs/
     ├── workspace.rs         # the on-disk file operations, on a temp folder
     └── fixtures/
         ├── all_inputs.tas   # the formats' own fixture, every input of the DSL
-        └── golden/          # copied from tas-editor-cs/TasEditorCs.Tests/Fixtures/
+        └── golden/          # the canonical fixtures + goldens (originally the C# editor's)
 ```
 
 ## Build, run, test
@@ -302,9 +303,10 @@ editor build the root build is a no-op, and after a root build the editor build 
 of the C# sibling's own test files, which is the point — they came with their assertions, so they check
 the port against a *different implementation's* expectations rather than against itself.
 
-**`tests/golden.rs` — the port's contract with the C# editor.** The C# editor's own fixtures are
-copied from `../tas-editor-cs/TasEditorCs.Tests/Fixtures/`, and the same three assertions its
-`ScriptGoldenTests.cs` makes are made here:
+**`tests/golden.rs` — the format pinned byte for byte.** These fixtures were the C# editor's own,
+copied from its `TasEditorCs.Tests/Fixtures/` before that editor was removed from the repository —
+they are now the only copy, and `tests/fixtures/golden/` is where `drmod-script-gen` writes the
+inputs. The same three assertions its `ScriptGoldenTests.cs` made are made here:
 
 1. **the JSON round-trips into its golden** — `read(json)` → `write` is the golden `.json`, byte for
    byte. The JSON is the source of truth, so this is the strict one.
@@ -368,8 +370,8 @@ observation only a person can make.
 
 ## Notes
 
-* **The C# editor is not touched.** It lives in `../tas-editor-cs/` and stays the shipping editor
-  until this one is at least its equal.
+* **This is the only editor in the repository.** The C# editor it was ported from (`tas-editor-cs/`)
+  and the abandoned WinUI spike (`tas-editor/`) have both been removed.
 * **Everything the app needs is in the crate.** `dear-app` re-exports its matching core crate as
   `dear_app::imgui`, so the UI types cannot drift out of version with the runtime.
 * **`skip_present` is not used and must not be**: it gives no gain and, combined with `skip_draw`,

@@ -68,7 +68,7 @@ python -m pip install zstandard brotli
 | `logs_216000.json` | то же ×60 (60 запросов подряд) |
 
 `--file` принимает готовый `.json`/`.tas` (в т. ч. выгрузку `drmod-dbdump
---script` или эталон из `tas-editor-cs/TasEditorCs.Tests/Fixtures/`) и считает
+--script` или эталон из `tas-editor-rs/tests/fixtures/golden/`) и считает
 уже его. С `--file` замер логов не делается.
 
 ## Почему «час» меряется тактами
