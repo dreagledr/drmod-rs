@@ -65,7 +65,8 @@ cargo build --release
 
 Требуется Rust с таргетом `i686-pc-windows-msvc` (32-bit MSVC).
 
-Корень — воркспейс: код мода лежит в `drmod-core/`, общие крейты — в
+Корень — воркспейс: код мода (только библиотека) лежит в `drmod-core/`,
+инжектор-бинарник — в `drmod-injector/`, общие крейты — в
 `drmod-protocol/` и `drmod-replay-types/`, сервер — в `drmod-server/`. Из
 корневой сборки исключены x64-крейты `drmod-dbdump/` и `drmod-script-gen/`
 (arrow-rs только 64-битный) — они собираются из своей директории, где лежит

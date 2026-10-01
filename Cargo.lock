@@ -597,6 +597,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "drmod-injector"
+version = "0.1.0"
+dependencies = [
+ "drmod-core",
+ "drmod-hudhook",
+ "windows",
+]
+
+[[package]]
 name = "drmod-protocol"
 version = "0.1.0"
 dependencies = [

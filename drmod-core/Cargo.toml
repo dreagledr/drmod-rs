@@ -29,7 +29,3 @@ features = [
 [lib]
 crate-type = ["cdylib", "rlib"]
 name = "drmod_rs_lib"
-
-[[bin]]
-name = "drmod"
-path = "src/main.rs"

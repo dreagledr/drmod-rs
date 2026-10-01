@@ -4,8 +4,8 @@
 
 A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**.
 
-- **Binary (`drmod`)**: injects the DLL into a running game process
-- **Library (`drmod_rs_lib`)**: DX9 hook + ImGui overlay, reads game memory live — both live in `drmod-core/`
+- **Binary (`drmod`)**: injects the DLL into a running game process — lives in `drmod-injector/`
+- **Library (`drmod_rs_lib`)**: DX9 hook + ImGui overlay, reads game memory live — lives in `drmod-core/` (library only)
 - **Server (`drmod-server/`)**: multiplayer relay (axum 0.8 + tokio, Docker, 64-bit)
 - **Protocol (`drmod-protocol/`)**: shared TCP (JSON) and UDP (binary `PositionPacket`) types
 - **Replay-types (`drmod-replay-types/`)**: shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout of replay BLOBs; `input_bits` — action bits in `InputUnit`; `key_codes` — encoding of game key codes in `m_aKeysDown` words (bit order reversed: `0x8000_0000 >> (code & 31)`); `script` — DTO of the `POST /script/run` body (`ScriptRequest`/`ScriptCommand`/`ScriptInput`/`ScriptTrigger`/`RestartSpec`/`EnemyCondition` + `MAX_SCRIPT_FRAMES`), shared by the mod and `drmod-script-gen`
@@ -55,9 +55,8 @@ Deep dives and chronicles live in `docs/` and the tool READMEs — this file onl
 
 ```
 Cargo.toml           # [workspace] only — members listed, [profile.release] lives here
-drmod-core/          # The mod: injector binary + HUD library (was src/ + main.rs)
+drmod-core/          # The mod library: DX9 hook + ImGui overlay (library only — no bin)
 ├── src/
-│   ├── main.rs      # Injector binary — finds the game process, injects the DLL (embeds the DLL via include_bytes!)
 │   ├── lib.rs       # HUD library — DX9 hook, ImGui overlay, game memory, main loop
 │   ├── api.rs       # HTTP API (127.0.0.1:5223) — scripts, state, ring-buffer logs
 │   ├── segment.rs   # Segment tracking — start conditions, ASL-based finish triggers, DB cleanup
@@ -83,6 +82,9 @@ drmod-core/          # The mod: injector binary + HUD library (was src/ + main.r
 │       ├── hooks.rs     #   MinHook input hooks (updateInputUnit/isKeybindPressed/isKeybindDown), frame updater, randRange/randFloat, ripper/blade emulation, raw input readers
 │       ├── watch.rs     #   (debug) hardware write breakpoint: DR0 on all threads + VEH, writer stack chain
 │       └── types.rs     #   Re-export of drmod-replay-types DTOs + ReplayFrame/internal types
+drmod-injector/      # The injector binary `drmod` — finds the game process, injects the DLL (embeds the DLL via include_bytes!)
+├── src/
+│   └── main.rs      # Injector entry point; depends on drmod-core for DEFAULT_TITLE
 drmod-server/        # Multiplayer server (axum 0.8 + tokio, 64-bit, Docker)
 drmod-protocol/      # Shared protocol types (TCP JSON + UDP binary PositionPacket)
 drmod-replay-types/  # Shared replay DTOs + to_bytes/from_bytes + input_bits + script DTOs
@@ -103,9 +105,11 @@ vendor/              # Third-party binaries and C sources, checked in — asi-lo
 ```
 
 ⚠️ **Invariant: the package name equals the directory name.** `target/` stays at the
-workspace root (the home of the i686 mod), so `drmod-core/src/main.rs` reaches the
+workspace root (the home of the i686 mod), so `drmod-injector/src/main.rs` reaches the
 embedded DLL through `include_bytes!("../target/i686-pc-windows-msvc/{debug,release}/drmod_rs_lib.dll")`
-and `build.ps1` keeps working unchanged.
+and `build.ps1` keeps working unchanged. The `drmod-core` library target keeps its
+distinct name `drmod_rs_lib` (the `target/…/drmod_rs_lib.dll` contract), and the
+injector's binary is `drmod` (the `target/…/drmod.exe` contract).
 
 ⚠️ **The x64 crates do not build from the root** (`drmod-dbdump`, `drmod-script-gen`,
 `drmod-server`): Cargo merges `.cargo/config.toml` by **cwd ancestors**, not by
@@ -263,7 +267,7 @@ cargo run --release -- -n "Custom Window Name.exe"
 
 ### Output
 
-- `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary (DLL embedded via `include_bytes!` from `drmod-core/src/main.rs`, extracted to `%TEMP%` at runtime)
+- `target/i686-pc-windows-msvc/release/drmod.exe` — injector binary (DLL embedded via `include_bytes!` from `drmod-injector/src/main.rs`, extracted to `%TEMP%` at runtime)
 - `target/i686-pc-windows-msvc/release/drmod_rs_lib.dll` — the injected library
 
 ### Smoke tests

@@ -140,7 +140,7 @@ fn stage_mod(repo_root: &Path, dll: &Path, payload_dir: &Path) {
         let mut command = Command::new(&cargo);
         command
             .current_dir(repo_root)
-            .args(["build", "--release", "--lib", "-p", "drmod-rs", "--target-dir"])
+            .args(["build", "--release", "--lib", "-p", "drmod-core", "--target-dir"])
             .arg(repo_root.join("target"));
 
         // ⚠️ **The inherited build environment is stripped, and this is not tidiness.**
@@ -173,7 +173,7 @@ fn stage_mod(repo_root: &Path, dll: &Path, payload_dir: &Path) {
         match result {
             Ok(status) if status.success() => freshly_built = true,
             Ok(status) => println!(
-                "cargo:warning=`cargo build --release --lib -p drmod-rs` failed ({status}) in {}",
+                "cargo:warning=`cargo build --release --lib -p drmod-core` failed ({status}) in {}",
                 repo_root.display()
             ),
             Err(error) => println!("cargo:warning=cannot run {cargo}: {error}"),

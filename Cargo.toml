@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "drmod-core",
+    "drmod-injector",
     "drmod-protocol",
     "drmod-replay-types",
     "drmod-server",
