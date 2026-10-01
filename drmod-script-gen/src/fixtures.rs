@@ -1,5 +1,5 @@
 //! Набор JSON-фикстур скрипта (`POST /script/run`, docs/API.md §4) для
-//! round-trip тестов редактора `tas-editor-rs`.
+//! round-trip тестов редактора `drmod-tas-editor`.
 //!
 //! Фикстуры строятся **теми же типами**, которыми мод десериализует запрос
 //! (`drmod_replay_types::script`), поэтому их приёмка модом гарантирована
@@ -19,9 +19,9 @@ use serde_json::Value;
 
 /// Каталог фикстур редактора по умолчанию — относительно этого крейта, чтобы
 /// `cargo run` из любого каталога писал туда же. Фикстуры (`*.json`) и золотые
-/// файлы (`*.expected.*`) лежат рядом, как их читает `tas-editor-rs/tests/golden.rs`.
+/// файлы (`*.expected.*`) лежат рядом, как их читает `drmod-tas-editor/tests/golden.rs`.
 pub const DEFAULT_OUT: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../tas-editor-rs/tests/fixtures/golden");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../drmod-tas-editor/tests/fixtures/golden");
 
 /// Все фикстуры в порядке записи: (имя файла, тело).
 pub fn all() -> Vec<(&'static str, Fixture)> {

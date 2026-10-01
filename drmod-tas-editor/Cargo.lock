@@ -527,6 +527,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "drmod-tas-editor"
+version = "0.1.0"
+dependencies = [
+ "dear-app",
+ "dear-file-browser",
+ "dear-imgui-cte",
+ "flate2",
+ "serde",
+ "serde_json",
+ "ureq",
+ "windows",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2010,20 +2024,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "tas-editor-rs"
-version = "0.1.0"
-dependencies = [
- "dear-app",
- "dear-file-browser",
- "dear-imgui-cte",
- "flate2",
- "serde",
- "serde_json",
- "ureq",
- "windows",
 ]
 
 [[package]]

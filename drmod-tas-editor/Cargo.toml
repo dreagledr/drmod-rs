@@ -1,17 +1,17 @@
 [package]
-name = "tas-editor-rs"
+name = "drmod-tas-editor"
 version = "0.1.0"
 edition = "2024"
 description = "TAS editor for Metal Gear Rising, on the dear-app + dear-imgui-cte stack"
 
-# ⚠️ The crate is `tas-editor-rs` and the binary is `tas-editor-rs.exe`. The library target keeps
-# the same name, so its Rust path is `tas_editor_rs`.
+# ⚠️ The crate is `drmod-tas-editor` and the binary is `drmod-tas-editor.exe`. The library target
+# keeps the same name, so its Rust path is `drmod_tas_editor`.
 [lib]
-name = "tas_editor_rs"
+name = "drmod_tas_editor"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tas-editor-rs"
+name = "drmod-tas-editor"
 path = "src/main.rs"
 
 [dependencies]

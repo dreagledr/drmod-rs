@@ -1,4 +1,4 @@
-//! Приёмка JSON, записанного конвертером редактора `tas-editor-rs`.
+//! Приёмка JSON, записанного конвертером редактора `drmod-tas-editor`.
 //!
 //! Редактор читает фикстуру, собранную этим крейтом, и пишет рядом
 //! `<фикстура>.expected.json`. Здесь этот файл десериализуется **типами мода**:
@@ -6,7 +6,7 @@
 //! round-trip не теряет и не искажает данные. Пропуск файла — не «нет теста», а
 //! провал: комплект золотых файлов должен быть полным.
 //!
-//! Читаются золотые файлы **на месте**, в `tas-editor-rs/tests/fixtures/golden/` —
+//! Читаются золотые файлы **на месте**, в `drmod-tas-editor/tests/fixtures/golden/` —
 //! там же, куда пишет `script_gen`; отдельной копии под этим тестом нет.
 
 use drmod_replay_types::script::{MAX_SCRIPT_FRAMES, ScriptRequest};
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 /// Каталог фикстур редактора — тот же, куда пишет `script_gen`.
 const FIXTURES: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../tas-editor-rs/tests/fixtures/golden");
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../drmod-tas-editor/tests/fixtures/golden");
 
 /// Суффикс JSON, записанного редактором (совпадает с `fixtures::EXPECTED_SUFFIX`).
 const EXPECTED_SUFFIX: &str = ".expected.json";

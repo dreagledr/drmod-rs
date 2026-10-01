@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tas_editor_rs::steam;
+use drmod_tas_editor::steam;
 
 /// The temp directory, without its trailing separator — the shape a VDF path is written in.
 fn temp() -> String {
@@ -170,7 +170,7 @@ impl TempFolder {
     fn new() -> Self {
         // The same shape the C# sibling uses: the process id stands in for a GUID, which is enough
         // because the name only has to be unique among the tests running at once.
-        let path = std::env::temp_dir().join(format!("tas-editor-game-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("drmod-tas-editor-game-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("the temp folder can be made");
         Self { path }

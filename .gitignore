@@ -1,14 +1,11 @@
 /target
 /tools/disasm/target
-/tas-editor/target
-/tas-editor/dist
-/tas-editor-rs/target
+/drmod-tas-editor/target
 # Раскладка докспейса редактора: рабочий файл ImGui, перезаписывается на каждом запуске
-/tas-editor-rs/spike-layout.ini
-/tas-editor-rs/tas-editor-layout.ini
-# Mod payload the editor installs: staged by the same steps as build-mod.ps1, not committed
-/tas-editor-rs/Mod/
-/tas-editor-rs/*.log
+/drmod-tas-editor/drmod-tas-editor-layout.ini
+# Mod payload the editor installs: staged by build.rs into OUT_DIR, not committed
+/drmod-tas-editor/Mod/
+/drmod-tas-editor/*.log
 /tas-editor-cs/**/bin
 /tas-editor-cs/**/obj
 /tas-editor-cs/**/publish

@@ -19,8 +19,6 @@
 /drmod-script-gen
 /drmod-hudhook
 /drmod-core
-/tas-editor
-/tas-editor-cs
-/tas-editor-rs
+/drmod-tas-editor
 /ref
 /docs

@@ -1,6 +1,6 @@
 //! What survives a restart: the workspace folder, the game folder, and the run rules.
 //!
-//! A plain `key=value` file in `%LOCALAPPDATA%\tas-editor-rs\settings` — the same shape and the same
+//! A plain `key=value` file in `%LOCALAPPDATA%\drmod-tas-editor\settings` — the same shape and the same
 //! place as the Reactor sibling's, so a user moving between the two editors keeps their workspace.
 //! There is no settings library here on purpose: there are five values, and a serialization
 //! framework would be more code than the file it writes.
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use crate::api::{FpsCapMode, PlaybackRules};
 
 /// The folder name under `%LOCALAPPDATA%`.
-const APP_DIR: &str = "tas-editor-rs";
+const APP_DIR: &str = "drmod-tas-editor";
 const FILE: &str = "settings";
 
 /// What the editor remembers between launches.
@@ -216,7 +216,7 @@ fn holds_scripts(folder: &std::path::Path) -> bool {
     })
 }
 
-/// `%LOCALAPPDATA%\tas-editor-rs\settings`.
+/// `%LOCALAPPDATA%\drmod-tas-editor\settings`.
 fn file_path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
     Some(PathBuf::from(base).join(APP_DIR).join(FILE))

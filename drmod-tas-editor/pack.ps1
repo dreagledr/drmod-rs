@@ -21,11 +21,11 @@
 .EXAMPLE
     pwsh -File pack.ps1
 
-    Build Release (if -Build), assemble `out\tas-editor-rs`, and drop `tas-editor-rs.zip` next to
+    Build Release (if -Build), assemble `out\drmod-tas-editor`, and drop `drmod-tas-editor.zip` next to
     this script.
 
 .EXAMPLE
-    pwsh -File pack.ps1 -Build -OutDir .\out\tas-editor-rs -ZipPath .\out\tas-editor-rs.zip
+    pwsh -File pack.ps1 -Build -OutDir .\out\drmod-tas-editor -ZipPath .\out\drmod-tas-editor.zip
 
     What CI does: assemble an already built tree into the root's `out\` and zip it there.
 
@@ -40,7 +40,7 @@ param(
     # Where to assemble the distribution. Recreated from scratch on every run.
     [string]$OutDir,
 
-    # Where the .zip goes when -Zip is given. Defaults to tas-editor-rs.zip next to this script.
+    # Where the .zip goes when -Zip is given. Defaults to drmod-tas-editor.zip next to this script.
     [string]$ZipPath,
 
     # Build Release before packing. Off by default: a zip should describe an explicit build, not one
@@ -64,12 +64,12 @@ $ErrorActionPreference = 'Stop'
 
 # $PSScriptRoot is empty while parameter defaults are evaluated, so paths are built here.
 $scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { (Get-Location).Path }
-if (-not $OutDir) { $OutDir = Join-Path $scriptRoot 'out\tas-editor-rs' }
+if (-not $OutDir) { $OutDir = Join-Path $scriptRoot 'out\drmod-tas-editor' }
 
 # The crate builds for x64 (its own .cargo/config.toml), which is why the path names the triple
 # rather than the host default.
 $target = 'x86_64-pc-windows-msvc'
-$exe = Join-Path $scriptRoot "target\$target\release\tas-editor-rs.exe"
+$exe = Join-Path $scriptRoot "target\$target\release\drmod-tas-editor.exe"
 $examples = Join-Path $scriptRoot 'examples'
 
 if ($Build) {
@@ -129,13 +129,13 @@ Write-Host ("  files: {0}, size: {1} MB" -f $files.Count, $sizeMb)
 Write-Host ("  exe: {0} MB (payload embedded)" -f $exeMb)
 
 if ($Zip) {
-    if (-not $ZipPath) { $ZipPath = Join-Path $scriptRoot 'tas-editor-rs.zip' }
+    if (-not $ZipPath) { $ZipPath = Join-Path $scriptRoot 'drmod-tas-editor.zip' }
     $zipDir = Split-Path -Parent $ZipPath
     if ($zipDir -and -not (Test-Path -LiteralPath $zipDir)) {
         New-Item -ItemType Directory -Path $zipDir -Force | Out-Null
     }
 
-    $tempZip = Join-Path $env:TEMP ("tas-editor-rs-{0}.zip" -f [guid]::NewGuid().ToString('N'))
+    $tempZip = Join-Path $env:TEMP ("drmod-tas-editor-{0}.zip" -f [guid]::NewGuid().ToString('N'))
     Compress-Archive -Path (Join-Path $OutDir '*') -DestinationPath $tempZip -Force
     Move-Item -LiteralPath $tempZip -Destination $ZipPath -Force
 
@@ -144,4 +144,4 @@ if ($Zip) {
 }
 
 Write-Host ''
-Write-Host "Run it: $OutDir\tas-editor-rs.exe" -ForegroundColor Cyan
+Write-Host "Run it: $OutDir\drmod-tas-editor.exe" -ForegroundColor Cyan

@@ -1,7 +1,7 @@
 # script_gen — JSON-фикстуры скрипта для редактора
 
 Генерирует набор JSON-скриптов (`POST /script/run`, формат `docs/API.md` §4) для
-round-trip тестов редактора `tas-editor-rs`: редактор читает фикстуру, пишет рядом
+round-trip тестов редактора `drmod-tas-editor`: редактор читает фикстуру, пишет рядом
 своё золото (`<имя>.expected.json` — тот же JSON, `<имя>.expected.tas` — тот же
 скрипт текстом, формат [`docs/SCRIPT_DSL.md`](../../docs/SCRIPT_DSL.md)), а здешний
 тест-приёмка читает это золото обратно.
@@ -25,7 +25,7 @@ cd drmod-script-gen && cargo run                  # или из своей ди�
 cargo run -p drmod-script-gen -- --out <каталог>
 ```
 
-По умолчанию фикстуры пишутся в `tas-editor-rs/tests/fixtures/golden` —
+По умолчанию фикстуры пишутся в `drmod-tas-editor/tests/fixtures/golden` —
 путь считается от `CARGO_MANIFEST_DIR`, поэтому работать можно из любого каталога.
 Файлы редактора (`*.expected.json`, `*.expected.tas`) тул **не** трогает: их
 пишет сам редактор.
@@ -63,7 +63,7 @@ cargo test            # из этой директории или `cargo test -p
 
 1. Правите общие DTO (`drmod-replay-types/src/script.rs`) или сам мод (`drmod-core/src/api.rs`).
 2. `cargo run -p drmod-script-gen` — перегенерировать фикстуры.
-3. В редакторе `tas-editor-rs`: `TAS_EDITOR_REGEN_GOLDENS=1 cargo test` —
+3. В редакторе `drmod-tas-editor`: `TAS_EDITOR_REGEN_GOLDENS=1 cargo test` —
    перезаписать золотые файлы, затем глазами прочитать `.expected.tas`
    (это и есть текст DSL) и `.expected.json`.
 4. `cd drmod-script-gen && cargo test` — приёмка со стороны мода.

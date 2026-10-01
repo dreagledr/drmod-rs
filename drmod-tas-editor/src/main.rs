@@ -25,13 +25,13 @@ use dear_imgui_cte::{
     AutocompleteConfig, AutocompleteRequest, Language, Palette, TextEditor, dejavu_font_source,
 };
 
-use tas_editor_rs::editor::shell::{self, ShellState};
-use tas_editor_rs::editor::text_pane::autocomplete_tokens;
-use tas_editor_rs::editor::{Editor, FrameActions, PendingFolder};
+use drmod_tas_editor::editor::shell::{self, ShellState};
+use drmod_tas_editor::editor::text_pane::autocomplete_tokens;
+use drmod_tas_editor::editor::{Editor, FrameActions, PendingFolder};
 
 /// Раскладка докспейса и `.ini` рядом с exe: файл рабочий, а не пользовательский, и его
 /// удобно удалить, чтобы вернуть дефолт.
-const LAYOUT_INI: &str = "tas-editor-layout.ini";
+const LAYOUT_INI: &str = "drmod-tas-editor-layout.ini";
 
 /// Сколько раз в секунду холостой цикл: это потолок против простоя, а не частота экрана.
 /// Без потолка цикл крутится на ~1500 fps и греет поток впустую; `SPIKE_FPS=0` его снимает —

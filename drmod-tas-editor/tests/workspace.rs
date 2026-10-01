@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tas_editor_rs::workspace;
+use drmod_tas_editor::workspace;
 
 /// A folder of its own under the temp directory, removed when the test ends.
 struct TempFolder {
@@ -19,7 +19,7 @@ struct TempFolder {
 
 impl TempFolder {
     fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!("tas-editor-rs-test-{name}"));
+        let path = std::env::temp_dir().join(format!("drmod-tas-editor-test-{name}"));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("the temp folder can be made");
         Self { path }
@@ -228,9 +228,9 @@ fn the_listed_text_keeps_its_own_line_breaks() {
     let listing = workspace::list(Some(folder.path()));
     assert_eq!(listing.scripts.len(), 2);
 
-    let mut buffers = tas_editor_rs::buffers::Buffers::new();
+    let mut buffers = drmod_tas_editor::buffers::Buffers::new();
     for script in &listing.scripts {
-        let text = tas_editor_rs::buffers::resolve(&mut buffers, script);
+        let text = drmod_tas_editor::buffers::resolve(&mut buffers, script);
         assert_eq!(
             text, "! name=x\n0 a\n1 lt\n",
             "{}: the editor's text is `\\n`-separated",
@@ -249,14 +249,14 @@ fn a_typed_buffer_is_shown_back_exactly_as_typed() {
     let listing = workspace::list(Some(folder.path()));
     let script = &listing.scripts[0];
 
-    let mut buffers = tas_editor_rs::buffers::Buffers::new();
-    tas_editor_rs::buffers::typed(&mut buffers, script, "! name=run\n0 a\n1 lt\n".to_owned());
+    let mut buffers = drmod_tas_editor::buffers::Buffers::new();
+    drmod_tas_editor::buffers::typed(&mut buffers, script, "! name=run\n0 a\n1 lt\n".to_owned());
 
     assert_eq!(
-        tas_editor_rs::buffers::resolve(&mut buffers, script),
+        drmod_tas_editor::buffers::resolve(&mut buffers, script),
         "! name=run\n0 a\n1 lt\n"
     );
-    assert!(tas_editor_rs::buffers::is_dirty(&buffers, script));
+    assert!(drmod_tas_editor::buffers::is_dirty(&buffers, script));
 }
 
 #[test]

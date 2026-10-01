@@ -11,8 +11,8 @@
 
 use std::path::{Path, PathBuf};
 
-use tas_editor_rs::api::{FpsCapMode, PlaybackRules};
-use tas_editor_rs::settings::Settings;
+use drmod_tas_editor::api::{FpsCapMode, PlaybackRules};
+use drmod_tas_editor::settings::Settings;
 
 /// A folder of its own under the temp directory, removed when the test ends.
 struct TempFolder {
@@ -22,7 +22,7 @@ struct TempFolder {
 impl TempFolder {
     fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!(
-            "tas-editor-settings-{name}-{}",
+            "drmod-tas-editor-settings-{name}-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&path);

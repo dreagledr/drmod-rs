@@ -27,12 +27,12 @@ jobs:
       - name: Build TAS editor (Rust)
         shell: pwsh
         run: |
-          .\tas-editor-rs\pack.ps1 `
+          .\drmod-tas-editor\pack.ps1 `
             -SkipCargo `
             -Build `
-            -OutDir .\out\tas-editor-rs `
+            -OutDir .\out\drmod-tas-editor `
             -Zip `
-            -ZipPath .\out\tas-editor-rs.zip
+            -ZipPath .\out\drmod-tas-editor.zip
 
       - name: Upload artifact
         uses: actions/upload-artifact@v5
@@ -49,8 +49,8 @@ jobs:
       - name: Upload TAS editor (Rust) artifact
         uses: actions/upload-artifact@v5
         with:
-          name: tas-editor-rs
-          path: out/tas-editor-rs.zip
+          name: drmod-tas-editor
+          path: out/drmod-tas-editor.zip
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -58,7 +58,7 @@ jobs:
           files: |
             out/drmod-rs.zip
             out/drmod-asi.zip
-            out/tas-editor-rs.zip
+            out/drmod-tas-editor.zip
 
   upload-s3:
     name: Upload to Yandex S3

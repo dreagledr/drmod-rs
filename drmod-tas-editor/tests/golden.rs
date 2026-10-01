@@ -24,8 +24,8 @@
 //! hand alongside the fixtures. `drmod-script-gen` regenerates only the inputs (`*.json`) from the
 //! shared DTOs (`drmod-script-gen/README.md`).
 
-use tas_editor_rs::script::frames;
-use tas_editor_rs::script::{dsl, json, ScriptDocument};
+use drmod_tas_editor::script::frames;
+use drmod_tas_editor::script::{dsl, json, ScriptDocument};
 
 /// The fixture names, extension included — the C# `ScriptFixtures.Fixtures()` list.
 const FIXTURES: [&str; 5] = [
@@ -186,7 +186,7 @@ fn assert_same_frames(
         "{fixture}: the two forms run for different lengths"
     );
 
-    let movement = tas_editor_rs::script::keys::command_mask(&[
+    let movement = drmod_tas_editor::script::keys::command_mask(&[
         "forward",
         "backward",
         "left",

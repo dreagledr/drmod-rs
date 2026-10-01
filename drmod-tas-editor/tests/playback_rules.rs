@@ -6,7 +6,7 @@
 //! repository (`src/api.rs`, and its readers in `docs/API.md`), and a field spelled `frames` instead
 //! of `fps` is a `400` nobody would see until the game refused a run.
 
-use tas_editor_rs::api::{FpsCapMode, PlaybackRules};
+use drmod_tas_editor::api::{FpsCapMode, PlaybackRules};
 
 #[test]
 fn the_tick_is_pinned_to_one_sixtieth_or_left_to_the_game() {

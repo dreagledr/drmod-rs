@@ -10,12 +10,12 @@
 //! * **the key tables** — the two bit orders agree with the DSL's tokens, so a column, a JSON key
 //!   and a token cannot drift apart unnoticed.
 
-use tas_editor_rs::script::dsl;
-use tas_editor_rs::script::frames;
-use tas_editor_rs::script::json;
-use tas_editor_rs::script::keys::{CommandKeys, FlagKeys};
-use tas_editor_rs::script::model::{RestartSpec, ScriptCommand, ScriptDocument, ScriptInput};
-use tas_editor_rs::script::projection;
+use drmod_tas_editor::script::dsl;
+use drmod_tas_editor::script::frames;
+use drmod_tas_editor::script::json;
+use drmod_tas_editor::script::keys::{CommandKeys, FlagKeys};
+use drmod_tas_editor::script::model::{RestartSpec, ScriptCommand, ScriptDocument, ScriptInput};
+use drmod_tas_editor::script::projection;
 
 /// The fixture the mod's own tests use, and the one the editor has to agree with byte for byte.
 const ALL_INPUTS: &str = include_str!("fixtures/all_inputs.tas");
@@ -175,7 +175,7 @@ fn when_enemy_has_no_text_spelling_and_is_refused_rather_than_lost() {
                 jump: true,
                 ..ScriptInput::default()
             },
-            when_enemy: Some(tas_editor_rs::script::model::EnemyCondition {
+            when_enemy: Some(drmod_tas_editor::script::model::EnemyCondition {
                 anim: vec![19],
                 ..Default::default()
             }),

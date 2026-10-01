@@ -18,7 +18,7 @@ at once — is why the port is on it.
 ## Layout
 
 ```
-tas-editor-rs/
+drmod-tas-editor/
 ├── src/
 │   ├── main.rs              # the app: the window, the frame loop, the CTE text editor
 │   ├── lib.rs               # the same modules as a library, so the formats are testable headlessly
@@ -88,7 +88,7 @@ itself, kept because it makes the app runnable from a script.
 ```powershell
 pwsh -File pack.ps1 -Build -Zip                        # build, assemble, zip
 pwsh -File pack.ps1 -SkipCargo -Build `
-    -OutDir .\out\tas-editor-rs -ZipPath .\out\tas-editor-rs.zip   # what CI runs
+    -OutDir .\out\drmod-tas-editor -ZipPath .\out\drmod-tas-editor.zip   # what CI runs
 ```
 
 The distribution is **three files**: the release exe and an `examples/` folder. There is nothing to
@@ -115,7 +115,7 @@ mod payload: the mod is not built: ...drmod_rs_lib.dll does not exist, so there 
 The main window **is** the dock space host: the panels dock into it, so `TAS Editor` is one window
 with its own menu bar rather than a strip of panels beside it. The declared layout goes in **once**
 (`DockLayoutApply::IfMissing`); after that ImGui keeps whatever the author dragged, in
-`tas-editor-layout.ini` beside the exe.
+`drmod-tas-editor-layout.ini` beside the exe.
 
 ⚠️ **Every section is its own window, and the default layout groups nothing.** The mod's install, the
 script list, the run controls, the command table, the text and the reference are six dockable panels
@@ -161,7 +161,7 @@ The folder is picked through the system dialog, read as a listing, and edited as
 * **Rename is the file's, not the script's.** `name=` in a rules line is a different thing and is
   edited in the text. A name already taken is refused with a message rather than suffixed.
 
-The folder and the run rules are remembered in `%LOCALAPPDATA%\tas-editor-rs\settings` —
+The folder and the run rules are remembered in `%LOCALAPPDATA%\drmod-tas-editor\settings` —
 `key=value` lines, **the same shape and place as the C# sibling's**, so a user moving between the two
 editors keeps their workspace. A file written before the run rules existed (a bare path, no `=` in
 it) is read as the folder rather than as a settings file nobody can parse.
