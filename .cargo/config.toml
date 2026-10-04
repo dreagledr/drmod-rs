@@ -14,5 +14,15 @@ rustflags = ["-C", "target-feature=+crt-static"]
 #
 # `--release` is not for speed alone: `target/xtask` shares nothing with the mod's `target/`, and a
 # release xtask avoids a debug rebuild of the whole dependency graph on every invocation.
+#
+# ⚠️ The x64 aliases spell out `--target x86_64-pc-windows-msvc` because Cargo resolves
+# `.cargo/config.toml` from the **cwd's ancestors**, not the manifest path — a workspace member's own
+# x64 config is not read when cargo is invoked from the root (Cargo Book, "Hierarchical structure").
+# Without the flag these crates would cross-compile to the root's i686. The editor is its own
+# workspace, hence `--manifest-path`.
 [alias]
 xtask = "run --release --manifest-path xtask/Cargo.toml --"
+dbdump = "run --release --target x86_64-pc-windows-msvc -p drmod-dbdump"
+script-gen = "run --release --target x86_64-pc-windows-msvc -p drmod-script-gen"
+server = "run --release --target x86_64-pc-windows-msvc -p drmod-server"
+editor = "run --release --target x86_64-pc-windows-msvc --manifest-path drmod-tas-editor/Cargo.toml"

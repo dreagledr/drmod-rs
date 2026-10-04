@@ -10,6 +10,19 @@ members = [
     "drmod-hudhook",
 ]
 
+# Plain `cargo build`/`cargo test` from the root builds only the i686 mod and the libs it shares.
+# The x64 crates are members but not default members: cargo resolves `.cargo/config.toml` by cwd, not
+# by package, so including them here would cross-compile `arrow`/`axum` to i686 for nothing. Reach
+# them with the root aliases (`cargo dbdump` / `cargo script-gen` / `cargo server` / `cargo editor`)
+# or `cargo xtask`; an explicit `-p <crate> --target x86_64-pc-windows-msvc` still works.
+default-members = [
+    "drmod-core",
+    "drmod-injector",
+    "drmod-protocol",
+    "drmod-replay-types",
+    "drmod-hudhook",
+]
+
 [profile.release]
 strip = true
 opt-level = "s"

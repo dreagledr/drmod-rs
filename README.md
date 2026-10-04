@@ -67,10 +67,14 @@ cargo build --release
 
 Корень — воркспейс: код мода (только библиотека) лежит в `drmod-core/`,
 инжектор-бинарник — в `drmod-injector/`, общие крейты — в
-`drmod-protocol/` и `drmod-replay-types/`, сервер — в `drmod-server/`. Из
-корневой сборки исключены x64-крейты `drmod-dbdump/` и `drmod-script-gen/`
-(arrow-rs только 64-битный) — они собираются из своей директории, где лежит
-собственный `.cargo/config.toml`.
+`drmod-protocol/` и `drmod-replay-types/`, сервер — в `drmod-server/`.
+По умолчанию корневая сборка собирает только i686-набор (`default-members`):
+x64-крейты `drmod-dbdump/`, `drmod-script-gen/`, `drmod-server/` — члены
+воркспейса, но не default-members (cargo читает `.cargo/config.toml` по cwd,
+поэтому иначе они кросс-компилировались бы под i686). Из корня они доступны
+через алиасы `cargo dbdump` / `cargo script-gen` / `cargo server` /
+`cargo editor` (каждый добавляет `--target x86_64-pc-windows-msvc`) или явный
+`--target`.
 
 ## Сборка артефактов (`cargo xtask`)
 
