@@ -476,7 +476,7 @@ fn dialogs(ui: &Ui, editor: &Editor, shell: &mut ShellState, actions: &mut Frame
             .build(|| {
                 ui.text_wrapped("The file stays in this folder and keeps .tas");
                 ui.set_next_item_width(-1.0);
-                let _ = ui.input_text("File name", &mut shell.rename_field);
+                let _ = ui.input_text("File name", &mut shell.rename_field).build();
                 ui.text_wrapped(&format!("Current name: {}", script.name));
 
                 let wanted = shell.rename_field.trim();
