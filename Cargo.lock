@@ -551,7 +551,7 @@ checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "drmod-cli"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "drmod-replay-types",
  "drmod-script",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "drmod-core"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "chrono",
  "drmod-hudhook",
@@ -582,7 +582,7 @@ dependencies = [
 
 [[package]]
 name = "drmod-dbdump"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "arrow",
  "csv",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "drmod-injector"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "drmod-core",
  "drmod-hudhook",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "drmod-protocol"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",
@@ -630,14 +630,14 @@ dependencies = [
 
 [[package]]
 name = "drmod-replay-types"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "drmod-script"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "drmod-replay-types",
  "serde",
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "drmod-script-gen"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "drmod-replay-types",
  "serde_json",
@@ -654,7 +654,7 @@ dependencies = [
 
 [[package]]
 name = "drmod-server"
-version = "0.1.0"
+version = "0.1.5"
 dependencies = [
  "axum",
  "drmod-protocol",
