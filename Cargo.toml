@@ -28,6 +28,12 @@ default-members = [
     "drmod-hudhook",
 ]
 
+# The release version is the git tag (`vX.Y.Z`) and lives here once. Every first-party member inherits
+# it with `version.workspace = true`; the editor has its own `[workspace.package]` because it is a
+# separate workspace, and `drmod-hudhook` keeps 0.9.0 as the vendored fork tracking upstream.
+[workspace.package]
+version = "0.1.5"
+
 [profile.release]
 strip = true
 opt-level = "s"

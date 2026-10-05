@@ -1,6 +1,6 @@
 [package]
 name = "drmod-cli"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "Command-line client for the Metal Gear Rising mod's HTTP API: run/get .tas scripts, export the log ring"
 

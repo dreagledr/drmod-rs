@@ -268,6 +268,12 @@ from the **cwd's ancestors** and ignores a member's own config when invoked from
 leaving them in the default set would cross-compile `arrow`/`axum` to i686 for nothing. The
 standalone `drmod-tas-editor/` and `xtask/` are their own workspaces and are not built at all.
 
+The release version is the git tag (`vX.Y.Z`) and lives once in the root
+`[workspace.package] version`; the first-party members inherit it with `version.workspace = true`.
+The editor has its own `[workspace.package]` (it is a separate workspace) and must be bumped in the
+same commit, while `drmod-hudhook` keeps its literal `0.9.0` (the vendored fork tracks upstream).
+`drmod-core` reports the version via `CARGO_PKG_VERSION` in `GET /health`.
+
 ⚠️ **To build/run an x64 crate from the root, `cd` or pass the triple.** The root aliases do
 it for you — `cargo dbdump`, `cargo script-gen`, `cargo server`, `cargo cli`, `cargo editor` (all
 `--target x86_64-pc-windows-msvc`; the editor also `--manifest-path`). By hand:

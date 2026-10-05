@@ -1,6 +1,6 @@
 [package]
 name = "drmod-tas-editor"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "TAS editor for Metal Gear Rising, on the dear-app + dear-imgui-cte stack"
 
@@ -44,3 +44,8 @@ windows = { version = "0.62", features = [
 
 [workspace]
 resolver = "3"
+
+# The editor is its own workspace, so it cannot inherit the root's version; keep the release tag in
+# sync here too (`vX.Y.Z`) — see the root `[workspace.package]`.
+[workspace.package]
+version = "0.1.5"

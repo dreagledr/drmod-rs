@@ -109,7 +109,7 @@
 ```json
 {
   "status": "ok",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "base_addr": "0x00400000",
   "uptime_ms": 123456
 }

@@ -35,6 +35,11 @@ segment autosplitter, TAS record/replay, an HTTP automation API, a multiplayer s
   leaked `RUSTFLAGS`/jobserver env so the editor and root builds share one cache.
 - The workspace root, the editor's and xtask's `[workspace]` tables set `resolver = "3"` (all members
   are edition 2024), so no resolver warning is printed.
+- The release version (the `vX.Y.Z` tag) lives once in the root `[workspace.package] version`; the
+  first-party members inherit it with `version.workspace = true`. The editor has its own
+  `[workspace.package]` (separate workspace) and must be bumped in the same commit; `drmod-hudhook`
+  keeps its literal `0.9.0` (vendored fork tracking upstream). Only `drmod-core` surfaces it
+  (`CARGO_PKG_VERSION` → `GET /health`).
 
 ## Test
 

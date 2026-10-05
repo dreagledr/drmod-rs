@@ -1,6 +1,6 @@
 [package]
 name = "drmod-script"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "The Metal Gear Rising script formats (DSL text, API JSON, frames) and the record -> script converter"
 
