@@ -1,6 +1,6 @@
 //! The API JSON of a script — the body of the mod's `POST /script/run`.
 //!
-//! The shapes themselves live in [`crate::script::model`]; this module is the mod's own
+//! The shapes themselves live in [`crate::model`]; this module is the mod's own
 //! cross-field limits (`parse_script` in `src/api.rs`) plus the read/write wrappers. The editor
 //! refuses a script the game would answer `400` on instead of storing it.
 //!
@@ -10,7 +10,7 @@
 //! what the mod is handed and what the C# editor's goldens pin down byte for byte
 //! (`tests/golden.rs`) — and one detail of it is not `serde_json`'s to give: an integral float is
 //! written as an integer (`1000`, not `1000.0`), the way .NET's `System.Text.Json` writes it. So
-//! [`write`] emits the document itself, in the field order of [`crate::script::model`], and a bug
+//! [`write`] emits the document itself, in the field order of [`crate::model`], and a bug
 //! in it cannot hide: the goldens fail, and `read` reads every written script back.
 
 use std::fmt::Write as _;
@@ -422,3 +422,4 @@ pub fn validate(document: &ScriptDocument) -> ScriptResult<()> {
 
     Ok(())
 }
+

@@ -25,6 +25,10 @@ jobs:
         shell: pwsh
         run: cargo xtask pack-editor --skip-cargo
 
+      - name: Build and package the TAS CLI
+        shell: pwsh
+        run: cargo xtask build-tools
+
       - name: Upload artifact
         uses: actions/upload-artifact@v5
         with:
@@ -43,6 +47,12 @@ jobs:
           name: drmod-tas-editor
           path: out/drmod-tas-editor.zip
 
+      - name: Upload TAS CLI artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: drmod-tas
+          path: out/drmod-tas.zip
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
@@ -50,6 +60,7 @@ jobs:
             out/drmod-rs.zip
             out/drmod-asi.zip
             out/drmod-tas-editor.zip
+            out/drmod-tas.zip
 
   upload-s3:
     name: Upload to Yandex S3

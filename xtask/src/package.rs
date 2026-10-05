@@ -5,7 +5,7 @@
 //! | command | was | writes |
 //! |---|---|---|
 //! | `build` | `build.ps1` | `out/drmod-rs.zip`, `out/drmod-asi.zip` |
-//! | `build-tools` | `build_tools.ps1` | `out/dbdump.exe`, `out/dump-replay-input.exe` |
+//! | `build-tools` | `build_tools.ps1` | `out/dbdump.exe`, `out/dump-replay-input.exe`, `out/drmod-tas.exe` + `out/drmod-tas.zip` |
 //!
 //! # The mod, in both forms
 //!
@@ -96,7 +96,8 @@ pub fn build(root: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// `cargo xtask build-tools` — build `dbdump` (x64) and `dump-replay-input` (i686) into `out/`.
+/// `cargo xtask build-tools` — build `dbdump`, `drmod-tas` (both x64) and `dump-replay-input` (i686)
+/// into `out/`.
 ///
 /// ⚠️ **The triples are passed explicitly, which is what lets this run from the repository root.**
 /// Cargo resolves `.cargo/config.toml` from the working directory's ancestors, so building
@@ -148,12 +149,28 @@ pub fn build_tools(root: PathBuf) -> Result<()> {
         ],
     )?;
 
+    step("Building drmod-tas (x64)...");
+    process::cargo(
+        &root,
+        &[
+            "build",
+            "--release",
+            "--target",
+            TOOLS_TARGET,
+            "--target-dir",
+            target_dir,
+            "-p",
+            "drmod-cli",
+        ],
+    )?;
+
     let out = root.join("out");
     std::fs::create_dir_all(&out)
         .map_err(|error| Error::new(format!("cannot create {}: {error}", out.display())))?;
 
     for relative in [
         format!("target/{TOOLS_TARGET}/release/dbdump.exe"),
+        format!("target/{TOOLS_TARGET}/release/drmod-tas.exe"),
         format!("target/{MOD_TARGET}/release/dump-replay-input.exe"),
     ] {
         let built = root.join(&relative);
@@ -166,6 +183,24 @@ pub fn build_tools(root: PathBuf) -> Result<()> {
         util::copy(&built, &staged)?;
         done(&staged);
     }
+
+    // The CLI also ships as a single-file archive for the release, the way the editor and the mod
+    // do: `out/drmod-tas.zip` is what CI attaches and what a user unzips to get `drmod-tas.exe`.
+    // Written to a temp name inside `out/` and moved into place, so an interrupted run cannot leave
+    // a half-written archive where a release archive is expected.
+    let cli = out.join("drmod-tas.exe");
+    let archive = out.join("drmod-tas.zip");
+    let temporary = out.join("drmod-tas.zip.tmp");
+    step("Packaging out/drmod-tas.zip ...");
+    zip_file(&temporary, &[(cli, "drmod-tas.exe".to_owned())])?;
+    std::fs::rename(&temporary, &archive).map_err(|error| {
+        Error::new(format!(
+            "cannot move {} to {}: {error}",
+            temporary.display(),
+            archive.display()
+        ))
+    })?;
+    done(&archive);
 
     println!("==> Tools in: {}", out.display());
     Ok(())

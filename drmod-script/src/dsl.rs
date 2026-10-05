@@ -999,3 +999,22 @@ fn strip_comment(line: &str) -> &str {
         None => line,
     }
 }
+
+#[cfg(test)]
+mod acceptance_tests {
+    use super::*;
+    use drmod_replay_types::script::ScriptRequest;
+
+    /// The seam the mod's `POST /script/run.tas` rides: a `.tas` parsed here, written as JSON,
+    /// must deserialize into the mod's own DTO — the two formats cannot drift.
+    #[test]
+    fn the_text_writes_into_json_the_mod_dto_accepts() {
+        let text = "! name=probe trig=ticks:0\n0 ls:0:6\n6 ls:0:2 a:2\n20 ls:0:24 y:24\n";
+        let document = parse(text).expect("the text parses");
+        let json = crate::json::write(&document).expect("the document writes");
+        let request: ScriptRequest =
+            serde_json::from_str(&json).expect("the mod's DTO reads the JSON");
+        assert_eq!(request.name, "probe");
+        assert!(!request.commands.is_empty());
+    }
+}

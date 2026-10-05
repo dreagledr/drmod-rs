@@ -1,0 +1,26 @@
+[package]
+name = "drmod-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Command-line client for the Metal Gear Rising mod's HTTP API: run/get .tas scripts, export the log ring"
+
+[[bin]]
+name = "drmod-tas"
+path = "src/main.rs"
+
+[dependencies]
+# The script formats and the record converter, shared with the mod and the editor.
+drmod-script = { path = "../drmod-script" }
+drmod-replay-types = { path = "../drmod-replay-types" }
+# The API client is deliberately its own, not the editor's: the CLI must not link the GUI.
+ureq = "3"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Bringing the game window to the foreground before a run: a script's own `restart` plays menu
+# keys through DirectInput, which the game only reads while it owns the focus.
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

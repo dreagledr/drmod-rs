@@ -18,16 +18,16 @@ segment autosplitter, TAS record/replay, an HTTP automation API, a multiplayer s
 - The root `.cargo/config.toml` forces `i686-pc-windows-msvc` (the game is 32-bit). Prerequisite:
   `rustup target add i686-pc-windows-msvc`.
 - `cargo build --release` at the root builds only the i686 `[workspace] default-members`
-  (`drmod-core`, `drmod-injector`, `drmod-hudhook`, `drmod-protocol`, `drmod-replay-types`). The x64
-  crates are members but **not** default members, precisely so the root build does not cross-compile
-  them to i686.
+  (`drmod-core`, `drmod-injector`, `drmod-hudhook`, `drmod-protocol`, `drmod-replay-types`), plus
+  `drmod-script` as a dependency of `drmod-core`. The x64 crates are members but **not** default
+  members, precisely so the root build does not cross-compile them to i686.
 - Cargo resolves `.cargo/config.toml` from the **cwd's ancestors, not the manifest path** (a
   workspace member's own config is ignored when invoked from the root). Reach the x64 crates from the
-  root via the aliases `cargo dbdump` / `cargo script-gen` / `cargo server` / `cargo editor`, or pass
+  root via the aliases `cargo dbdump` / `cargo script-gen` / `cargo server` / `cargo cli` / `cargo editor`, or pass
   `--target x86_64-pc-windows-msvc` / `cd` in. `--manifest-path` does not switch the config.
 - Package name ≠ output name: `drmod-core` → lib `drmod_rs_lib`; `drmod-injector` → bin `drmod`;
-  `drmod-dbdump` → bin `dbdump`; `drmod-script-gen` → bin `script_gen`; `drmod-tas-editor` → bin
-  `drmod-tas-editor`, lib `drmod_tas_editor`. All share the root `target/`.
+  `drmod-dbdump` → bin `dbdump`; `drmod-script-gen` → bin `script_gen`; `drmod-cli` → bin `drmod-tas`;
+  `drmod-tas-editor` → bin `drmod-tas-editor`, lib `drmod_tas_editor`. All share the root `target/`.
 - `drmod-injector` embeds the DLL via `include_bytes!("../target/i686-pc-windows-msvc/{debug,release}/drmod_rs_lib.dll")` — keep `target/` at the workspace root.
 - `drmod-tas-editor/build.rs` runs a nested `cargo build --release --lib -p drmod-core`,
   PE32-checks the vendored ASI loader, and embeds both into `OUT_DIR/Mod/`.
@@ -52,7 +52,7 @@ segment autosplitter, TAS record/replay, an HTTP automation API, a multiplayer s
 ## Build automation (`cargo xtask`)
 
 For ad-hoc dev from the root, the root `.cargo/config.toml` also defines x64 aliases: `cargo dbdump`,
-`cargo script-gen`, `cargo server`, `cargo editor` (each adds `--target x86_64-pc-windows-msvc`;
+`cargo script-gen`, `cargo server`, `cargo cli`, `cargo editor` (each adds `--target x86_64-pc-windows-msvc`;
 `editor` also `--manifest-path`).
 
 Alias in the root `.cargo/config.toml`; `xtask/` is its own workspace and `out/` is at the root.
@@ -60,7 +60,7 @@ The alias runs `cargo` from the root cwd, so xtask itself inherits the root's i6
 x64 `.cargo/config.toml` applies only if you build from inside `xtask/`). Output goes to root `out/`.
 
 - `cargo xtask build` → `out/drmod-rs.zip` (launcher) + `out/drmod-asi.zip`
-- `cargo xtask build-tools` → `out/dbdump.exe` (x64) + `out/dump-replay-input.exe` (i686)
+- `cargo xtask build-tools` → `out/dbdump.exe` (x64) + `out/drmod-tas.exe` (x64) + `out/drmod-tas.zip` + `out/dump-replay-input.exe` (i686)
 - `cargo xtask pack-editor [--skip-cargo]` → `out/drmod-tas-editor/` + `.zip` (always builds;
   `--skip-cargo` sets `TAS_EDITOR_SKIP_MOD_BUILD=1` for the nested call only)
 - CI release order: `cargo xtask build`, then `cargo xtask pack-editor --skip-cargo`.
@@ -74,8 +74,14 @@ x64 `.cargo/config.toml` applies only if you build from inside `xtask/`). Output
   shared by the mod, tools, and editor.
 - `drmod-protocol/src/lib.rs` — TCP JSON + UDP `PositionPacket`. Server listens TCP+UDP `5222`; HTTP
   dashboard on `HTTP_PORT` (default 8080).
-- `drmod-dbdump` = `runs.db` → CSV/Parquet + `--script`. `drmod-script-gen` = editor golden
-  fixtures. `drmod-tas-editor` = the only TAS editor (standalone x64 workspace).
+- `drmod-script/src/` — the script formats shared by the mod, editor and CLI: `dsl.rs` (`.tas` text),
+  `json.rs` (API JSON + limits), `model.rs`, `frames.rs`/`projection.rs`, and `record.rs` (recorded
+  frames → document). The editor re-exports it as `drmod_tas_editor::script`; the mod links it to
+  accept `.tas` (`POST /script/run.tas`, `GET /script/{id}.tas`, `GET /logs.tas`).
+- `drmod-cli` = `drmod-tas` CLI (`run`/`get`/`state`/`export`): own HTTP client, depends on
+  `drmod-script`; no GUI. `drmod-dbdump` = `runs.db` → CSV/Parquet + `--script` (via `record`).
+  `drmod-script-gen` = editor golden fixtures. `drmod-tas-editor` = the only TAS editor
+  (standalone x64 workspace).
 - `drmod-hudhook/` = vendored DX9-only hudhook fork; its `build.rs` compiles vendored MinHook from
   `vendor/minhook/`. `vendor/` = checked-in binaries; `ref/` = read-only git submodules (clone with
   `--recurse-submodules`).

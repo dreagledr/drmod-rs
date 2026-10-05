@@ -24,5 +24,6 @@ rustflags = ["-C", "target-feature=+crt-static"]
 xtask = "run --release --manifest-path xtask/Cargo.toml --"
 dbdump = "run --release --target x86_64-pc-windows-msvc -p drmod-dbdump"
 script-gen = "run --release --target x86_64-pc-windows-msvc -p drmod-script-gen"
+cli = "run --release --target x86_64-pc-windows-msvc -p drmod-cli"
 server = "run --release --target x86_64-pc-windows-msvc -p drmod-server"
 editor = "run --release --target x86_64-pc-windows-msvc --manifest-path drmod-tas-editor/Cargo.toml"

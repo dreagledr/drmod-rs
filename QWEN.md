@@ -9,7 +9,9 @@ A Rust-based mod injector and HUD overlay for **Metal Gear Rising: Revengeance**
 - **Server (`drmod-server/`)**: multiplayer relay (axum 0.8 + tokio, Docker, 64-bit)
 - **Protocol (`drmod-protocol/`)**: shared TCP (JSON) and UDP (binary `PositionPacket`) types
 - **Replay-types (`drmod-replay-types/`)**: shared replay DTOs (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`, `#[repr(C)]`) + `to_bytes`/`from_bytes` — on-disk layout of replay BLOBs; `input_bits` — action bits in `InputUnit`; `key_codes` — encoding of game key codes in `m_aKeysDown` words (bit order reversed: `0x8000_0000 >> (code & 31)`); `script` — DTO of the `POST /script/run` body (`ScriptRequest`/`ScriptCommand`/`ScriptInput`/`ScriptTrigger`/`RestartSpec`/`EnemyCondition` + `MAX_SCRIPT_FRAMES`), shared by the mod and `drmod-script-gen`
-- **dbdump (`drmod-dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script)
+- **Script (`drmod-script/`)**: the shared script formats — DSL text (`dsl`), API JSON (`json`, the `POST /script/run` body), frame views (`frames`/`projection`) and `record` (recorded `InputUnit` frames → `ScriptDocument`, menu-aware). Used by the mod, the editor (re-exported as `drmod_tas_editor::script`) and the CLI; the mod links it to accept `.tas` text directly.
+- **CLI (`drmod-cli/`)**: `drmod-tas` (alias `cargo cli`) — `run <file.tas>` / `get [id]` / `state` / `export` (log ring → `.tas`), with its own HTTP client (no GUI deps)
+- **dbdump (`drmod-dbdump/`)**: CLI export of Record/Replay frames from `runs.db` to CSV/Parquet (90 flat columns) + `--script` mode (frames → HTTP API JSON script, via `drmod-script::record`)
 - **script_gen (`drmod-script-gen/`)**: generates the JSON script fixtures for the editor's round-trip tests out of the shared DTOs (`drmod-replay-types::script`) and accepts the editor's own JSON back — `drmod-script-gen/README.md`
 - **TAS Editor (`drmod-tas-editor/`)**: desktop TAS editor on `dear-app` (window, dock space, wgpu) + `dear-imgui-cte` (text editor), no XAML — the port of a C# editor that has since been removed from the repository. Same functionality: the script listing/buffers/settings, the three script representations with the same canonical write, the read-only command table reading the text token by token, the run controls (rules applied in order, menu settle + window focus, `409` retried once), the mod installer (Steam discovery), and **six separate dockable panels** (mod, scripts, run, frames, script, commands) — none grouped into tabs. Own `[workspace]` and x64 `.cargo/config.toml` (the root forces i686). One crate, binary + library; **59 tests in six suites**, four of them ports of the removed C# editor's test files (golden fixtures byte for byte, `PlaybackRulesTests`, `EditorSettingsTests`, `SteamLibraryTests`) — which is what makes them a check against a *different implementation* rather than a mirror. ⚠️ **Porting `SteamLibraryTests` found a real bug**: `parse_library_paths` paired quoted strings by position, so the old numbered `libraryfolders.vdf` shape was silently ignored. ⚠️ **`build.rs` builds the mod and embeds it**: it runs `cargo build --release --lib -p drmod-core` at the root, verifies the vendored loader is PE32, and stages both into `OUT_DIR/Mod/` for `include_bytes!` — so there is no `build-mod.ps1` and no `Mod/` folder, and a nested build that fails falls back to the last good DLL with a warning (`TAS_EDITOR_SKIP_MOD_BUILD=1` skips the build, not the check). ⚠️ **The nested build strips the flags cargo leaked into it** (`RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS`, the jobserver) — otherwise the two builds fingerprint differently and invalidate each other's `target/` (measured: `Dirty drmod-rs: the rustflags changed`, a 31 s rebuild on every editor build). ⚠️ The rules' seed goes **last**, the window focus and the menu settle come first, and `Run`/`Apply` run on a worker thread (every step blocks). ⚠️ Headless is armed from the status poll and only once the script is really `running` (`docs/HEADLESS.md` §5). ⚠️ The buffer the text editor is handed is **`\n`-separated** — `dear-imgui-cte` is not a WinUI `TextBox`, and a `\r` renders a whole script as one line. ⚠️ The fps line's window starts at the first *frame*, not at process start, or the initialization dilutes the first window's rate. ⚠️ The table's header is frozen (`freeze(1,1)`) — `headers(true)` alone scrolls away. ⚠️ `tests/fixtures/golden/` holds the canonical script fixtures: `drmod-script-gen` writes the inputs there and `drmod-script-gen`'s own test reads the goldens back. — `drmod-tas-editor/README.md`
 
@@ -89,6 +91,8 @@ drmod-injector/      # The injector binary `drmod` — finds the game process, i
 drmod-server/        # Multiplayer server (axum 0.8 + tokio, x64, own .cargo/config.toml, Docker)
 drmod-protocol/      # Shared protocol types (TCP JSON + UDP binary PositionPacket)
 drmod-replay-types/  # Shared replay DTOs + to_bytes/from_bytes + input_bits + script DTOs
+drmod-script/        # Shared script formats: DSL text, API JSON, frame views + record→document converter (mod/editor/CLI)
+drmod-cli/           # drmod-tas: run/get .tas, state, export log ring → .tas (x64, own HTTP client)
 drmod-dbdump/        # Replay frames → CSV/Parquet + --script (HTTP API JSON) (x64, own .cargo/config.toml)
 drmod-script-gen/    # Script JSON fixtures for the editor's round-trip tests (x64, own .cargo/config.toml)
 drmod-hudhook/       # Vendored hudhook fork, cut to DirectX 9 only (own README)
@@ -253,18 +257,19 @@ The project is configured to compile for `i686-pc-windows-msvc` (32-bit), as spe
 The root manifest is a pure `[workspace]` (no `[package]`); every crate lives in
 its own top-level directory and **the package name equals the directory name**
 (output names differ: `drmod-core` → `drmod_rs_lib`, `drmod-injector` → `drmod`,
-`drmod-dbdump` → `dbdump`, `drmod-script-gen` → `script_gen`).
+`drmod-dbdump` → `dbdump`, `drmod-script-gen` → `script_gen`, `drmod-cli` → `drmod-tas`).
 
 `[workspace] default-members` lists the i686 set only (`drmod-core`, `drmod-injector`,
 `drmod-protocol`, `drmod-replay-types`, `drmod-hudhook`), so `cargo build --release` at the
-root builds the mod and nothing else. The x64 crates (`drmod-dbdump`, `drmod-script-gen`,
-`drmod-server`) are members but not default members: cargo resolves `.cargo/config.toml`
+root builds the mod and nothing else. `drmod-script` is a member and a dependency of
+`drmod-core`, so it builds i686 with the mod. The x64 crates (`drmod-dbdump`, `drmod-script-gen`,
+`drmod-server`, `drmod-cli`) are members but not default members: cargo resolves `.cargo/config.toml`
 from the **cwd's ancestors** and ignores a member's own config when invoked from the root, so
 leaving them in the default set would cross-compile `arrow`/`axum` to i686 for nothing. The
 standalone `drmod-tas-editor/` and `xtask/` are their own workspaces and are not built at all.
 
 ⚠️ **To build/run an x64 crate from the root, `cd` or pass the triple.** The root aliases do
-it for you — `cargo dbdump`, `cargo script-gen`, `cargo server`, `cargo editor` (all
+it for you — `cargo dbdump`, `cargo script-gen`, `cargo server`, `cargo cli`, `cargo editor` (all
 `--target x86_64-pc-windows-msvc`; the editor also `--manifest-path`). By hand:
 `cd drmod-dbdump && cargo build --release`, or from the root add
 `--target x86_64-pc-windows-msvc`. `--manifest-path` does **not** switch the config —
@@ -305,7 +310,7 @@ selector cannot see it from here.
 | Command | Was | Produces |
 |---------|-----|----------|
 | `cargo xtask build` | `build.ps1` | `out/drmod-rs.zip` (launcher) + `out/drmod-asi.zip` (`plugins/drmod_rs_lib.asi` + `d3d9.dll` + `readme.txt`) |
-| `cargo xtask build-tools` | `build_tools.ps1` | `out/dbdump.exe` (x64) + `out/dump-replay-input.exe` (i686) |
+| `cargo xtask build-tools` | `build_tools.ps1` | `out/dbdump.exe` + `out/drmod-tas.exe` (x64), `out/dump-replay-input.exe` (i686), CLI-архив `out/drmod-tas.zip` |
 | `cargo xtask pack-editor [--skip-cargo]` | `drmod-tas-editor/pack.ps1` | `out/drmod-tas-editor/` + `out/drmod-tas-editor.zip` |
 | `cargo xtask test-api [--eject]` | `test_api.ps1` | HTTP API smoke test (game running, mod injected) |
 | `cargo xtask test-connect` | `test_connect.ps1` | multiplayer server smoke test |
@@ -338,7 +343,7 @@ game is paused, so a client without one hangs instead of reporting.
 
 ### CI
 
-`.github/workflows/build.yml` runs on a `v*` tag and produces **three** zips: `cargo xtask build` packages the mod **both ways** — `out/drmod-rs.zip` (the self-injecting launcher) and `out/drmod-asi.zip` (the same DLL as `plugins/drmod_rs_lib.asi` plus the vendored ASI loader, which the TAS editor also embeds) — then `cargo xtask pack-editor --skip-cargo` packages the editor as `out/drmod-tas-editor.zip`. All three go to the workflow artifacts and the GitHub Release. ⚠️ The editor step runs **after** `cargo xtask build` and passes `--skip-cargo`: that is what makes it reuse the i686 `drmod_rs_lib.dll` the first command just built instead of compiling the mod again (it sets `TAS_EDITOR_SKIP_MOD_BUILD=1`, which skips the build but not the check for the DLL). ⚠️ The editor and the ASI archive are **not** uploaded to Yandex S3 — the mod's S3 step uses `clear: true`, which that action implements as an unfiltered bucket wipe, so a second upload would delete the mod's files. `.github/workflows/deploy.yml` deploys the multiplayer server to the VPS on pushes to `main`.
+`.github/workflows/build.yml` runs on a `v*` tag and produces **four** zips: `cargo xtask build` packages the mod **both ways** — `out/drmod-rs.zip` (the self-injecting launcher) and `out/drmod-asi.zip` (the same DLL as `plugins/drmod_rs_lib.asi` plus the vendored ASI loader, which the TAS editor also embeds) — `cargo xtask pack-editor --skip-cargo` packages the editor as `out/drmod-tas-editor.zip`, and `cargo xtask build-tools` packages the CLI as `out/drmod-tas.zip`. All four go to the workflow artifacts and the GitHub Release. ⚠️ The editor step runs **after** `cargo xtask build` and passes `--skip-cargo`: that is what makes it reuse the i686 `drmod_rs_lib.dll` the first command just built instead of compiling the mod again (it sets `TAS_EDITOR_SKIP_MOD_BUILD=1`, which skips the build but not the check for the DLL). ⚠️ Only `out/drmod-rs.zip` is uploaded to Yandex S3 — the mod's S3 step uses `clear: true`, which that action implements as an unfiltered bucket wipe, so a second upload would delete the mod's files. `.github/workflows/deploy.yml` deploys the multiplayer server to the VPS on pushes to `main`.
 
 The ASI form needs an ASI loader the game does not ship with: `vendor/asi-loader/` holds the Win32 build of [Ultimate-ASI-Loader](https://github.com/ThirteenAG/Ultimate-ASI-Loader) with its MIT license and the SHA512 of the release it came from. ⚠️ Take the asset from the rolling `Win32-latest` tag (`d3d9-Win32.zip`) — the versioned release's only file is `dinput8.dll`, and both files must be Win32 (the game is a 32-bit process and silently never loads a 64-bit `d3d9.dll`). `vendor/asi-loader/README.md`.
 

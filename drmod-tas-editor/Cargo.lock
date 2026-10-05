@@ -527,12 +527,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "drmod-replay-types"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "drmod-script"
+version = "0.1.0"
+dependencies = [
+ "drmod-replay-types",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "drmod-tas-editor"
 version = "0.1.0"
 dependencies = [
  "dear-app",
  "dear-file-browser",
  "dear-imgui-cte",
+ "drmod-script",
  "flate2",
  "serde",
  "serde_json",

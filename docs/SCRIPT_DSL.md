@@ -206,8 +206,20 @@ a stick token or `by``), лимит — команду (`commands[4]: t+duration
   изменения формата золотые файлы правятся руками и коммитятся вместе с фикстурой
   (`cd drmod-tas-editor && cargo test`).
 
-- **Конвертер.** `drmod-tas-editor/src/script/dsl.rs` (`Write`/`Parse`),
-  `json.rs` (`Read`/`Write` + лимиты), `frames.rs` (`Expand`/`Collapse`).
+- **Конвертер.** Общий крейт `drmod-script`: `src/dsl.rs` (`Write`/`Parse`),
+  `src/json.rs` (`Read`/`Write` + лимиты), `src/frames.rs` (`Expand`/`Collapse`),
+  `src/record.rs` (запись кадров → документ). Редактор реэкспортит его как
+  `drmod_tas_editor::script`.
+
+- **Мод.** Принимает текст напрямую: `POST /script/run.tas`, `GET /script/{id}.tas`,
+  `GET /logs.tas` (`docs/API.md` §3.15). Так агент/клиент работает `.tas` без
+  конвертера на своей стороне; `drmod-script` линкуется и в 32-битную DLL.
+
+- **CLI.** `drmod-cli` (bin `drmod-tas`, alias `cargo cli`): `run <file.tas|->`
+  (локальный разбор с номером строки, затем `POST /script/run.tas`), `get [id|last]`,
+  `state`, `export` (кольцевой буфер → `.tas`). Перед прогоном `run` выводит окно игры
+  на передний план и убирает открытое pause/fail-меню (иначе `restart` не доиграет
+  DIK-клавишами), как это делает редактор; `--no-focus` отключает.
 
 - **Редактор.** Панель скрипта в `drmod-tas-editor/` правит `.tas` этим же конвертером: текст
   перечитывается на каждое нажатие, и строка над полем — либо сводка

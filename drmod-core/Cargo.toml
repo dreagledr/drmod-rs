@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 drmod-protocol = { path = "../drmod-protocol" }
 drmod-replay-types = { path = "../drmod-replay-types" }
+drmod-script = { path = "../drmod-script" }
 drmod-hudhook = { path = "../drmod-hudhook" }
 imgui = "0.12.0"
 windows-numerics = "0.3"

@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 drmod-replay-types = { path = "../drmod-replay-types" }
+drmod-script = { path = "../drmod-script" }
 rusqlite = { version = "0.40.1", features = ["bundled"] }
 csv = "1"
 arrow = "59"

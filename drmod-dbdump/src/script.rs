@@ -1,189 +1,33 @@
 //! Конвертация записи (record) в JSON-скрипт для HTTP API (`POST /script/run`).
 //!
-//! Каждый кадр записи декодируется в семантический вход скрипта (поля
-//! `ScriptInput` из `src/api.rs`), одинаковые подряд идущие входы сливаются
-//! в команды `{t, duration}` (фронты `pressed` `script_tick` воспроизводит на
-//! старте команды — в записи pressed бывает только на переходах down-состояния),
-//! пустые кадры пропускаются. Скрипт взводится триггером на позиции первого
-//! кадра записи (старт миссии / контрольная точка).
+//! Ядро конвертации — общее с модом и CLI (`drmod-script::record`): кадр записи
+//! декодируется в семантический вход, одинаковые подряд идущие входы сливаются в
+//! команды `{t, duration}`, пустые кадры пропускаются. Здесь остаётся только
+//! обёртка базы: имя `replay-<id>` и триггер на позиции первого кадра.
 //!
-//! Ограничения конвертации (формат скрипта покрывает не всё, что хранит запись):
-//! - `buttons_released`/`buttons_alternated` не воспроизводятся (скрипт подаёт
-//!   только down/pressed; отпускание — неявное снятие down на конце команды);
-//! - биты 0x1/0x8/0x10 неоднозначны (weapon_select/ar_mode/jump в геймплее vs
-//!   menu_left/menu_up/confirm в меню) — трактуются как геймплейные;
-//! - `pause` (0x20) маппится в поле `pause`, но `script_tick` его пока не
-//!   применяет (поле принимается без ошибки).
+//! Запись не хранит статус меню, поэтому все кадры трактуются как геймплей
+//! (`MENU_IN_GAME`) — в записи и не бывает меню-навигации: её пишут с включённым
+//! вводом в бою. Ключевые ограничения формата (что не воспроизводится) описаны
+//! в `drmod-script/src/record.rs`.
 
-use drmod_replay_types::input_bits;
-use serde::Serialize;
+use drmod_script::record::{self, RecordFrame};
 
 use super::dump::{Frame, RunMeta};
 
 /// Потолок длительности скрипта — общая константа с модом, а не своя копия:
 /// иначе выгрузка записи и приём её модом разъезжались бы по лимиту.
+#[allow(unused_imports)]
 use drmod_replay_types::script::MAX_SCRIPT_FRAMES;
 
-/// Вход одной команды скрипта — подмножество полей `ScriptInput` из
-/// `src/api.rs`, восстанавливаемое из записи.
-#[derive(Clone, Copy, Debug, PartialEq, Default, Serialize)]
-struct ScriptInput {
-    #[serde(skip_serializing_if = "is_false")]
-    forward: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    backward: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    left: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    right: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    jump: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    light_attack: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    heavy_attack: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    ar_mode: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    weapon_select: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    ninja_run: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    blade: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    subweapon: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    pause: bool,
-    #[serde(skip_serializing_if = "is_false")]
-    ripper: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    camera: Option<[f32; 2]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    left_stick: Option<[f32; 2]>,
-}
-
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
-impl ScriptInput {
-    /// Пустой ли вход (ни одного действия/стика) — такие кадры пропускаются.
-    fn is_empty(&self) -> bool {
-        *self == Self::default()
+/// Один кадр БД как кадр конвертера. Статус — геймплейный (см. модульную шапку).
+fn record_of(frame: &Frame) -> RecordFrame {
+    RecordFrame {
+        frame_index: frame.frame_index as u32,
+        input: frame.input,
+        ripper: frame.ripper_pressed != 0,
+        pos: frame.state.pos,
+        menu_status_raw: record::MENU_IN_GAME,
     }
-}
-
-/// Одна команда скрипта.
-#[derive(Serialize)]
-struct ScriptCommand {
-    t: u32,
-    duration: u32,
-    input: ScriptInput,
-}
-
-/// Тело скрипта (`POST /script/run`).
-#[derive(Serialize)]
-struct ScriptJson {
-    name: String,
-    trigger: TriggerJson,
-    commands: Vec<ScriptCommand>,
-}
-
-/// Триггер старта: позиция первого кадра записи (старт миссии).
-#[derive(Serialize)]
-struct TriggerJson {
-    pos: [f32; 3],
-}
-
-/// Стик, который `script_tick` соберёт из направлений (см. api.rs):
-/// forward→(0,-1000), backward→(0,1000), left→(-1000,0), right→(1000,0),
-/// диагонали суммируются.
-fn implied_stick(inp: &ScriptInput) -> [f32; 2] {
-    let mut s = [0.0f32, 0.0];
-    if inp.forward {
-        s[1] -= 1000.0;
-    }
-    if inp.backward {
-        s[1] += 1000.0;
-    }
-    if inp.left {
-        s[0] -= 1000.0;
-    }
-    if inp.right {
-        s[0] += 1000.0;
-    }
-    s
-}
-
-/// Декодирует кадр записи в семантический вход скрипта. `None` — кадр без
-/// ввода (пропускается). `left_stick` эмитится явно, если отличается от
-/// подразумеваемого направлениями: в записи 117 при FORWARD|RIGHT стик
-/// (0,-1000), а не (1000,-1000) — без явного стика движение разошлось бы.
-fn decode_input(f: &Frame) -> Option<ScriptInput> {
-    let d = f.input.buttons_down;
-    let mut inp = ScriptInput {
-        forward: d & input_bits::FORWARD != 0,
-        backward: d & input_bits::BACK != 0,
-        left: d & input_bits::LEFT != 0,
-        right: d & input_bits::RIGHT != 0,
-        jump: d & input_bits::JUMP != 0,
-        light_attack: d & input_bits::LIGHT_ATTACK != 0,
-        heavy_attack: d & input_bits::HEAVY_ATTACK != 0,
-        ar_mode: d & input_bits::AR_MODE != 0,
-        weapon_select: d & input_bits::WEAPON_SELECT != 0,
-        ninja_run: d & input_bits::NINJA_RUN != 0,
-        blade: d & input_bits::BLADE != 0,
-        subweapon: d & input_bits::SUBWEAPON != 0,
-        pause: d & input_bits::CANCEL != 0,
-        ripper: f.ripper_pressed != 0,
-        ..Default::default()
-    };
-    if f.input.left_stick != implied_stick(&inp) {
-        inp.left_stick = Some(f.input.left_stick);
-    }
-    if f.input.right_stick != [0.0, 0.0] {
-        inp.camera = Some(f.input.right_stick);
-    }
-    if inp.is_empty() {
-        None
-    } else {
-        Some(inp)
-    }
-}
-
-/// Собирает команды скрипта: одинаковые подряд идущие входы сливаются в одну
-/// команду (фронт `pressed` script_tick ставит на старте команды — совпадает
-/// с записью, где pressed бывает только на переходах down-состояния).
-/// Ripper — отдельная 1-кадровая команда (фронт keybind'а).
-fn build_commands(frames: &[Frame]) -> Vec<ScriptCommand> {
-    let mut cmds = Vec::new();
-    let mut i = 0;
-    while i < frames.len() {
-        let Some(inp) = decode_input(&frames[i]) else {
-            i += 1;
-            continue;
-        };
-        if inp.ripper {
-            cmds.push(ScriptCommand {
-                t: frames[i].frame_index as u32,
-                duration: 1,
-                input: inp,
-            });
-            i += 1;
-            continue;
-        }
-        let start = i;
-        while i + 1 < frames.len() && decode_input(&frames[i + 1]) == Some(inp) {
-            i += 1;
-        }
-        cmds.push(ScriptCommand {
-            t: frames[start].frame_index as u32,
-            duration: (frames[i].frame_index - frames[start].frame_index + 1) as u32,
-            input: inp,
-        });
-        i += 1;
-    }
-    cmds
 }
 
 /// Собирает JSON-скрипт для записи: имя `replay-<id>`, триггер на позиции
@@ -191,36 +35,21 @@ fn build_commands(frames: &[Frame]) -> Vec<ScriptCommand> {
 /// JSON (тело POST /script/run ограничено 64 КБ в api.rs); `pretty` — для
 /// чтения человеком.
 pub(crate) fn build_script(meta: &RunMeta, frames: &[Frame], pretty: bool) -> Result<String, String> {
-    let trigger_pos = frames
-        .first()
-        .map(|f| f.state.pos)
-        .ok_or_else(|| "нет кадров для триггера".to_string())?;
-    let commands = build_commands(frames);
-    if let Some(last) = commands.last()
-        && last.t + last.duration > MAX_SCRIPT_FRAMES
-    {
-        return Err(format!(
-            "запись длиннее потолка скрипта ({} кадров > {}) — обрежьте или разбейте",
-            last.t + last.duration,
-            MAX_SCRIPT_FRAMES
-        ));
-    }
-    let script = ScriptJson {
-        name: format!("replay-{}", meta.id),
-        trigger: TriggerJson { pos: trigger_pos },
-        commands,
-    };
+    let records: Vec<RecordFrame> = frames.iter().map(record_of).collect();
+    let mut document = record::document(&records).map_err(|error| error.to_string())?;
+    document.name = format!("replay-{}", meta.id);
+
     if pretty {
-        serde_json::to_string_pretty(&script).map_err(|e| format!("json: {e}"))
+        serde_json::to_string_pretty(&document).map_err(|e| format!("json: {e}"))
     } else {
-        serde_json::to_string(&script).map_err(|e| format!("json: {e}"))
+        serde_json::to_string(&document).map_err(|e| format!("json: {e}"))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use drmod_replay_types::{CameraState, InputUnit, PlayerState};
+    use drmod_replay_types::{CameraState, InputUnit, PlayerState, input_bits};
 
     fn frame(fi: i64, input: InputUnit, ripper: i64) -> Frame {
         Frame {
@@ -252,7 +81,7 @@ mod tests {
     #[test]
     fn decode_forward_omits_implied_stick() {
         let f = frame(0, unit(input_bits::FORWARD, [0.0, -1000.0]), 0);
-        let inp = decode_input(&f).expect("forward");
+        let inp = record::decode(&record_of(&f)).expect("forward");
         assert!(inp.forward && !inp.right);
         assert_eq!(inp.left_stick, None, "стик совпадает с подразумеваемым");
     }
@@ -261,7 +90,7 @@ mod tests {
     fn decode_forward_right_emits_explicit_stick() {
         // В записи 117 при FORWARD|RIGHT стик (0,-1000), а не (1000,-1000).
         let f = frame(0, unit(input_bits::FORWARD | input_bits::RIGHT, [0.0, -1000.0]), 0);
-        let inp = decode_input(&f).expect("forward+right");
+        let inp = record::decode(&record_of(&f)).expect("forward+right");
         assert!(inp.forward && inp.right);
         assert_eq!(inp.left_stick, Some([0.0, -1000.0]));
     }
@@ -279,26 +108,22 @@ mod tests {
             },
             0,
         );
-        let inp = decode_input(&f).expect("jump+camera");
+        let inp = record::decode(&record_of(&f)).expect("jump+camera");
         assert!(inp.jump);
         assert_eq!(inp.camera, Some([-200.0, 100.0]));
     }
 
     #[test]
     fn decode_ripper_and_subweapon() {
-        let f = frame(
-            0,
-            unit(input_bits::SUBWEAPON, [0.0, 0.0]),
-            1,
-        );
-        let inp = decode_input(&f).expect("ripper+subweapon");
+        let f = frame(0, unit(input_bits::SUBWEAPON, [0.0, 0.0]), 1);
+        let inp = record::decode(&record_of(&f)).expect("ripper+subweapon");
         assert!(inp.ripper && inp.subweapon);
     }
 
     #[test]
     fn decode_empty_is_none() {
         let f = frame(0, InputUnit::default(), 0);
-        assert_eq!(decode_input(&f), None);
+        assert_eq!(record::decode(&record_of(&f)), None);
     }
 
     #[test]
@@ -313,7 +138,8 @@ mod tests {
             ),
             frame(3, unit(input_bits::FORWARD, [0.0, -1000.0]), 0),
         ];
-        let cmds = build_commands(&frames);
+        let records: Vec<RecordFrame> = frames.iter().map(record_of).collect();
+        let cmds = record::commands(&records);
         assert_eq!(cmds.len(), 3);
         assert_eq!((cmds[0].t, cmds[0].duration), (0, 2));
         assert!(cmds[0].input.forward && !cmds[0].input.jump);
@@ -329,7 +155,8 @@ mod tests {
             frame(1, unit(input_bits::FORWARD, [0.0, -1000.0]), 1),
             frame(2, unit(input_bits::FORWARD, [0.0, -1000.0]), 0),
         ];
-        let cmds = build_commands(&frames);
+        let records: Vec<RecordFrame> = frames.iter().map(record_of).collect();
+        let cmds = record::commands(&records);
         assert_eq!(cmds.len(), 3);
         assert_eq!((cmds[1].t, cmds[1].duration), (1, 1));
         assert!(cmds[1].input.ripper);
@@ -342,7 +169,8 @@ mod tests {
             frame(1, unit(input_bits::FORWARD, [0.0, -1000.0]), 0),
             frame(2, InputUnit::default(), 0),
         ];
-        let cmds = build_commands(&frames);
+        let records: Vec<RecordFrame> = frames.iter().map(record_of).collect();
+        let cmds = record::commands(&records);
         assert_eq!(cmds.len(), 1);
         assert_eq!((cmds[0].t, cmds[0].duration), (1, 1));
     }

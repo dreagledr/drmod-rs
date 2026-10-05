@@ -21,6 +21,8 @@
 | `serde` / `serde_json` | JSON протокола мультиплеера и HTTP API |
 | `drmod-protocol` (`drmod-protocol/`) | Общие типы TCP/UDP-протокола |
 | `drmod-replay-types` (`drmod-replay-types/`) | Общие replay-DTO (`InputUnit`/`PlayerState`/`CameraState`/`EnemyState`) |
+| `drmod-script` (`drmod-script/`) | Общие форматы скрипта (`.tas`-текст, API JSON, кадры) + конвертер записи в документ |
+| `drmod-cli` (`drmod-cli/`) | CLI `drmod-tas`: запуск/чтение `.tas`, `state`, выгрузка кольца логов в `.tas` |
 
 ## Документация
 
@@ -67,12 +69,12 @@ cargo build --release
 
 Корень — воркспейс: код мода (только библиотека) лежит в `drmod-core/`,
 инжектор-бинарник — в `drmod-injector/`, общие крейты — в
-`drmod-protocol/` и `drmod-replay-types/`, сервер — в `drmod-server/`.
+`drmod-protocol/`, `drmod-replay-types/` и `drmod-script/`, сервер — в `drmod-server/`.
 По умолчанию корневая сборка собирает только i686-набор (`default-members`):
-x64-крейты `drmod-dbdump/`, `drmod-script-gen/`, `drmod-server/` — члены
+x64-крейты `drmod-dbdump/`, `drmod-script-gen/`, `drmod-server/`, `drmod-cli/` — члены
 воркспейса, но не default-members (cargo читает `.cargo/config.toml` по cwd,
 поэтому иначе они кросс-компилировались бы под i686). Из корня они доступны
-через алиасы `cargo dbdump` / `cargo script-gen` / `cargo server` /
+через алиасы `cargo dbdump` / `cargo script-gen` / `cargo server` / `cargo cli` /
 `cargo editor` (каждый добавляет `--target x86_64-pc-windows-msvc`) или явный
 `--target`.
 
@@ -84,7 +86,7 @@ x64-крейты `drmod-dbdump/`, `drmod-script-gen/`, `drmod-server/` — чл�
 | Команда | Что делает |
 |---------|------------|
 | `cargo xtask build` | `out/drmod-rs.zip` (лаунчер) и `out/drmod-asi.zip` (ASI-набор с загрузчиком) |
-| `cargo xtask build-tools` | `out/dbdump.exe` (x64) и `out/dump-replay-input.exe` (i686) |
+| `cargo xtask build-tools` | `out/dbdump.exe`, `out/drmod-tas.exe` (x64) и `out/dump-replay-input.exe` (i686); CLI ещё и архивом `out/drmod-tas.zip` |
 | `cargo xtask pack-editor` | `out/drmod-tas-editor/` и `out/drmod-tas-editor.zip` |
 | `cargo xtask test-api` | смок-тест HTTP API (нужна запущенная игра с инжектированным модом) |
 | `cargo xtask test-connect` | смок-тест сервера мультиплеера |

@@ -210,6 +210,10 @@ struct PendingScript {
 struct ScriptState {
     id: u32,
     name: String,
+    /// Скрипт как `.tas`, если он выразим текстом (иначе `None`): `GET /script/{id}.tas`
+    /// отдаёт ровно то, что было запущено. Заполняется и для `.tas`-тела, и для JSON,
+    /// который в текст конвертируется.
+    text: Option<String>,
     commands: Vec<ScriptCommand>,
     frame: u32,
     status: ScriptStatus,
@@ -246,6 +250,11 @@ struct LogFrame {
     /// Статус меню на кадре — без него нельзя проверить сценарии меню
     /// (пауза/рестарт): переходы InGame→PauseMenu→NONE видны только здесь.
     menu_status: &'static str,
+    /// Сырой `GameMenuStatus` (число): по нему разводятся общие D-pad-биты
+    /// (0x1 weapon_select/menu_left, 0x8 ar_mode/menu_up, 0x10 jump/confirm)
+    /// при выгрузке кольца в скрипт (`drmod-script::record`). `menu_status`
+    /// остаётся человекочитаемой строкой для логов.
+    menu_status_raw: i32,
     /// Фаза скрипта на кадре (`restarting`/`armed`/`running`/`done`): кадры
     /// до загрузки принадлежат фазе рестарта, и метрики полёта надо считать
     /// только по `running`.
@@ -279,6 +288,7 @@ struct LogFrameJson {
     frame: u32,
     script_id: Option<u32>,
     menu_status: &'static str,
+    menu_status_raw: i32,
     script_phase: Option<&'static str>,
     enemy: crate::tas::types::EnemyState,
     fed_down_bits: u32,
@@ -599,6 +609,8 @@ enum Response {
     Render(RenderSnapshot),
     #[cfg(debug_assertions)]
     Watch(WatchResponse),
+    /// `GET /script/{id}.tas` — скрипт как `.tas`-текст, а не JSON.
+    Text(String),
     Error(ErrorResponse),
 }
 
@@ -1550,6 +1562,7 @@ impl ApiServer {
                 script_phase,
                 enemy,
                 menu_status: ui_state.menu_status.name(),
+                menu_status_raw: ui_state.menu_status_raw,
                 fed_down_bits: fed_down,
                 fed_pressed_bits: fed_pressed,
                 fed_left_stick: fed_left,
@@ -1651,6 +1664,7 @@ impl ApiServer {
         guard.script = Some(ScriptState {
             id,
             name: req.name.clone(),
+            text: None,
             fired_at: ScriptState::new_fired(&req.commands),
             commands: req.commands,
             frame: 0,
@@ -1887,6 +1901,7 @@ fn route(
         ("GET", "/health") => (200, Response::Health(health_json(state))),
         ("GET", "/state") => (200, Response::State(Box::new(state_json(state)))),
         ("POST", "/script/run") => handle_script_run(body, state),
+        ("POST", "/script/run.tas") => handle_script_run_tas(body, state),
         ("POST", "/script/stop") => handle_script_stop(state),
         ("POST", "/eject") => handle_eject(state),
         ("POST", "/phase") => handle_phase(body, state),
@@ -1899,8 +1914,12 @@ fn route(
         ("GET", "/watch") => (200, Response::Watch(watch_json())),
         #[cfg(debug_assertions)]
         ("POST", "/watch") => handle_watch(body),
+        ("GET", path) if path.starts_with("/script/") && path.ends_with(".tas") => {
+            handle_script_get_tas(path, state)
+        }
         ("GET", path) if path.starts_with("/script/") => handle_script_get(path, state),
         ("GET", "/logs") => handle_logs(query, state),
+        ("GET", "/logs.tas") => handle_logs_tas(query, state),
         _ => (
             404,
             Response::Error(ErrorResponse {
@@ -2369,6 +2388,62 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
         Ok(v) => v,
         Err(e) => return (400, Response::Error(ErrorResponse { error: e })),
     };
+    start_script(req, script_text(body), state)
+}
+
+/// `.tas`-текст JSON-тела, если оно выразимо текстом: ценность для read-back
+/// `GET /script/{id}.tas`. `None` для скрипта, которому нужен JSON
+/// (`when_enemy`, `raw_key`, `dik_key`).
+fn script_text(json: &str) -> Option<String> {
+    let document = drmod_script::json::read(json).ok()?;
+    drmod_script::dsl::write(&document).ok()
+}
+
+/// `POST /script/run.tas` — тот же запуск, но тело скрипта — текст DSL.
+///
+/// Парсер называет строку и кадр в ошибке (`frame_aware`), а дальше идёт общий
+/// путь: документ пишется в JSON (контракт редактора) и принимается тем же
+/// `parse_script`, что и JSON-тело.
+fn handle_script_run_tas(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    let document = match drmod_script::dsl::parse(body) {
+        Ok(document) => document,
+        Err(refused) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: refused.frame_aware(),
+                }),
+            )
+        }
+    };
+
+    let text = drmod_script::dsl::write(&document).unwrap_or_else(|_| body.to_owned());
+    let json = match drmod_script::json::write(&document) {
+        Ok(json) => json,
+        Err(refused) => {
+            return (
+                400,
+                Response::Error(ErrorResponse {
+                    error: refused.frame_aware(),
+                }),
+            )
+        }
+    };
+    let req = match parse_script(&json) {
+        Ok(req) => req,
+        Err(error) => return (400, Response::Error(ErrorResponse { error })),
+    };
+
+    start_script(req, Some(text), state)
+}
+
+/// Запускает разобранный скрипт (общий путь `/script/run` и `/script/run.tas`),
+/// запоминая его `.tas`-текст для read-back.
+fn start_script(
+    req: ScriptRequest,
+    text: Option<String>,
+    state: &Arc<Mutex<SharedState>>,
+) -> (u16, Response) {
     if let Some(t) = &req.trigger
         && t.pos.is_none()
         && t.ticks.is_none()
@@ -2451,6 +2526,7 @@ fn handle_script_run(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     guard.script = Some(ScriptState {
         id,
         name: req.name.clone(),
+        text,
         fired_at: ScriptState::new_fired(&phase_commands),
         commands: phase_commands,
         frame: 0,
@@ -2690,6 +2766,49 @@ fn handle_script_get(path: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respo
     }
 }
 
+/// `GET /script/{id}.tas` — скрипт как `.tas`-текст.
+///
+/// `id` — номер скрипта, либо `last`/пусто для текущего (последнего) скрипта.
+/// `409`, если скрипт не выражается текстом (`when_enemy`/`raw_key`/`dik_key`).
+fn handle_script_get_tas(path: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    let id_str = path["/script/".len()..].trim_end_matches(".tas");
+    let guard = state.lock().unwrap();
+
+    let found = if id_str.is_empty() || id_str == "last" {
+        guard.script.as_ref()
+    } else {
+        match id_str.parse::<u32>() {
+            Ok(id) => guard.script.as_ref().filter(|s| s.id == id),
+            Err(_) => {
+                return (
+                    400,
+                    Response::Error(ErrorResponse {
+                        error: "invalid script id".into(),
+                    }),
+                )
+            }
+        }
+    };
+
+    match found {
+        Some(s) => match &s.text {
+            Some(text) => (200, Response::Text(text.clone())),
+            None => (
+                409,
+                Response::Error(ErrorResponse {
+                    error: "script has no .tas form (when_enemy/raw_key/dik_key needs JSON)".into(),
+                }),
+            ),
+        },
+        None => (
+            404,
+            Response::Error(ErrorResponse {
+                error: format!("script {} not found", id_str),
+            }),
+        ),
+    }
+}
+
 /// `GET /logs` — кадры из кольцевого буфера по интервалу/скрипту.
 fn handle_logs(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
     let params = parse_query(query);
@@ -2726,10 +2845,73 @@ fn handle_logs(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) 
     )
 }
 
-/// Пишет HTTP-ответ с JSON-телом и Connection: close (без keep-alive —
+/// `GET /logs.tas` — те же кадры кольца, но как `.tas`-скрипт: воспроизвести
+/// прогон и тюнить его текстом. `human=1` оставляет только кадры без активного
+/// скрипта (реальный ввод игрока, а не override).
+///
+/// Кадры перенумеровываются от нуля: `t` скрипта — тик симуляции, а `frame` кольца —
+/// счётчик render-кадров, и разрыв между ними не должен становиться разрывом `t`.
+/// Общие D-pad-биты разводятся по `menu_status_raw` кадра (`drmod-script::record`).
+fn handle_logs_tas(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
+    let params = parse_query(query);
+    let guard = state.lock().unwrap();
+    let now = guard.start.elapsed().as_millis() as u64;
+    let from_ms = params
+        .get("from_ms")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let to_ms = params
+        .get("to_ms")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(now);
+    let script_id = params.get("script_id").and_then(|v| v.parse().ok());
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1000)
+        .min(MAX_LOG_LIMIT);
+    let human = params
+        .get("human")
+        .is_some_and(|v| v == "1" || v == "true");
+
+    let frames = guard.ring.query(from_ms, to_ms, script_id, limit);
+    let records: Vec<drmod_script::record::RecordFrame> = frames
+        .iter()
+        .filter(|f| !human || f.script_id.is_none())
+        .enumerate()
+        .map(|(index, frame)| drmod_script::record::RecordFrame {
+            frame_index: index as u32,
+            input: frame.input,
+            ripper: false,
+            pos: frame.pos,
+            menu_status_raw: frame.menu_status_raw,
+        })
+        .collect();
+
+    match drmod_script::record::to_text(&records) {
+        Ok(text) => (200, Response::Text(text)),
+        Err(refused) => (
+            400,
+            Response::Error(ErrorResponse {
+                error: refused.message().to_owned(),
+            }),
+        ),
+    }
+}
+
+/// Пишет HTTP-ответ с телом и Connection: close (без keep-alive —
 /// соединение живёт ровно один запрос, висящих соединений нет).
+///
+/// Тело — JSON для всех ответов, кроме [`Response::Text`]: `.tas`-текст отдаётся
+/// как `text/plain`, без сериализации.
 fn respond(stream: &mut TcpStream, code: u16, value: &Response) {
-    let body = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+    let (content_type, body) = match value {
+        Response::Text(text) => ("text/plain; charset=utf-8", text.clone()),
+        _ => (
+            "application/json; charset=utf-8",
+            serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()),
+        ),
+    };
     let reason = match code {
         200 => "OK",
         400 => "Bad Request",
@@ -2739,9 +2921,10 @@ fn respond(stream: &mut TcpStream, code: u16, value: &Response) {
         _ => "Error",
     };
     let head = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         code,
         reason,
+        content_type,
         body.len()
     );
     let _ = stream.write_all(head.as_bytes());
@@ -3192,6 +3375,7 @@ impl LogFrame {
             frame: self.frame,
             script_id: self.script_id,
             menu_status: self.menu_status,
+            menu_status_raw: self.menu_status_raw,
             script_phase: self.script_phase,
             enemy: self.enemy,
             fed_down_bits: self.fed_down_bits,

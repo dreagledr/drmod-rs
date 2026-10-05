@@ -6,7 +6,7 @@
 //!
 //! ```text
 //! cargo xtask build          # the launcher exe + the ASI zip
-//! cargo xtask build-tools    # dbdump.exe and dump-replay-input.exe -> out/
+//! cargo xtask build-tools    # dbdump.exe, drmod-tas.exe and dump-replay-input.exe -> out/
 //! cargo xtask pack-editor    # the TAS editor distribution (and its zip with --zip)
 //! cargo xtask test-api       # the mod's HTTP API smoke test (game running, mod injected)
 //! cargo xtask test-connect   # the multiplayer server smoke test

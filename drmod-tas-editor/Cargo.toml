@@ -22,8 +22,10 @@ dear-imgui-cte = "0.18"
 # Выбор папки со скриптами. По умолчанию включены оба бэкенда (native-rfd и imgui);
 # `open_blocking` работает только на нативном — на ImGui-бэкенде он вернёт `Unsupported`.
 dear-file-browser = "0.18"
-# The script JSON is the mod's own format (`drmod-replay-types/src/script.rs`), and the editor's
-# documents are the same shapes.
+# The script formats — the DSL text, the API JSON, the frame views and the record converter — are
+# shared with the mod and the CLI, so they live in `drmod-script` (this crate is its own workspace,
+# hence a path dependency).
+drmod-script = { path = "../drmod-script" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Every request body goes out gzipped: the mod's 64 KiB body limit is measured on the
