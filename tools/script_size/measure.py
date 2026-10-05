@@ -45,9 +45,9 @@ RING_CAPACITY = 3600
 MAX_LOG_LIMIT = 5000
 MAX_NAME_CHARS = 64
 # Размер `LogFrame` (`src/api.rs`) — пришпилен тестом
-# `api::ring_tests::log_frame_stays_216_bytes`; если он падает, переизмерять
+# `api::ring_tests::log_frame_stays_224_bytes`; если он падает, переизмерять
 # `std::mem::size_of::<LogFrame>()` и править цифру здесь и в README.
-LOG_FRAME_BYTES = 216
+LOG_FRAME_BYTES = 224
 # 10 имён декодирует src/api.rs::decode_buttons — схема лога совпадает с модом.
 LOG_BUTTON_NAMES = 10
 
@@ -647,8 +647,9 @@ def logs_memory_note() -> list[str]:
 
     `LogFrame` (`src/api.rs`) — POD-структура без указателей: позиция/поворот/
     скорость, HP и анимация, поза камеры, `InputUnit` (48 B), `EnemyState`
-    (32 B), биты поданного ввода и два `&'static str` статусов. Размер
-    **216 B** измерен `std::mem::size_of::<LogFrame>()` (проверка — в
+    (32 B), биты поданного ввода, биты keybind-ввода и два `&'static str`
+    статусов. Размер
+    **224 B** измерен `std::mem::size_of::<LogFrame>()` (проверка — в
     `LOG_FRAME_BYTES`; переизмерять вставкой теста в `src/api.rs`).
     `VecDeque<LogFrame>` создаётся один раз через `with_capacity`, поэтому
     ёмкость и память фиксированы и не зависят от времени работы.

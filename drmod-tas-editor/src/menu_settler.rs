@@ -35,6 +35,12 @@ const POLL: Duration = Duration::from_millis(100);
 /// The pause menu — the one a `pause` bit toggles.
 const PAUSE_MENU: &str = "Pause Menu";
 
+/// The codec screen — closed with Esc as a raw DIK key, not the `pause` bit.
+const CODEC_MENU: &str = "Codec";
+
+/// DirectInput Escape (`drmod-core/src/tas/addresses.rs`), the key the codec reads to close.
+const DIK_ESCAPE: u32 = 0x01;
+
 /// Menus the player is dead in: the game does not leave them on its own, and their preselected
 /// entry is Retry, so a single confirm is the whole way out.
 const FAIL_MENUS: [&str; 3] = ["Mission Fail", "Mission Failed", "Game Over"];
@@ -79,7 +85,22 @@ pub fn ensure_gameplay(api: &ModApi) -> Option<String> {
             None
         } else {
             let now = status(api).unwrap_or_else(|| "no answer".to_owned());
-            Some(format!("the pause menu did not close (still \u{201c}{now}\u{201d})"))
+            Some(format!(
+                "the pause menu did not close (still \u{201c}{now}\u{201d})"
+            ))
+        };
+    }
+
+    // The codec is closed with Esc as a **raw DIK key**, not the `pause` bit: the codec screen
+    // reads the device key directly, and `pause` does nothing there (measured).
+    if CODEC_MENU.eq_ignore_ascii_case(&current) {
+        return if close_codec(api) {
+            None
+        } else {
+            let now = status(api).unwrap_or_else(|| "no answer".to_owned());
+            Some(format!(
+                "the codec did not close (still \u{201c}{now}\u{201d})"
+            ))
         };
     }
 
@@ -93,7 +114,7 @@ pub fn ensure_gameplay(api: &ModApi) -> Option<String> {
     }
 
     Some(format!(
-        "the game is in \u{201c}{current}\u{201d}, and this panel only knows how to leave the pause and fail menus"
+        "the game is in \u{201c}{current}\u{201d}, and this panel only knows how to leave the pause, codec and fail menus"
     ))
 }
 
@@ -102,6 +123,18 @@ pub fn ensure_gameplay(api: &ModApi) -> Option<String> {
 pub fn close_pause(api: &ModApi) -> bool {
     if !play(api, "close-menu", |input| ScriptInput {
         pause: true,
+        ..input
+    }) {
+        return false;
+    }
+
+    wait_for_menu(api, crate::api::GameStatus::IN_GAME, SETTLE)
+}
+
+/// Closes the codec screen — Esc as a raw DIK key, which is what the codec reads.
+pub fn close_codec(api: &ModApi) -> bool {
+    if !play(api, "close-codec", |input| ScriptInput {
+        dik_key: Some(DIK_ESCAPE),
         ..input
     }) {
         return false;

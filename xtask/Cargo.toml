@@ -37,4 +37,5 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 # `.cargo/`), which is what the tests need (they speak to a 64-bit-only dev machine's tooling, not to
 # the 32-bit game).
 [workspace]
+resolver = "3"
 members = ["."]

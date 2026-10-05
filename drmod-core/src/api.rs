@@ -268,6 +268,11 @@ struct LogFrame {
     fed_down_bits: u32,
     fed_pressed_bits: u32,
     fed_left_stick: [f32; 2],
+    /// Keybind-ввод кадра (`ripper`/`lock_on`/`item`/`codec`/`camera_reset`/`zandatsu`/`dodge` …):
+    /// битмаски `down`/`pressed`, бит — индекс `KEYBIND_*`. Эти действия не проходят через
+    /// `InputUnit`, поэтому без них выгрузка ввода их не видит (`drmod-script::record`).
+    keybind_down_bits: u32,
+    keybind_pressed_bits: u32,
     pos: [f32; 3],
     rot: [f32; 3],
     vel: [f32; 3],
@@ -294,6 +299,8 @@ struct LogFrameJson {
     fed_down_bits: u32,
     fed_pressed_bits: u32,
     fed_left_stick: [f32; 2],
+    keybind_down_bits: u32,
+    keybind_pressed_bits: u32,
     pos: [f32; 3],
     rot: [f32; 3],
     vel: [f32; 3],
@@ -1546,6 +1553,10 @@ impl ApiServer {
             dt_rate,
         };
 
+        // Keybind-ввод за этот кадр забираем всегда (даже когда игрок не читается), иначе
+        // накопленный сэмпл «протечёт» в следующий кадр.
+        let (keybind_down, keybind_pressed) = hooks::take_keybind_frame();
+
         if ui_state.player_found {
             let frame_count = guard.frame_count;
             let fed = replay::input_override();
@@ -1566,6 +1577,8 @@ impl ApiServer {
                 fed_down_bits: fed_down,
                 fed_pressed_bits: fed_pressed,
                 fed_left_stick: fed_left,
+                keybind_down_bits: keybind_down,
+                keybind_pressed_bits: keybind_pressed,
                 pos: state.pos,
                 rot: state.rotation,
                 vel: state.velocity,
@@ -2865,10 +2878,12 @@ fn handle_logs_tas(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respon
         .and_then(|v| v.parse().ok())
         .unwrap_or(now);
     let script_id = params.get("script_id").and_then(|v| v.parse().ok());
+    // Обрезать буфер по умолчанию нечем: выгрузка — про весь прогон, а `/logs` отдаёт *первые*
+    // `limit` кадров окна, поэтому дефолт 1000 вернул бы только начало кольца.
     let limit = params
         .get("limit")
         .and_then(|v| v.parse().ok())
-        .unwrap_or(1000)
+        .unwrap_or(MAX_LOG_LIMIT)
         .min(MAX_LOG_LIMIT);
     let human = params
         .get("human")
@@ -2883,6 +2898,8 @@ fn handle_logs_tas(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respon
             frame_index: index as u32,
             input: frame.input,
             ripper: false,
+            keybind_down: frame.keybind_down_bits,
+            keybind_pressed: frame.keybind_pressed_bits,
             pos: frame.pos,
             menu_status_raw: frame.menu_status_raw,
         })
@@ -3073,6 +3090,7 @@ fn script_tick(
     let mut lock_on = false;
     let mut subweapon = false;
     let mut item = false;
+    let mut codec = false;
     let mut camera_reset = false;
     let mut zandatsu = false;
     // Бит направления, который был подан на ПРОШЛОМ кадре: фронт (`pressed`)
@@ -3246,6 +3264,10 @@ fn script_tick(
             item = true;
             active = true;
         }
+        if inp.codec {
+            codec = true;
+            active = true;
+        }
         if inp.camera_reset {
             camera_reset = true;
             active = true;
@@ -3319,6 +3341,7 @@ fn script_tick(
     hooks::set_keybind_hold(addresses::KEYBIND_SWITCH_LOCK_ON, lock_on);
     hooks::set_keybind_hold(addresses::KEYBIND_USE_SUBWEAPON, subweapon);
     hooks::set_keybind_hold(addresses::KEYBIND_USE_ITEM, item);
+    hooks::set_keybind_hold(addresses::KEYBIND_CODEC_SCREEN, codec);
     hooks::set_keybind_hold(addresses::KEYBIND_CAMERA_RESET, camera_reset);
     hooks::set_keybind_hold(addresses::KEYBIND_EXECUTION, zandatsu);
     // Сырые клавиши меню живут один кадр: ставим биты текущего кадра, иначе
@@ -3381,6 +3404,8 @@ impl LogFrame {
             fed_down_bits: self.fed_down_bits,
             fed_pressed_bits: self.fed_pressed_bits,
             fed_left_stick: self.fed_left_stick,
+            keybind_down_bits: self.keybind_down_bits,
+            keybind_pressed_bits: self.keybind_pressed_bits,
             pos: self.pos,
             rot: self.rot,
             vel: self.vel,
@@ -3515,7 +3540,7 @@ mod ring_tests {
     /// что `tools/script_size/README.md` и `measure.py::LOG_FRAME_BYTES`
     /// нужно пересчитать.
     #[test]
-    fn log_frame_stays_216_bytes() {
-        assert_eq!(std::mem::size_of::<LogFrame>(), 216);
+    fn log_frame_stays_224_bytes() {
+        assert_eq!(std::mem::size_of::<LogFrame>(), 224);
     }
 }

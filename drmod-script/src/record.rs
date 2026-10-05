@@ -39,9 +39,33 @@ pub struct RecordFrame {
     /// The keybind edge the game's `InputUnit` does not carry (the replay database records it,
     /// the log ring leaves it `false`).
     pub ripper: bool,
+    /// The keybinds the game was seen reading on this frame, as bitmasks indexed by
+    /// [`keybind`]: `down` is held, `pressed` is the edge. These actions (`lock_on`, `item`,
+    /// `codec`, `camera_reset`, `zandatsu`, `dodge`) never reach `InputUnit`, so this is the only
+    /// way the log ring can carry them back into a script. The replay database leaves both `0`.
+    pub keybind_down: u32,
+    pub keybind_pressed: u32,
     pub pos: [f32; 3],
     /// The raw `GameMenuStatus` of the frame; [`MENU_IN_GAME`] means gameplay.
     pub menu_status_raw: i32,
+}
+
+/// The game's keybind indices (`eSaveKeybind`, `drmod-core/src/tas/addresses.rs`), shared so the
+/// mod's per-frame keybind bitmasks and this converter agree on which bit is which action.
+pub mod keybind {
+    pub const RIPPERMODE: u32 = 11;
+    pub const SWITCH_LOCK_ON: u32 = 12;
+    pub const USE_SUBWEAPON: u32 = 13;
+    pub const USE_ITEM: u32 = 14;
+    pub const CODEC_SCREEN: u32 = 17;
+    pub const CAMERA_RESET: u32 = 19;
+    pub const EXECUTION: u32 = 20;
+    pub const DEFFENSIVE_OFFENSIVE: u32 = 21;
+
+    /// The bit for one keybind index.
+    pub const fn bit(index: u32) -> u32 {
+        1 << index
+    }
 }
 
 /// The frames as a document: commands merged from runs of identical input, armed on the first
@@ -140,6 +164,22 @@ pub fn decode(frame: &RecordFrame) -> Option<ScriptInput> {
         input.confirm = down & input_bits::CONFIRM != 0;
     }
 
+    // The keybind actions `InputUnit` does not carry. `ripper` is a toggle edge; the rest are the
+    // mod's hold actions, so they are read from the held bit (a tap held across a run becomes one
+    // command with its own duration, which is what the mod's own runner feeds).
+    let held = frame.keybind_down;
+    let pressed = frame.keybind_pressed;
+    input.ripper |= pressed & keybind::bit(keybind::RIPPERMODE) != 0;
+    input.lock_on = held & keybind::bit(keybind::SWITCH_LOCK_ON) != 0;
+    input.item = held & keybind::bit(keybind::USE_ITEM) != 0;
+    input.camera_reset = held & keybind::bit(keybind::CAMERA_RESET) != 0;
+    input.zandatsu = held & keybind::bit(keybind::EXECUTION) != 0;
+    input.dodge = held & keybind::bit(keybind::DEFFENSIVE_OFFENSIVE) != 0;
+    input.codec = (held & keybind::bit(keybind::CODEC_SCREEN) != 0)
+        || (pressed & keybind::bit(keybind::CODEC_SCREEN) != 0);
+    // `subweapon` has an `InputUnit` bit as well; the keybind is the same action, so it is OR-ed in.
+    input.subweapon |= held & keybind::bit(keybind::USE_SUBWEAPON) != 0;
+
     if frame.input.left_stick != implied_stick(&input) {
         input.left_stick = Some(frame.input.left_stick);
     }
@@ -205,9 +245,35 @@ mod tests {
             frame_index: index,
             input,
             ripper: false,
+            keybind_down: 0,
+            keybind_pressed: 0,
             pos: [0.0, 0.0, 0.0],
             menu_status_raw: menu,
         }
+    }
+
+    #[test]
+    fn keybind_actions_reach_the_input() {
+        let held = keybind::bit(keybind::SWITCH_LOCK_ON)
+            | keybind::bit(keybind::USE_ITEM)
+            | keybind::bit(keybind::CAMERA_RESET)
+            | keybind::bit(keybind::EXECUTION)
+            | keybind::bit(keybind::DEFFENSIVE_OFFENSIVE)
+            | keybind::bit(keybind::USE_SUBWEAPON);
+        let pressed = keybind::bit(keybind::RIPPERMODE) | keybind::bit(keybind::CODEC_SCREEN);
+
+        let frames = [RecordFrame {
+            frame_index: 0,
+            input: InputUnit::default(),
+            ripper: false,
+            keybind_down: held,
+            keybind_pressed: pressed,
+            pos: [0.0, 0.0, 0.0],
+            menu_status_raw: MENU_IN_GAME,
+        }];
+        let input = decode(&frames[0]).expect("input");
+        assert!(input.ripper && input.lock_on && input.item && input.camera_reset);
+        assert!(input.zandatsu && input.dodge && input.codec && input.subweapon);
     }
 
     #[test]

@@ -109,7 +109,7 @@ python -m pip install zstandard brotli
 | `RING_CAPACITY` = 3600 | `drmod-core/src/api.rs` (60 FPS × 60 с) |
 | `MAX_LOG_LIMIT` = 5000 | `drmod-core/src/api.rs` (максимум кадров в ответе `/logs`) |
 | `MAX_SCRIPT_FRAMES` = 1 000 000 | `drmod-replay-types/src/script.rs` (верхняя страховка; практический ограничитель — лимит тела) |
-| `LOG_FRAME_BYTES` = 216 | размер `LogFrame` в памяти, пришпилен тестом `api::ring_tests::log_frame_stays_216_bytes` в `drmod-core/src/api.rs`; падение теста = цифру здесь и в `measure.py` надо пересчитать |
+| `LOG_FRAME_BYTES` = 224 | размер `LogFrame` в памяти, пришпилен тестом `api::ring_tests::log_frame_stays_224_bytes` в `drmod-core/src/api.rs`; падение теста = цифру здесь и в `measure.py` надо пересчитать |
 | схема кадра скрипта | `ScriptCommand` / `ScriptInput` (`drmod-replay-types/src/script.rs`), `deny_unknown_fields` + `skip_serializing_if` |
 | схема кадра лога | `LogFrameJson` / `InputJson` (`drmod-core/src/api.rs`); `decode_buttons` отдаёт не более 10 имён |
 | синтаксис `.tas` | `docs/SCRIPT_DSL.md` §3–§5 (канонический `Write`) |

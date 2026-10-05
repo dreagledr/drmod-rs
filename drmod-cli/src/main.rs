@@ -143,15 +143,27 @@ fn get_script(client: &Client, id: u32) -> Result<ScriptStatus, String> {
 
 /// Posts a `.tas` body, taking the mod's one script slot if it is held (the editor's `409` retry).
 fn post_script(client: &Client, text: &str) -> Result<RunResponse, String> {
-    let (mut status, mut body) = client.post_gzip("/script/run.tas", text.as_bytes())?;
+    post_body(client, "/script/run.tas", text)
+}
+
+/// Posts a JSON script body (`POST /script/run`) — the menu steps need it, because the DSL cannot
+/// spell the raw `dik_key`/`raw_key` a menu screen reads.
+fn post_json(client: &Client, json: &str) -> Result<RunResponse, String> {
+    post_body(client, "/script/run", json)
+}
+
+/// Posts a script to `path`, taking the mod's one script slot if it is held (the editor's `409`
+/// retry): stop whatever holds it, then retry once.
+fn post_body(client: &Client, path: &str, body: &str) -> Result<RunResponse, String> {
+    let (mut status, mut response) = client.post_gzip(path, body.as_bytes())?;
     if status == 409 {
         let _ = client.post_empty("/script/stop");
-        (status, body) = client.post_gzip("/script/run.tas", text.as_bytes())?;
+        (status, response) = client.post_gzip(path, body.as_bytes())?;
     }
     if !(200..300).contains(&status) {
-        return Err(from_error(&body, status));
+        return Err(from_error(&response, status));
     }
-    serde_json::from_str(&body).map_err(|e| format!("run response: {e}"))
+    serde_json::from_str(&response).map_err(|e| format!("run response: {e}"))
 }
 
 /// Menus the player is dead in: the game does not leave them on its own, and their preselected
@@ -165,6 +177,9 @@ const LOADING_MENUS: [&str; 3] = [
     "Loading Into Boss Mission",
     "Main Menu Load",
 ];
+
+/// DirectInput Escape (`drmod-core/src/tas/addresses.rs`), the key the codec screen reads to close.
+const DIK_ESCAPE: u32 = 0x01;
 
 /// Gets the game into gameplay before a run: a menu that is already open would swallow the keys a
 /// script's own `restart` plays. The editor's `menu_settler`, ported.
@@ -195,12 +210,23 @@ fn ensure_gameplay(client: &Client) -> Result<(), String> {
             .ok_or_else(|| "the pause menu did not close".to_owned());
     }
 
+    // The codec is closed with Esc as a **raw DIK key** (DirectInput), not the `pause` bit: the
+    // codec screen reads the device key, and `pause` does nothing there (measured).
+    if menu.eq_ignore_ascii_case("Codec") {
+        play_menu(client, "close-codec", |input| drmod_script::model::ScriptInput {
+            dik_key: Some(DIK_ESCAPE),
+            ..input
+        })?;
+        return wait_menu(client, "In Game", Duration::from_secs(3))
+            .ok_or_else(|| "the codec did not close".to_owned());
+    }
+
     if LOADING_MENUS.iter().any(|known| known.eq_ignore_ascii_case(&menu)) {
         return Err(format!("the game is loading (\"{menu}\") — a run needs gameplay"));
     }
 
     Err(format!(
-        "the game is in \"{menu}\", and this tool only knows how to leave the pause and fail menus"
+        "the game is in \"{menu}\", and this tool only knows how to leave the pause, codec and fail menus"
     ))
 }
 
@@ -222,8 +248,10 @@ fn play_menu(
         }],
     };
 
-    let text = drmod_script::dsl::write(&document).map_err(|e| e.message().to_owned())?;
-    let answer = post_script(client, &text)?;
+    // A menu step goes out as JSON, not `.tas`: it may need a raw `dik_key`, which the DSL cannot
+    // spell (`docs/SCRIPT_DSL.md` §6).
+    let json = drmod_script::json::write(&document).map_err(|e| e.message().to_owned())?;
+    let answer = post_json(client, &json)?;
 
     // Wait for the menu step to finish before the next one (or the real script) goes out.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -316,31 +344,29 @@ fn state(rest: &[String]) -> Result<(), String> {
 
 /// `export` — the log ring (or a window of it) written back out as a `.tas`.
 ///
+/// The whole ring is fetched by default (`limit=5000`): `/logs` answers with the *oldest* `limit`
+/// frames of the window, so the server's own default of 1000 would export a run's first ~16 s and
+/// drop the recent input the caller is looking at. `--limit` narrows it deliberately.
+///
 /// `--human` keeps only the frames no script was running on, which is the player's own input
-/// rather than a script's override.
+/// rather than a script's override. It is filtered here: `/logs` does not know the flag (the
+/// mod's `GET /logs.tas` does).
 fn export(rest: &[String]) -> Result<(), String> {
     let parsed = Parsed::of(rest)?;
     let client = Client::new(&parsed.url());
 
-    let mut query = Vec::new();
+    let limit = parsed.value("limit").unwrap_or("5000");
+    let mut query = vec![format!("limit={limit}")];
     for (name, value) in [
         ("from_ms", parsed.value("from")),
         ("to_ms", parsed.value("to")),
         ("script_id", parsed.value("script-id")),
-        ("limit", parsed.value("limit")),
     ] {
         if let Some(value) = value {
             query.push(format!("{name}={value}"));
         }
     }
-    if parsed.flag("human") {
-        query.push("human=1".to_owned());
-    }
-    let path = if query.is_empty() {
-        "/logs".to_owned()
-    } else {
-        format!("/logs?{}", query.join("&"))
-    };
+    let path = format!("/logs?{}", query.join("&"));
 
     let (status, body) = client.get(&path)?;
     if !(200..300).contains(&status) {
@@ -348,16 +374,22 @@ fn export(rest: &[String]) -> Result<(), String> {
     }
     let logs: LogsResponse = serde_json::from_str(&body).map_err(|e| format!("logs: {e}"))?;
 
-    let records = logs.frames.into_iter().enumerate().map(|(index, frame)| {
-        drmod_script::record::RecordFrame {
+    let human = parsed.flag("human");
+    let records: Vec<_> = logs
+        .frames
+        .into_iter()
+        .filter(|frame| !human || frame.script_id.is_none())
+        .enumerate()
+        .map(|(index, frame)| drmod_script::record::RecordFrame {
             frame_index: index as u32,
             input: frame.input.into_unit(),
             ripper: false,
+            keybind_down: frame.keybind_down_bits,
+            keybind_pressed: frame.keybind_pressed_bits,
             pos: frame.pos,
             menu_status_raw: frame.menu_status_raw,
-        }
-    });
-    let records: Vec<_> = records.collect();
+        })
+        .collect();
 
     let mut document = drmod_script::record::document(&records).map_err(|e| e.message().to_owned())?;
     if let Some(name) = parsed.value("name") {
@@ -641,10 +673,13 @@ struct LogsResponse {
 #[derive(Deserialize)]
 struct LogFrame {
     #[serde(default)]
-    #[allow(dead_code)]
     script_id: Option<u32>,
     #[serde(default)]
     menu_status_raw: i32,
+    #[serde(default)]
+    keybind_down_bits: u32,
+    #[serde(default)]
+    keybind_pressed_bits: u32,
     #[serde(default)]
     pos: [f32; 3],
     input: LogInput,

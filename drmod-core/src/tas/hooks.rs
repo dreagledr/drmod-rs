@@ -64,6 +64,35 @@ static KEYBIND_HOLD: [AtomicU32; addresses::KEYBIND_TOTAL] =
 /// `script_tick` (render K+1) или при остановке скрипта.
 static KEYBIND_PRESSED: [AtomicU32; addresses::KEYBIND_TOTAL] =
     [const { AtomicU32::new(0) }; addresses::KEYBIND_TOTAL];
+/// Какие keybind'ы игра читала с прошлого кадра рендера: битмаски `down`/`pressed`, бит — индекс
+/// keybind'а. Ставятся детурами `isKeybindDown`/`isKeybindPressed` при любом ненулевом ответе
+/// (и реальном, и эмулированном), снимаются раз в кадр через [`take_keybind_frame`]. Нужны
+/// кольцу логов: keybind-действия (`ripper`, `lock_on`, `item`, `codec`, `camera_reset`,
+/// `zandatsu`, `dodge`) не проходят через `InputUnit`, и без этого сэмпла выгрузка ввода их не
+/// видит.
+static KEYBIND_DOWN_FRAME: AtomicU32 = AtomicU32::new(0);
+static KEYBIND_PRESSED_FRAME: AtomicU32 = AtomicU32::new(0);
+
+/// Забирает keybind-битмаски, накопленные с прошлого вызова, и обнуляет их: `(down, pressed)`.
+/// Зовётся раз в кадр рендера из `api::frame_update` — так кольцо логов видит keybind-ввод.
+///
+/// Реальный ввод даёт детурный сэмпл (`isKeybindDown`/`isKeybindPressed`), но игра опрашивает не
+/// каждый keybind каждый кадр — `camera_reset`/`execution`/`dodge` игра спрашивает выборочно.
+/// Поэтому к сэмплу добавляется **эмуляция** (`KEYBIND_HOLD`/`KEYBIND_PRESSED`): то, что подал сам
+/// мод (скрипт/playback), известно точно и не должно зависеть от того, успела ли игра спросить.
+pub(crate) fn take_keybind_frame() -> (u32, u32) {
+    let mut down = KEYBIND_DOWN_FRAME.swap(0, Ordering::Relaxed);
+    let mut pressed = KEYBIND_PRESSED_FRAME.swap(0, Ordering::Relaxed);
+    for index in 0..addresses::KEYBIND_TOTAL {
+        if KEYBIND_HOLD[index].load(Ordering::Relaxed) != 0 {
+            down |= 1u32 << index;
+        }
+        if KEYBIND_PRESSED[index].load(Ordering::Relaxed) != 0 {
+            pressed |= 1u32 << index;
+        }
+    }
+    (down, pressed)
+}
 /// Эмуляция raw-клавиш меню (`ms_KeyInput.m_aKeysDown`): битмаски по индексам
 /// 0..6. Меню читает стрелки/Enter через `isKeyDown`/`isKeyPressed`, а не
 /// через keybind'ы — подача идёт записью в кэш `ms_KeyInput` (см. `apply_raw_keys`).
@@ -343,17 +372,21 @@ fn unstick_raw_keys_cache() {
 /// «растекался» — каждый остаток давал отдельное переключение ripper.
 /// Сброс — в начале следующего `script_tick` (см. api.rs).
 unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
-    if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind)
-        && KEYBIND_PRESSED[keybind as usize].load(Ordering::Relaxed) != 0
-    {
-        return 1;
-    }
-
-    let result = if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
+    let in_range = (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind);
+    let emulated =
+        in_range && KEYBIND_PRESSED[keybind as usize].load(Ordering::Relaxed) != 0;
+    let result = if emulated {
+        1
+    } else if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
         unsafe { orig(keybind) }
     } else {
         0
     };
+    // Любой ненулевой ответ (реальный или эмулированный) — это фронт, который кольцо должно
+    // увидеть: keybind-действия не попадают в InputUnit (см. KEYBIND_PRESSED_FRAME).
+    if in_range && result != 0 {
+        KEYBIND_PRESSED_FRAME.fetch_or(1u32 << keybind, Ordering::Relaxed);
+    }
     #[cfg(debug_assertions)]
     if keybind == addresses::KEYBIND_RIPPERMODE && result != 0 {
         RIPPER_PRESSED_SAMPLED.fetch_or(1, Ordering::Relaxed);
@@ -368,16 +401,18 @@ unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
 /// для `KEYBIND_BLADEMODE` накапливается в `BLADE_DOWN_SAMPLED` — запись
 /// читает реальное удержание из этого сэмпла.
 unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
-    if (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind)
-        && KEYBIND_HOLD[keybind as usize].load(Ordering::Relaxed) != 0
-    {
-        return 1;
-    }
-    let result = if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
+    let in_range = (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind);
+    let emulated = in_range && KEYBIND_HOLD[keybind as usize].load(Ordering::Relaxed) != 0;
+    let result = if emulated {
+        1
+    } else if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
         unsafe { orig(keybind) }
     } else {
         0
     };
+    if in_range && result != 0 {
+        KEYBIND_DOWN_FRAME.fetch_or(1u32 << keybind, Ordering::Relaxed);
+    }
     #[cfg(debug_assertions)]
     if keybind == addresses::KEYBIND_BLADEMODE && result != 0 {
         BLADE_DOWN_SAMPLED.fetch_or(1, Ordering::Relaxed);

@@ -1,4 +1,7 @@
 [workspace]
+# The edition-2024 resolver: every member is edition 2024, so resolver "1" (the virtual-workspace
+# default) was wrong and cargo warned on every invocation.
+resolver = "3"
 members = [
     "drmod-core",
     "drmod-injector",

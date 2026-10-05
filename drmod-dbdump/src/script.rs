@@ -25,6 +25,9 @@ fn record_of(frame: &Frame) -> RecordFrame {
         frame_index: frame.frame_index as u32,
         input: frame.input,
         ripper: frame.ripper_pressed != 0,
+        // The replay database has no per-keybind columns; only the log ring carries them.
+        keybind_down: 0,
+        keybind_pressed: 0,
         pos: frame.state.pos,
         menu_status_raw: record::MENU_IN_GAME,
     }

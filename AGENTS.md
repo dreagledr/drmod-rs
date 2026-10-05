@@ -33,8 +33,8 @@ segment autosplitter, TAS record/replay, an HTTP automation API, a multiplayer s
   PE32-checks the vendored ASI loader, and embeds both into `OUT_DIR/Mod/`.
   `TAS_EDITOR_SKIP_MOD_BUILD=1` skips the nested build but not the "DLL must exist" check. It strips
   leaked `RUSTFLAGS`/jobserver env so the editor and root builds share one cache.
-- Every build prints a `virtual workspace defaulting to resolver = "1"` warning. Expected; do not
-  "fix" it in unrelated changes.
+- The workspace root, the editor's and xtask's `[workspace]` tables set `resolver = "3"` (all members
+  are edition 2024), so no resolver warning is printed.
 
 ## Test
 

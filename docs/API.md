@@ -299,6 +299,8 @@ X/Z, ±1.0 м по Y), либо через `trigger.ticks` тиков симул
       "fed_down_bits": 0,
       "fed_pressed_bits": 0,
       "fed_left_stick": [0.0, 0.0],
+      "keybind_down_bits": 4096,
+      "keybind_pressed_bits": 0,
       "input": { "buttons": ["forward"], "down_bits": 4194304,
                  "pressed_bits": 4194304, "left_stick": [0.0, -1000.0],
                  "right_stick": [0.0, 0.0] }
@@ -308,6 +310,7 @@ X/Z, ±1.0 м по Y), либо через `trigger.ticks` тиков симул
 ```
 
 - `input.buttons` — **декодированные имена** активных кнопок (`forward`, `jump`, `light_attack`, `heavy_attack`), а не hex-битмаски — LLM-дружелюбно; `down_bits`/`pressed_bits` — те же биты числом.
+- `keybind_down_bits`/`keybind_pressed_bits` — keybind-ввод кадра (`ripper`=11, `lock_on`=12, `subweapon`=13, `item`=14, `codec`=17, `camera_reset`=19, `zandatsu`=20, `dodge`=21; бит — индекс `eSaveKeybind`). Эти действия **не проходят через `InputUnit`**, поэтому только здесь и видны; включает и реальный ввод, и поданное модом (скрипт/playback). `GET /logs.tas`/`drmod-tas export` превращают их обратно в токены (`lr`/`rb`/`dd`/`cd`/`r`/`b`/`ax`).
 - `menu_status`/`script_phase` — статус меню и фаза скрипта на кадре (`restarting`/`armed`/`running`/`done`): по ним видно переходы `InGame → PauseMenu → NONE` (рестарт) и что метрики полёта надо считать только по `running`. `menu_status_raw` — тот же статус числом (`GameMenuStatus`): по нему `GET /logs.tas` разводит общие D-pad-биты геймплея и меню (§3.15).
 - `enemy` — ближайший враг (подброс даёт парирование его прыжка): `pos`, `r_anim`, `frame` (номер кадра анимации `+0x8B4`), `hp`, `blade_y` (высота клинка), `found`.
 - `fed_down_bits`/`fed_pressed_bits`/`fed_left_stick` — что **мы подали** через override на этом кадре (в паузе `input` залипает на бите паузы).
@@ -534,11 +537,12 @@ AV в `d3d9.dll` (`0xC0000005`, запись по `esi = 0x3FF` в методе-
   как `.tas`, готовый к тюнингу. Кадры перенумеровываются от 0 (`t` скрипта —
   тик симуляции, а `frame` кольца — render-кадр), а общие D-pad-биты
   (`0x1` weapon_select/menu_left, `0x8` ar_mode/menu_up, `0x10` jump/confirm)
-  разводятся по `menu_status_raw` кадра. Оговорки: кольцо — окно 3600 кадров
-  (~60 с) и только при `player_found`; keybind-действия (`ripper`, `lock_on`,
-  `item`, `codec`, `dodge`, `camera_reset`, `zandatsu`) в `InputUnit` не видны и
-  в выгрузку из кольца не попадают (их пишет только запись в SQLite, см.
-  `drmod-dbdump`). Парсер и конвертер — общий крейт `drmod-script`.
+  разводятся по `menu_status_raw` кадра. Keybind-действия (`ripper`, `lock_on`,
+  `item`, `codec`, `camera_reset`, `zandatsu`, `dodge`) тоже переносятся: мод
+  сэмплит их на каждый кадр (`keybind_down_bits`/`keybind_pressed_bits`, §3.6) —
+  и реальный ввод, и поданное скриптом. Оговорка: кольцо — окно 3600 кадров
+  (~60 с) и только при `player_found`. Парсер и конвертер — общий крейт
+  `drmod-script`.
 
 ---
 
