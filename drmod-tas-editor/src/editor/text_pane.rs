@@ -80,6 +80,9 @@ pub fn draw_text(ui: &Ui, editor: &mut TextEditor) -> bool {
 ///
 /// A row is not clickable and nothing here follows the caret: this is a reference, so a row is text.
 pub fn draw_reference(ui: &Ui) {
+    ui.text("Frame");
+    ui.text_wrapped(&format!("{}  —  {}", commands::FRAME.spelling, commands::FRAME.help));
+
     ui.text("Commands");
     ui.text_wrapped(":frames holds a token that long — 1 by default");
 

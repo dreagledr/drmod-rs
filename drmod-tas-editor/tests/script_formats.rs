@@ -358,3 +358,56 @@ fn a_script_the_mod_would_refuse_is_refused_here_too() {
         refused.message()
     );
 }
+
+#[test]
+fn a_relative_frame_counts_from_the_previous_line() {
+    // The first line is absolute and every `+N` is a delta from the line before it, so the two
+    // forms mix: `100`, then `110`, then an absolute `200` that the next delta counts from.
+    let document = dsl::parse("! name=x\n100 a\n+10 x\n+5 y\n200 lt\n+2 b\n")
+        .expect("the relative text parses");
+
+    let frames: Vec<u32> = document.commands.iter().map(|command| command.t).collect();
+    assert_eq!(frames, vec![100, 110, 115, 200, 202]);
+}
+
+#[test]
+fn the_first_relative_line_counts_from_zero() {
+    let document = dsl::parse("! name=x\n+7 a\n").expect("the relative text parses");
+    assert_eq!(document.commands[0].t, 7);
+}
+
+#[test]
+fn a_relative_text_round_trips_through_the_relative_writer() {
+    let text = "! name=x\n100 a\n+10 x\n+5 y\n";
+    let document = dsl::parse(text).expect("the relative text parses");
+
+    // The writer keeps the shape the author tuned: the first frame absolute, the rest deltas.
+    assert_eq!(dsl::write_relative(&document).expect("it writes"), text);
+    assert_eq!(
+        dsl::parse(&dsl::write_relative(&document).expect("it writes")).expect("it parses"),
+        document
+    );
+
+    // The absolute spelling of the same document is the canonical one.
+    assert_eq!(dsl::write(&document).expect("it writes"), "! name=x\n100 a\n110 x\n115 y\n");
+}
+
+#[test]
+fn a_bare_plus_is_refused_with_its_line() {
+    let refused = dsl::parse("! name=x\n+ a\n").expect_err("`+` has no number");
+    assert!(
+        refused.message().contains("line 2"),
+        "the refusal names the line: {}",
+        refused.message()
+    );
+}
+
+#[test]
+fn the_table_resolves_relative_frames() {
+    let frames = projection::project("! name=x\n100 a\n+10 x\n");
+
+    assert_eq!(frames.len(), 111, "the last frame is 110");
+    assert!(frames[100].held, "the absolute line lights frame 100");
+    assert!(!frames[105].held, "the frames between the lines are blank");
+    assert!(frames[110].held, "the delta line lights frame 110");
+}

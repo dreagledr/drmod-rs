@@ -8,6 +8,9 @@
 //! same thing. Reading the tokens keeps the table a picture of the text rather than a second
 //! opinion about it.
 //!
+//! A line's first token may be absolute or `+delta` from the previous line; it is resolved here
+//! just as the parser resolves it, so the table reads a relative text the same way.
+//!
 //! Frames run from 0 to the end of the last token held, so a row exists for every frame a `.tas`
 //! could name; the frames no token touches are the table's blank rows, which is what the format
 //! itself says by writing nothing.
@@ -82,8 +85,13 @@ impl StickValue {
 pub fn project(text: &str) -> Vec<ScriptFrame> {
     let mut rows: BTreeMap<u32, ScriptFrame> = BTreeMap::new();
 
+    // The frame of the last line that named one — the base a `+delta` line counts from, `0` for
+    // the first relative line. Resolved here as well as in the parser so a relative text still
+    // fills the table.
+    let mut previous = 0u32;
+
     for line in dsl::lines(text).split('\n') {
-        let Some((number, tokens)) = read_line(line) else {
+        let Some((number, tokens)) = read_line(line, &mut previous) else {
             continue;
         };
 
@@ -141,14 +149,22 @@ fn fill(rows: BTreeMap<u32, ScriptFrame>) -> Vec<ScriptFrame> {
 
 /// One frame line: its number, and the tokens that follow it. A blank line, a comment and the
 /// rules line are not frames.
-fn read_line(line: &str) -> Option<(u32, Vec<Token>)> {
+///
+/// `previous` is the last resolved frame, the base a `+delta` first token counts from; it is
+/// updated in place only for a line whose frame reads.
+fn read_line(line: &str, previous: &mut u32) -> Option<(u32, Vec<Token>)> {
     let text = strip_comment(line).trim();
     if text.is_empty() || text.starts_with('!') {
         return None;
     }
 
     let parts: Vec<&str> = text.split(' ').filter(|part| !part.is_empty()).collect();
-    let number = parts.first()?.parse::<u32>().ok()?;
+    let first = parts.first()?;
+    let number = match first.strip_prefix('+') {
+        Some(delta) => previous.checked_add(delta.parse::<u32>().ok()?)?,
+        None => first.parse::<u32>().ok()?,
+    };
+    *previous = number;
 
     let mut tokens = Vec::new();
     for part in &parts[1..] {
