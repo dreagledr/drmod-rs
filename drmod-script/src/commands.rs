@@ -14,6 +14,9 @@ use super::dsl;
 /// panel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ScriptCommandKind {
+    /// A frame line's first token — the tick, absolute or `+delta`.
+    Frame,
+
     /// A pad button of a frame line — `a`, `lt`, `by`.
     Button,
 
@@ -48,6 +51,15 @@ impl ScriptCommandHelp {
         }
     }
 }
+
+/// The first token of a frame line: the tick, absolute or relative. Listed on its own because it
+/// is not a pad input at all — it says *when* the line's tokens fire.
+pub const FRAME: ScriptCommandHelp = ScriptCommandHelp {
+    token: "<frame>",
+    spelling: "<frame> | +<frame>",
+    help: "the simulation tick, or +N = N frames after the previous line (the first line is absolute)",
+    kind: ScriptCommandKind::Frame,
+};
 
 /// The six stick tokens, listed after the buttons because the format writes them first on a line.
 ///

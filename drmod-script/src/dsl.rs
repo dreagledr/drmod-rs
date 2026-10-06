@@ -7,11 +7,17 @@
 //! same place — the stick alone drives the character — so a direction flag that a JSON script
 //! carries is written out as the stick that flag stands for.
 //!
+//! A frame line's first token is either the absolute tick (`120`) or `+N`, which reads as *N
+//! frames after the previous frame line* — tuning one number shifts the rest of the sequence
+//! while its relative shape stays put. The first line's relative base is `0`; the two forms do
+//! not mix on one line, but a file may use either on any line.
+//!
 //! [`write`] is canonical — one line per frame a command touches, tokens in a fixed order,
-//! invariant numbers, a one-frame duration left out — which makes `write(parse(text))` the same
-//! text again; the golden tests rely on that. [`parse`] is strict: an unknown token or attribute
-//! is an error naming its 1-based line, never a silently skipped word — the same typo protection
-//! the mod gets from `deny_unknown_fields`.
+//! invariant numbers, a one-frame duration left out, every frame absolute — which makes
+//! `write(parse(text))` the same text again; the golden tests rely on that. [`write_relative`] is
+//! the same text with the first frame left absolute and every later frame spelled as `+delta`.
+//! [`parse`] is strict: an unknown token or attribute is an error naming its 1-based line, never a
+//! silently skipped word — the same typo protection the mod gets from `deny_unknown_fields`.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -130,11 +136,33 @@ pub fn vocabulary() -> Vec<(&'static str, String)> {
 
 // ── writing ──────────────────────────────────────────────────────────────────
 
+/// How a frame line spells its tick: the absolute number, or a `+delta` from the previous line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FrameStyle {
+    /// `<tick>` — the canonical text [`write`] produces.
+    Absolute,
+    /// `+<delta>` after the first (absolute) line — the tuning-friendly spelling.
+    Relative,
+}
+
 /// The canonical text of a document. Ends with a newline.
 ///
 /// Commands the DSL cannot say — `raw_key`, `dik_key`, `when_enemy` — are an error rather than a
 /// silent loss.
 pub fn write(document: &ScriptDocument) -> ScriptResult<String> {
+    write_with(document, FrameStyle::Absolute)
+}
+
+/// The same text with relative frames: the first frame stays absolute (the anchor) and every
+/// later line is spelled `+delta` from the one before it.
+///
+/// `parse` resolves the deltas back, so `parse(write_relative(doc)) == doc`.
+pub fn write_relative(document: &ScriptDocument) -> ScriptResult<String> {
+    write_with(document, FrameStyle::Relative)
+}
+
+/// The text of a document, with the frame spelling the caller asks for.
+pub fn write_with(document: &ScriptDocument, style: FrameStyle) -> ScriptResult<String> {
     json::validate(document)?;
 
     let mut text = String::new();
@@ -146,8 +174,24 @@ pub fn write(document: &ScriptDocument) -> ScriptResult<String> {
         text.push('\n');
     }
 
+    let mut previous: Option<u32> = None;
     for (frame, tokens) in frames(document)? {
-        let _ = write!(text, "{frame}");
+        match style {
+            FrameStyle::Absolute => {
+                let _ = write!(text, "{frame}");
+            }
+            // The first line is the anchor; a `+0` after it would name the same frame twice.
+            FrameStyle::Relative => match previous {
+                Some(previous) => {
+                    let _ = write!(text, "+{}", frame - previous);
+                }
+                None => {
+                    let _ = write!(text, "{frame}");
+                }
+            },
+        }
+        previous = Some(frame);
+
         for token in tokens {
             text.push(' ');
             text.push_str(&token);
@@ -465,8 +509,9 @@ pub fn parse(text: &str) -> ScriptResult<ScriptDocument> {
     let mut restart: Option<RestartSpec> = None;
     let mut rules_seen = false;
 
-    // The frame of the last line that started with a number: what every refusal reports, so a
-    // message carries the `.tas` coordinate and not just the line index. `None` until one is read.
+    // The frame of the last line that named one: what every refusal reports, so a message carries
+    // the `.tas` coordinate and not just the line index — and the base a `+delta` line counts
+    // from. `None` until one is read.
     let mut last_frame: Option<u32> = None;
 
     // The parse's own refusal: a message, and the frame the parse had reached.
@@ -693,8 +738,9 @@ fn parse_frame(
 
     let parts: Vec<&str> = line.split(' ').filter(|part| !part.is_empty()).collect();
     // The frame of the line is read — and recorded — before its tokens are checked, so a bad
-    // token on frame 132 reports 132: that is the coordinate an author navigates by.
-    let frame = unsigned32(number, "frame", parts[0], *last_frame)?;
+    // token on frame 132 reports 132: that is the coordinate an author navigates by. A line's
+    // frame may be absolute or `+delta` from the previous line; the first line's base is 0.
+    let frame = frame_value(number, parts[0], last_frame.unwrap_or(0), *last_frame)?;
     *last_frame = Some(frame);
 
     // Tokens of one line become one command per distinct duration: the DSL gives every token its
@@ -918,6 +964,29 @@ fn value_string(
             last_frame,
         )),
     }
+}
+
+/// A frame line's first token: the absolute tick, or `+N` frames after `base` (the previous
+/// line's frame, `0` for the first line).
+fn frame_value(
+    number: usize,
+    value: &str,
+    base: u32,
+    last_frame: Option<u32>,
+) -> ScriptResult<u32> {
+    let Some(delta) = value.strip_prefix('+') else {
+        return unsigned32(number, "frame", value, last_frame);
+    };
+
+    let delta = unsigned32(number, "frame", delta, last_frame)?;
+    let frame = base.checked_add(delta).ok_or_else(|| {
+        ScriptFormatException::at_frame(
+            format!("line {number}: frame '+{delta}' overflows the tick range"),
+            last_frame,
+        )
+    })?;
+
+    Ok(frame)
 }
 
 fn duration_of(

@@ -4,12 +4,16 @@
 //! Клиент свой (не из редактора): CLI не должен линковать GUI. Тела скриптов
 //! уходят gzip'ом — лимит тела мода (64 КБ) измеряется по сжатым байтам.
 //!
+//! `get` and `export` write `.tas` text with **relative frames** by default — the first frame
+//! absolute, the rest `+delta` (`docs/SCRIPT_DSL.md` §3) — which is what tuning reads best.
+//! `--absolute` selects the canonical absolute spelling the mod serves.
+//!
 //! ```text
 //! drmod-tas run  <file.tas|-> [--watch]
-//! drmod-tas get  [id|last]
+//! drmod-tas get  [id|last] [--absolute]
 //! drmod-tas state
 //! drmod-tas export [--from ms] [--to ms] [--script-id N] [--human] [--limit N]
-//!                   [--name NAME] [-o FILE]
+//!                   [--name NAME] [-o FILE] [--absolute]
 //! ```
 
 use std::collections::HashMap;
@@ -57,10 +61,12 @@ fn usage() {
         "drmod-tas — клиент HTTP API мода MGR:R\n\n\
          USAGE:\n  \
          drmod-tas run  <file.tas|-> [--watch] [--no-focus] [--url URL]\n  \
-         drmod-tas get  [id|last] [--url URL]\n  \
+         drmod-tas get  [id|last] [--absolute] [--url URL]\n  \
          drmod-tas state [--url URL]\n  \
          drmod-tas export [--from ms] [--to ms] [--script-id N] [--human]\n  \
-         \x20                [--limit N] [--name NAME] [-o FILE] [--url URL]\n\n\
+         \x20                [--limit N] [--name NAME] [-o FILE] [--absolute] [--url URL]\n\n\
+         get/export write relative frames (first absolute, rest +delta) by default;\n\
+         --absolute writes every frame as its own tick.\n\
          The mod listens on {DEFAULT_URL} by default."
     );
 }
@@ -286,7 +292,11 @@ fn wait_menu(client: &Client, menu: &str, timeout: Duration) -> Option<()> {
     None
 }
 
-/// `get [id|last]` — the script's `.tas`, as the mod holds it.
+/// `get [id|last]` — the script's `.tas`.
+///
+/// The mod serves the canonical absolute text; by default it is re-spelled relative (first frame
+/// absolute, the rest `+delta`) for tuning, and `--absolute` prints it as served. A body the text
+/// parser cannot read is printed verbatim rather than lost.
 fn get(rest: &[String]) -> Result<(), String> {
     let parsed = Parsed::of(rest)?;
     let id = parsed.positional.first().map(String::as_str).unwrap_or("last");
@@ -296,11 +306,24 @@ fn get(rest: &[String]) -> Result<(), String> {
     if !(200..300).contains(&status) {
         return Err(from_error(&body, status));
     }
-    print!("{body}");
-    if !body.ends_with('\n') {
+
+    let text = if parsed.flag("absolute") {
+        body
+    } else {
+        relative_text(&body).unwrap_or(body)
+    };
+
+    print!("{text}");
+    if !text.ends_with('\n') {
         println!();
     }
     Ok(())
+}
+
+/// A `.tas` text re-spelled with relative frames, or `None` when it does not parse.
+fn relative_text(text: &str) -> Option<String> {
+    let document = drmod_script::dsl::parse(text).ok()?;
+    drmod_script::dsl::write_relative(&document).ok()
 }
 
 /// `state` — the handful of facts a terminal wants, read off the full `/state`.
@@ -351,6 +374,8 @@ fn state(rest: &[String]) -> Result<(), String> {
 /// `--human` keeps only the frames no script was running on, which is the player's own input
 /// rather than a script's override. It is filtered here: `/logs` does not know the flag (the
 /// mod's `GET /logs.tas` does).
+///
+/// The text is written with relative frames unless `--absolute` is given.
 fn export(rest: &[String]) -> Result<(), String> {
     let parsed = Parsed::of(rest)?;
     let client = Client::new(&parsed.url());
@@ -395,7 +420,15 @@ fn export(rest: &[String]) -> Result<(), String> {
     if let Some(name) = parsed.value("name") {
         document.name = name.to_string();
     }
-    let text = drmod_script::dsl::write(&document).map_err(|e| e.message().to_owned())?;
+
+    // Relative by default: the export is the text a tuning session reads, and `+delta` between
+    // inputs is what shifts with one edit.
+    let text = if parsed.flag("absolute") {
+        drmod_script::dsl::write(&document)
+    } else {
+        drmod_script::dsl::write_relative(&document)
+    }
+    .map_err(|e| e.message().to_owned())?;
 
     match parsed.value("out") {
         Some(path) => {
@@ -561,7 +594,7 @@ impl Parsed {
         while i < args.len() {
             let argument = &args[i];
             if let Some(key) = argument.strip_prefix("--") {
-                if matches!(key, "human" | "watch" | "no-focus") {
+                if matches!(key, "human" | "watch" | "no-focus" | "absolute") {
                     parsed.flags.insert(key.to_owned(), true);
                 } else if let Some((key, value)) = key.split_once('=') {
                     parsed.values.insert(key.to_owned(), value.to_owned());
