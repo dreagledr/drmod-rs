@@ -57,6 +57,9 @@ jobs:
             echo "=== docker compose down (if running) ==="
             docker compose -f drmod-server/docker-compose.yml down --remove-orphans || true
 
+            echo "=== Freeing port 5222 (stale containers from the pre-rename project) ==="
+            docker ps -aq --filter publish=5222 | xargs -r docker rm -f || true
+
             echo "=== docker compose up --build -d ==="
             export MOD_VERSION='${{ steps.version.outputs.version }}'
             docker compose -f drmod-server/docker-compose.yml up --build -d
