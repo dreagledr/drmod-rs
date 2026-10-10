@@ -32,7 +32,7 @@ default-members = [
 # it with `version.workspace = true`; the editor has its own `[workspace.package]` because it is a
 # separate workspace, and `drmod-hudhook` keeps 0.9.0 as the vendored fork tracking upstream.
 [workspace.package]
-version = "0.1.6"
+version = "0.2.0"
 
 [profile.release]
 strip = true

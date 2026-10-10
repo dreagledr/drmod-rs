@@ -48,4 +48,4 @@ resolver = "3"
 # The editor is its own workspace, so it cannot inherit the root's version; keep the release tag in
 # sync here too (`vX.Y.Z`) — see the root `[workspace.package]`.
 [workspace.package]
-version = "0.1.6"
+version = "0.2.0"

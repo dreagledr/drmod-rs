@@ -3,6 +3,8 @@ services:
     build:
       context: ..
       dockerfile: drmod-server/Dockerfile
+      args:
+        MOD_VERSION: ${MOD_VERSION:-0.0.0}
     ports:
       - "5222:5222/tcp"
       - "5222:5222/udp"

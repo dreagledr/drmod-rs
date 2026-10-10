@@ -13,6 +13,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Read release version
+        id: version
+        run: |
+          echo "version=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)" >> "$GITHUB_OUTPUT"
+
       - name: Fetch secrets from Lockbox
         id: lockbox
         uses: yc-actions/yc-lockbox@v2
@@ -53,6 +58,7 @@ jobs:
             docker compose -f drmod-server/docker-compose.yml down --remove-orphans || true
 
             echo "=== docker compose up --build -d ==="
+            export MOD_VERSION='${{ steps.version.outputs.version }}'
             docker compose -f drmod-server/docker-compose.yml up --build -d
 
             echo "=== Waiting 30s for containers to start ==="
