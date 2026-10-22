@@ -145,6 +145,8 @@ pub(crate) fn service() {
         }
     }
     if DISARM_REQ.swap(false, Ordering::Relaxed) {
+        // SAFETY: clear_all_threads сам открывает и закрывает хендлы потоков; вызов из
+        // render-цикла.
         unsafe { clear_all_threads() };
         ARMED.store(false, Ordering::Relaxed);
         ARMED_THREADS.store(0, Ordering::Relaxed);
@@ -182,8 +184,11 @@ pub(crate) fn handle_single_step(eip: usize, caller: usize, chain: &[usize]) -> 
 
 /// Обходит потоки процесса и применяет `f` к каждому (свой — без приостановки).
 unsafe fn for_each_thread(mut f: impl FnMut(HANDLE)) -> usize {
+    // SAFETY: GetCurrentProcessId не имеет предусловий и не может навредить.
     let pid = unsafe { GetCurrentProcessId() };
+    // SAFETY: GetCurrentThreadId не имеет предусловий и не может навредить.
     let me = unsafe { GetCurrentThreadId() };
+    // SAFETY: CreateToolhelp32Snapshot с TH32CS_SNAPTHREAD безопасен; хендл закрывается ниже.
     let Ok(snap) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) }) else {
         return 0;
     };
@@ -192,26 +197,35 @@ unsafe fn for_each_thread(mut f: impl FnMut(HANDLE)) -> usize {
         ..Default::default()
     };
     let mut count = 0;
+    // SAFETY: snap — снапшот Toolhelp, te инициализирован (dwSize) и живёт до конца цикла.
     if unsafe { Thread32First(snap, &mut te) }.is_ok() {
         loop {
             if te.th32OwnerProcessID == pid {
                 count += 1;
                 let acc = THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_SET_CONTEXT;
+                // SAFETY: acc — нужные права, h — только что открытый хендл (проверен на Ok).
                 if let Ok(h) = unsafe { OpenThread(acc, false, te.th32ThreadID) } {
                     if te.th32ThreadID == me {
                         f(h);
+                    // SAFETY: h — хендл потока с правом THREAD_SUSPEND_RESUME; приостановка парная
+                    // к ResumeThread.
                     } else if unsafe { SuspendThread(h) } != u32::MAX {
                         f(h);
+                        // SAFETY: h приостановлен SuspendThread выше — ResumeThread обязателен и
+                        // безопасен.
                         unsafe { ResumeThread(h) };
                     }
+                    // SAFETY: h получен из OpenThread и после CloseHandle не используется.
                     let _ = unsafe { CloseHandle(h) };
                 }
             }
+            // SAFETY: snap и te валидны на протяжении итерации Toolhelp; владение не меняется.
             if unsafe { Thread32Next(snap, &mut te) }.is_err() {
                 break;
             }
         }
     }
+    // SAFETY: snap получен из CreateToolhelp32Snapshot и ещё не закрыт.
     let _ = unsafe { CloseHandle(snap) };
     count
 }
@@ -219,6 +233,8 @@ unsafe fn for_each_thread(mut f: impl FnMut(HANDLE)) -> usize {
 /// Ставит точку на все потоки; возвращает (сколько удалось, всего потоков).
 unsafe fn arm_all_threads(addr: usize) -> (usize, usize) {
     let mut ok = 0;
+    // SAFETY: for_each_thread открывает потоки процесса; set_dr требует приостановленный поток (см.
+    // ниже).
     let total = unsafe {
         for_each_thread(|h| {
             if set_dr(h, addr) {
@@ -231,6 +247,7 @@ unsafe fn arm_all_threads(addr: usize) -> (usize, usize) {
 
 /// Снимает точку со всех потоков.
 unsafe fn clear_all_threads() {
+    // SAFETY: for_each_thread сам приостанавливает чужие потоки перед вызовом clear_dr.
     unsafe {
         for_each_thread(|h| {
             let _ = clear_dr(h);
@@ -241,8 +258,10 @@ unsafe fn clear_all_threads() {
 /// Ставит DR0 на запись 4 байт по адресу на потоке `h` (для не-своего потока
 /// `h` должен быть приостановлен).
 unsafe fn set_dr(h: HANDLE, addr: usize) -> bool {
+    // SAFETY: CONTEXT — POD-структура Win32; zeroed допустим, ContextFlags выставляются ниже.
     let mut ctx: CONTEXT = unsafe { std::mem::zeroed() };
     ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS_X86 | CONTEXT_CONTROL_X86;
+    // SAFETY: h — живой хендл с правом THREAD_GET_CONTEXT; ctx — локальная структура.
     if unsafe { GetThreadContext(h, &mut ctx) }.is_err() {
         return false;
     }
@@ -252,18 +271,22 @@ unsafe fn set_dr(h: HANDLE, addr: usize) -> bool {
     ctx.Dr3 = 0;
     ctx.Dr6 = 0;
     ctx.Dr7 = DR7_WRITE_4;
+    // SAFETY: h — живой хендл с правом THREAD_SET_CONTEXT; ctx заполнен и выровнен.
     unsafe { SetThreadContext(h, &ctx) }.is_ok()
 }
 
 /// Снимает точку с потока `h`.
 unsafe fn clear_dr(h: HANDLE) -> bool {
+    // SAFETY: CONTEXT — POD-структура Win32; zeroed допустим до заполнения ContextFlags.
     let mut ctx: CONTEXT = unsafe { std::mem::zeroed() };
     ctx.ContextFlags = CONTEXT_DEBUG_REGISTERS_X86 | CONTEXT_CONTROL_X86;
+    // SAFETY: h — живой хендл с правом THREAD_GET_CONTEXT; ctx — локальная структура.
     if unsafe { GetThreadContext(h, &mut ctx) }.is_err() {
         return false;
     }
     ctx.Dr0 = 0;
     ctx.Dr6 = 0;
     ctx.Dr7 = 0;
+    // SAFETY: h — живой хендл с правом THREAD_SET_CONTEXT; ctx заполнен и выровнен.
     unsafe { SetThreadContext(h, &ctx) }.is_ok()
 }

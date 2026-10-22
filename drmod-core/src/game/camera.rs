@@ -19,6 +19,8 @@ impl Camera {
             None
         } else {
             // base + 0x17EA1D0 — статический адрес cCameraGame::Instance (SDK)
+            // SAFETY: base_addr != 0 (проверено выше) — база модуля игры; 0x17EA1D0 —
+            // cCameraGame::Instance (SDK).
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x17EA1D0) })
         };
         Self { camera_ptr_addr }
@@ -29,6 +31,8 @@ impl Camera {
     /// `Hw::cCameraBase`/`cCameraViewProj` (ref/mgr-plugin-sdk).
     pub(crate) fn read_camera_state(&self) -> Option<types::CameraState> {
         let addr = self.camera_ptr_addr?.as_ptr();
+        // SAFETY: camera_ptr_addr — статический Instance камеры в образе модуля; смещения — поля
+        // cCameraBase (POD).
         Some(unsafe {
             types::CameraState {
                 pos: [
@@ -50,12 +54,14 @@ impl Camera {
     /// View-projection матрица камеры (+0x200) — для 3D-рендера.
     pub(crate) fn view_proj(&self) -> Option<[f32; 16]> {
         let addr = self.camera_ptr_addr?.as_ptr();
+        // SAFETY: статический Instance камеры в образе модуля; +0x200 — view-projection (16 f32).
         Some(unsafe { *(addr.add(0x200) as *const [f32; 16]) })
     }
 
     /// Позиция камеры (+0x1B0) — для world-to-screen проекции.
     pub(crate) fn pos(&self) -> Option<[f32; 3]> {
         let addr = self.camera_ptr_addr?.as_ptr();
+        // SAFETY: статический Instance камеры в образе модуля; +0x1B0..+0x1B8 — позиция камеры.
         Some(unsafe {
             [
                 *(addr.add(0x1B0) as *const f32),

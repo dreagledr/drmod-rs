@@ -184,6 +184,8 @@ impl DrawHooks {
             return Self { hooks: Vec::new() };
         }
         let mut hooks = Vec::new();
+        // SAFETY: base_addr != 0 и vtable-слот проверен vtable_slot; hook_slot ставит MinHook по
+        // живому адресу.
         unsafe {
             if let Some(hook) = hook_slot(
                 base_addr,
@@ -242,6 +244,8 @@ fn vtable_slot(base_addr: usize, slot: usize) -> Option<*mut c_void> {
     if base_addr == 0 {
         return None;
     }
+    // SAFETY: base_addr != 0 и указывает на образ игры; DEVICE_PTR — статический указатель на
+    // IDirect3DDevice9.
     unsafe {
         let device = *((base_addr + DEVICE_PTR) as *const *const usize);
         if device.is_null() {
@@ -263,6 +267,7 @@ unsafe fn hook_slot(
     detour: *mut c_void,
 ) -> Option<MhHook> {
     let target = vtable_slot(base_addr, slot)?;
+    // SAFETY: target — адрес метода живой vtable, detour — наша extern "system" заглушка.
     let hook = match unsafe { MhHook::new(target, detour) } {
         Ok(h) => h,
         Err(e) => {
@@ -273,10 +278,12 @@ unsafe fn hook_slot(
             return None;
         }
     };
+    // SAFETY: hook создан MhHook::new над этим target; queue_enable допустим только для него.
     if let Err(e) = unsafe { hook.queue_enable() } {
         logger::log_line(&format!("render: {name}: queue_enable FAIL {e:?}"));
         return None;
     }
+    // SAFETY: MH_ApplyQueued применяет очередь MinHook, заполненную нами же.
     let _ = unsafe { MH_ApplyQueued() };
     logger::log_line(&format!(
         "render: {name} → заглушка (slot {slot}, target 0x{:08X}, trampoline 0x{:08X})",
@@ -296,6 +303,8 @@ unsafe extern "system" fn draw_primitive_detour(
         return D3D_OK;
     }
     match DRAW_PRIMITIVE.get() {
+        // SAFETY: orig — trampoline из DRAW_PRIMITIVE (поставлен hook_slot); аргументы пришли от
+        // игры.
         Some(&orig) => unsafe { orig(device, primitive_type, start_vertex, primitive_count) },
         None => D3D_OK,
     }
@@ -314,6 +323,8 @@ unsafe extern "system" fn draw_indexed_primitive_detour(
         return D3D_OK;
     }
     match DRAW_INDEXED_PRIMITIVE.get() {
+        // SAFETY: orig — trampoline из DRAW_INDEXED_PRIMITIVE; аргументы переданы игрой без
+        // изменений.
         Some(&orig) => unsafe {
             orig(
                 device,
@@ -340,6 +351,7 @@ unsafe extern "system" fn draw_primitive_up_detour(
         return D3D_OK;
     }
     match DRAW_PRIMITIVE_UP.get() {
+        // SAFETY: orig — trampoline из DRAW_PRIMITIVE_UP; аргументы переданы игрой без изменений.
         Some(&orig) => unsafe {
             orig(
                 device,
@@ -368,6 +380,8 @@ unsafe extern "system" fn draw_indexed_primitive_up_detour(
         return D3D_OK;
     }
     match DRAW_INDEXED_PRIMITIVE_UP.get() {
+        // SAFETY: orig — trampoline из DRAW_INDEXED_PRIMITIVE_UP; аргументы переданы игрой без
+        // изменений.
         Some(&orig) => unsafe {
             orig(
                 device,

@@ -28,6 +28,7 @@ pub fn activate(tries: usize) -> bool {
     };
 
     for attempt in 0..tries {
+        // SAFETY: window — хендл из find(); ShowWindow принимает любой HWND, ошибка игнорируется.
         unsafe {
             let _ = ShowWindow(window, SW_RESTORE);
         }
@@ -36,6 +37,7 @@ pub fn activate(tries: usize) -> bool {
             return true;
         }
 
+        // SAFETY: тот же живой HWND; вызовы z-order/фокуса best-effort, ошибки игнорируются.
         unsafe {
             let _ = BringWindowToTop(window);
             let _ = SetForegroundWindow(window);
@@ -60,9 +62,11 @@ pub fn focus_and_settle(settle_ms: u64) -> bool {
 }
 
 fn find() -> windows::core::Result<HWND> {
+    // SAFETY: FindWindowW — только чтение; литерал заголовка нуль-терминирован.
     unsafe { FindWindowW(None, w!("METAL GEAR RISING: REVENGEANCE")) }
 }
 
 fn foreground() -> HWND {
+    // SAFETY: GetForegroundWindow не имеет предусловий и не может упасть.
     unsafe { GetForegroundWindow() }
 }

@@ -17,7 +17,7 @@ Claude/линтеры не запускались: CI их не запускае
 | Раздел гайда | Статус | Главное |
 |---|---|---|
 | Use the appropriate formatting tool | ✅ после правки | 95 файлов не проходили пофайловый `rustfmt --check` (74 — `cargo fmt --check`); конфига не было |
-| Unsafe code | ❌ | 295 `unsafe`-блоков на 5 комментариев `SAFETY:` |
+| Unsafe code | ✅ first-party / ⚠️ hudhook | 214 блоков закрыты `SAFETY:`; в вендоренном форке (81 блок) — по-прежнему нет |
 | Handling poison | ❌ | `into_inner()` на poisoned mutex в 4 местах |
 | Don't use glob imports | ⚠️ | `imgui::*`, `windows::…::*` в 5 производственных местах |
 | A use statement imports one module | ⚠️ | 2 места с `mod::Type` внутри `{}` |
@@ -33,46 +33,50 @@ Claude/линтеры не запускались: CI их не запускае
 
 ## P1 — нарушения, которые гайд формулирует жёстко
 
-### 1. `unsafe` без `SAFETY:` и без технического обоснования
+### 1. `unsafe` без `SAFETY:` — закрыто в first-party
 
 Гайд: *«Add a safety comment starting with `SAFETY:`… Add a technical justification for
 unsafe code»*.
 
-Факты: 295 `unsafe { }`, 33 `unsafe fn`, 27 `transmute`, 7 `static mut`, при этом
-`SAFETY:` — 5 (`drmod-core/src/api.rs:1059,3019`, `drmod-core/src/tas/watch.rs:137`,
-`drmod-hudhook/src/util.rs:207,213`).
+Было: 295 `unsafe { }`, 33 `unsafe fn`, 27 `transmute`, 7 `static mut`, при этом
+`SAFETY:` — 5.
 
-Худшие по риску места:
+Сделано: у всех **214** блоков first-party крейтов появился построчный `// SAFETY:` с
+конкретным инвариантом (что проверено до блока, почему чтение/запись корректны):
+`drmod-core` — 195, `drmod-protocol` — 2, `drmod-replay-types` — 2,
+`drmod-tas-editor` — 8, `drmod-cli` — 4, `drmod-injector` — 2, `tools/disasm` — 1.
+У публичных `unsafe fn` внутри крейта (`skeleton::read_full_skeleton`,
+`d3d_render::draw_lines_3d`) добавлены секции `# Safety`.
 
-- `drmod-core/src/lib.rs:184-210` — разбор `CONTEXT` при `STATUS_SINGLE_STEP`, ручное
-  чтение стека игры (`*sp`, `*sp.add(i)` до 48 слов) без комментария о валидности `Esp`
-  и о том, почему чтение не даст AV.
-- `drmod-core/src/render_hooks.rs:194-224`, `drmod-core/src/tas/hooks.rs:816-928` —
-  `transmute` трамплинов MinHook в сигнатуры методов vtable; обоснование (ABI-совпадение)
-  есть в комментарии к `type`-алиасам на строках 67-69, но не в форме `SAFETY:` и не
-  рядом с самим блоком.
-- `drmod-core/src/lib.rs:368` — `transmute::<i32, GameMenuStatus>`; сейчас защищено
-  проверкой `(0..=18)`, но при добавлении варианта/дыры в enum это UB. Безопасная
-  альтернатива — `TryFrom<i32>`/`match`.
-- `drmod-core/src/game/phase.rs:42,64,75` — `transmute` адреса в `fn`-указатель.
-- `drmod-replay-types/src/lib.rs:217-228` — публичные `to_bytes<T>`/`from_bytes<T>` с
-  `from_raw_parts`/`read_unaligned`; инвариант («структуры без padding») описан в доке,
-  но нет `# Safety` у публичной функции и нет ограничения типа (любой `T` с padding или
-  указателями сделает `to_bytes` некорректным). Второй момент — `to_bytes` можно сделать
-  полностью безопасным (`to_le_bytes`, как уже сделано для `SkeletonPacket`): ровно тот
-  случай, когда гайд требует «safe code if possible».
-- `drmod-protocol/src/lib.rs:51-57` — `transmute(*self)` ↔ `[u8; 28]` без `SAFETY:`; тот
-  же аргумент про безопасную реализацию.
+Самыми рискованными были (теперь с обоснованием):
+
+- `drmod-core/src/lib.rs:184-210` — разбор `CONTEXT` при `STATUS_SINGLE_STEP` и ручное
+  чтение стека игры (`*sp`, `*sp.add(i)` до 48 слов).
+- `drmod-core/src/render_hooks.rs`, `drmod-core/src/tas/hooks.rs` — `transmute`
+  трамплинов MinHook в сигнатуры методов/детачей и вызовы оригиналов с аргументами игры.
+- `drmod-core/src/lib.rs:368` — `transmute::<i32, GameMenuStatus>` под проверкой `0..=18`.
+- `drmod-replay-types/src/lib.rs:217-228` — `to_bytes<T>`/`from_bytes<T>` через
+  `from_raw_parts`/`read_unaligned`; инвариант «T — POD без padding» теперь записан в
+  `SAFETY:`, но сам контракт по-прежнему не выражен в типах.
+- `drmod-protocol/src/lib.rs:51-57` — `transmute` между `[u8; 28]` и `#[repr(C, packed)]`
+  пакетом.
+
+Осталось:
+
+- **`drmod-hudhook` — 81 блок** без `SAFETY:` (кроме двух в `util.rs`). Это вендоренный
+  форк: трогать его стиль в общем проходе не стали. Либо отдельный проход, либо явное
+  исключение для `vendor`-кода.
+- **Включить `clippy::undocumented_unsafe_blocks`** — иначе новые блоки снова появятся без
+  комментариев. Для этого нужен `[workspace.lints]` в корне + `[lints] workspace = true` у
+  членов (у `drmod-tas-editor`, `xtask`, `tools/disasm` — свои таблицы).
+- `transmute` в `GameMenuStatus` и `transmute`-сериализация в `drmod-protocol` /
+  `drmod-replay-types` остаются корректными, но хрупкими: `SAFETY:` фиксирует инвариант, а
+  не заменяет `TryFrom` или безопасный энкодер (`to_le_bytes`).
 
 Отдельно: `drmod-hudhook/src/hooks/dx9.rs:42-44` и `drmod-hudhook/src/lib.rs:132-133`
 объявляют `static mut` для `OnceLock`/`OnceCell`, которым мутабельность не нужна, а
 предупреждение о ссылках на `static mut` подавлено глобально
-(`#![allow(static_mut_refs)]`, `lib.rs:96`). Для вендоренного форка — P3, но линт
-подавлен на весь крейт.
-
-Рекомендация: включить `clippy::undocumented_unsafe_blocks`, закрыть 295 мест хотя бы
-построчными `SAFETY:` (часть уже заменена обычными русскими комментариями — это хорошая
-база, но линтер её не видит).
+(`#![allow(static_mut_refs)]`, `lib.rs:96`). Для вендоренного форка — P3.
 
 ### 2. `Handling poison` — прямое нарушение
 
@@ -368,10 +372,9 @@ cargo xtask install-hooks      # = git config core.hooksPath .githooks
 
 ## Что осталось (по приоритету)
 
-1. **Unsafe-аудит**: включить `clippy::undocumented_unsafe_blocks`, пройтись по 295
-   блокам; в первую очередь `drmod-core/src/lib.rs:184-210`,
-   `render_hooks.rs:194-224`, `protocol/lib.rs:51-57`, `replay-types/lib.rs:217-228`
-   (последние два можно вообще переписать безопасно).
+1. **Unsafe-аудит — сделан**: 214 `SAFETY:`-комментариев в first-party, `# Safety` у двух
+   публичных `unsafe fn`. Осталось: включить `clippy::undocumented_unsafe_blocks` (чтобы
+   не поехало снова) и решить судьбу `drmod-hudhook` (81 блок без `SAFETY:`).
 2. **Poison**: убрать `into_inner()` в `tas/replay.rs` (4 места).
 3. **API-мелочи**: `Option<&[u8]>`, `&Mutex<…>` вместо `&Arc<Mutex<…>>`, `if let` вместо
    check-then-unwrap, `#[must_use]` на чистые функции, `#[non_exhaustive]` на

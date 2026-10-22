@@ -81,6 +81,8 @@ pub(crate) fn update(base_addr: usize, enabled: bool) {
     }
     if !enabled {
         if active() {
+            // SAFETY: uninstall пишет только по адресу из своего же install и освобождает нашу
+            // страницу-заглушку.
             unsafe { uninstall() };
         }
         return;
@@ -91,6 +93,8 @@ pub(crate) fn update(base_addr: usize, enabled: bool) {
         return;
     }
     if !INSTALL_DONE.load(Ordering::Relaxed) && logo_task_live(base_addr) {
+        // SAFETY: base_addr — база модуля игры; install патчит TARGET_RVA только после проверки
+        // logo_task_live.
         unsafe { install(base_addr) };
     }
 }
@@ -113,12 +117,15 @@ unsafe fn install(base_addr: usize) {
     let resume = base_addr + RESUME_RVA;
 
     let mut original = [0u8; 6];
+    // SAFETY: target = base + TARGET_RVA — код модуля игры (6 байт инструкции), страница читаемая.
     unsafe { core::ptr::copy_nonoverlapping(target as *const u8, original.as_mut_ptr(), 6) };
     let mut packed = 0u64;
     for (i, b) in original.iter().enumerate() {
         packed |= (*b as u64) << (8 * i);
     }
 
+    // SAFETY: VirtualAlloc с валидными аргументами; результат проверяется на null, владение — у
+    // модуля.
     let page = unsafe {
         VirtualAlloc(
             None,
@@ -132,14 +139,19 @@ unsafe fn install(base_addr: usize) {
         return;
     }
     let page = page as *mut u8;
+    // SAFETY: page — наша страница VirtualAlloc (40 байт), RET_SLOT_OFF = 32 внутри неё.
     let ret_slot = unsafe { page.add(RET_SLOT_OFF) as *mut usize };
+    // SAFETY: page — наша страница VirtualAlloc, ZERO_FLAG_OFF = 36 внутри неё.
     let zero_flag = unsafe { page.add(ZERO_FLAG_OFF) as *mut u32 };
+    // SAFETY: обе записи — внутрь нашей страницы (слот возврата и флаг), она выровнена как
+    // страница.
     unsafe {
         *ret_slot = resume;
         *zero_flag = 1; // автовариант: подменять всегда
     }
 
     let code = build_stub(ret_slot as usize, zero_flag as usize);
+    // SAFETY: page — наша страница RWX, code.len() <= 32 < размера аллокации (40 байт).
     unsafe { core::ptr::copy_nonoverlapping(code.as_ptr(), page, code.len()) };
 
     let rel = (page as i64 - target as i64 - 5) as i32;
@@ -147,8 +159,11 @@ unsafe fn install(base_addr: usize) {
     patch[0] = 0xE9;
     patch[1..5].copy_from_slice(&rel.to_le_bytes());
     patch[5] = 0x90;
+    // SAFETY: target — код модуля игры; write_code временно ставит RWX и возвращает защиту.
     if unsafe { write_code(target, &patch) }.is_err() {
         logger::log_line("intro_skip: запись патча не удалась — откат");
+        // SAFETY: page получен из VirtualAlloc этого же install; MEM_RELEASE с размером 0
+        // освобождает её.
         unsafe {
             let _ = VirtualFree(page as *mut c_void, 0, MEM_RELEASE);
         }
@@ -191,6 +206,7 @@ pub(crate) fn set_zero_flag(on: bool) {
     if page == 0 {
         return;
     }
+    // SAFETY: PAGE != 0 — страница-заглушка жива, ZERO_FLAG_OFF внутри её размера.
     unsafe { *((page + ZERO_FLAG_OFF) as *mut u32) = if on { 1 } else { 0 } };
 }
 
@@ -202,9 +218,11 @@ unsafe fn uninstall() {
     }
     let packed = ORIGINAL.swap(0, Ordering::SeqCst);
     let original: [u8; 6] = core::array::from_fn(|i| ((packed >> (8 * i)) & 0xFF) as u8);
+    // SAFETY: target — код модуля игры из TARGET; write_code сам управляет защитой страницы.
     if unsafe { write_code(target, &original) }.is_ok() {
         logger::log_line("intro_skip: патч снят, байты возвращены");
     }
+    // SAFETY: page получен из VirtualAlloc при install и ещё не освобождён (PAGE.swap выше).
     unsafe {
         let _ = VirtualFree(page as *mut c_void, 0, MEM_RELEASE);
     }
@@ -213,6 +231,7 @@ unsafe fn uninstall() {
 /// Пишет байты кода: временно RWX, запись, возврат защиты, сброс кэша команд.
 unsafe fn write_code(addr: usize, bytes: &[u8]) -> Result<(), ()> {
     let mut old = PAGE_PROTECTION_FLAGS(0);
+    // SAFETY: addr — код модуля игры или наша заглушка; VirtualProtect меняет защиту этих страниц.
     if unsafe {
         VirtualProtect(
             addr as *const c_void,
@@ -225,9 +244,12 @@ unsafe fn write_code(addr: usize, bytes: &[u8]) -> Result<(), ()> {
     {
         return Err(());
     }
+    // SAFETY: предыдущий VirtualProtect сделал диапазон [addr, addr+len) записываемым.
     unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), addr as *mut u8, bytes.len()) };
     let mut back = PAGE_PROTECTION_FLAGS(0);
+    // SAFETY: возвращаем исходную защиту диапазона, который только что меняли.
     let _ = unsafe { VirtualProtect(addr as *const c_void, bytes.len(), old, &mut back) };
+    // SAFETY: сброс кэша команд для диапазона, в который мы только что писали.
     let _ = unsafe {
         FlushInstructionCache(
             GetCurrentProcess(),

@@ -215,6 +215,7 @@ pub struct EnemyState {
 /// Сериализация `#[repr(C)]`-структуры в байты (для BLOB в SQLite).
 /// Структуры состоят из f32/i32/u32 — без padding, round-trip корректен.
 pub fn to_bytes<T>(v: &T) -> &[u8] {
+    // SAFETY: по контракту T — DTO этого крейта (#[repr(C)] без padding); v валиден на время среза.
     unsafe { std::slice::from_raw_parts(v as *const T as *const u8, std::mem::size_of::<T>()) }
 }
 
@@ -224,5 +225,7 @@ pub fn from_bytes<T: Copy>(bytes: &[u8]) -> Option<T> {
     if bytes.len() != std::mem::size_of::<T>() {
         return None;
     }
+    // SAFETY: длина сверена с size_of::<T>(); T: Copy, read_unaligned допустим при любом
+    // выравнивании.
     unsafe { Some(std::ptr::read_unaligned(bytes.as_ptr() as *const T)) }
 }

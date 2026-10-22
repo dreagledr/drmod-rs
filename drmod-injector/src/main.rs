@@ -97,6 +97,7 @@ fn inject_and_check(
         .chain(std::iter::once(0))
         .collect();
     let bytes = wide.len() * size_of::<u16>();
+    // SAFETY: handles процесса получены OpenProcess; wide — наша NUL-терминированная строка.
     unsafe {
         let kernel32 =
             GetModuleHandleW(w!("Kernel32")).map_err(|e| format!("GetModuleHandleW: {e}"))?;
@@ -179,6 +180,7 @@ fn parse_name_args(mut args: env::Args) -> std::result::Result<String, String> {
 
 fn show_msgbox(text: &str) {
     let msg: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    // SAFETY: MessageBoxW принимает NUL-терминированную wide-строку из локального Vec.
     unsafe {
         MessageBoxW(
             None,

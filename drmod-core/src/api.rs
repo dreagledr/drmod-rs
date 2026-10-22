@@ -764,6 +764,8 @@ pub(crate) fn apply_fps_cap(base_addr: usize) {
     if base_addr == 0 {
         return;
     }
+    // SAFETY: base_addr != 0 (проверено выше) — база модуля игры; FRAME_PACER_PERIOD — RVA в его
+    // статике.
     unsafe {
         *((base_addr + FRAME_PACER_PERIOD) as *mut u32) = period;
     }
@@ -774,6 +776,7 @@ fn pacer_period(base_addr: usize) -> u32 {
     if base_addr == 0 {
         return 0;
     }
+    // SAFETY: base_addr != 0 (проверено выше); FRAME_PACER_PERIOD — период пацера в статике модуля.
     unsafe { *((base_addr + FRAME_PACER_PERIOD) as *const u32) }
 }
 
@@ -813,6 +816,8 @@ pub(crate) fn set_fps_cap(base_addr: usize, mode: u32, value: u32) -> u32 {
     // значение, которое движок и так держит для 60 FPS.
     let period = fps_cap_period().unwrap_or(3000 / 60);
     if base_addr != 0 {
+        // SAFETY: base_addr != 0 (проверено выше); пишем период пацера в статику модуля из
+        // render-цикла.
         unsafe { *((base_addr + FRAME_PACER_PERIOD) as *mut u32) = period };
     }
     period
@@ -931,6 +936,7 @@ fn apply_fixed_dt() {
         NOMINAL_RATE
     };
     let p = srm as *mut u8;
+    // SAFETY: srm != 0 (проверено выше) — cSlowRateManager в статике модуля; поля — POD f32.
     unsafe {
         *(p.add(SRM_TICK_DIFF) as *mut f32) = ms;
         *(p.add(SRM_TICK_RATE) as *mut f32) = rate;
@@ -978,6 +984,7 @@ pub(crate) fn after_frame_time(srm: usize, flag: i32) {
         base + (n as f32 + 1.0) * ms
     };
     SYNTH_LAST_TICKS_BITS.store(ticks.to_bits(), Ordering::Relaxed);
+    // SAFETY: srm != 0 (проверено выше) — this из детура updateFrameTime; поля — POD f32.
     unsafe {
         *(p.add(SRM_TICK_DIFF) as *mut f32) = ms;
         *(p.add(SRM_TICK_RATE) as *mut f32) = rate;
@@ -998,6 +1005,7 @@ fn capture_synth_base(srm: usize) {
         SYNTH_BASE_TICKS_BITS.store(0, Ordering::Relaxed);
         return;
     }
+    // SAFETY: srm != 0 (проверено выше) — cSlowRateManager; m_fTicks (+SRM_TICKS) — f32.
     let cur = unsafe { *((srm + SRM_TICKS) as *const f32) };
     SYNTH_BASE_TICKS_BITS.store(cur.to_bits(), Ordering::Relaxed);
     SYNTH_LAST_TICKS_BITS.store(cur.to_bits(), Ordering::Relaxed);
@@ -1215,6 +1223,8 @@ pub(crate) fn feed_tick(unit: *mut InputUnit) -> bool {
     match ov {
         Some(ov) => {
             if ov.active {
+                // SAFETY: unit — указатель, который игра передала в детур updateInputUnit; валиден
+                // на время вызова.
                 unsafe { *unit = ov.input };
             }
             true
@@ -1527,6 +1537,8 @@ impl ApiServer {
         // видно, осталась ли наша запись (номинал 16.667 / 1.0) или движок
         // перезаписал её своей измеренной после нас.
         let srm = base_addr + SLOW_RATE_MANAGER;
+        // SAFETY: SLOW_RATE_MANAGER — RVA в образе игры; читается из render-цикла, когда база
+        // модуля выставлена.
         let (dt_frame_ms, dt_rate) = unsafe {
             (
                 *((srm + SRM_TICK_DIFF) as *const f32),
@@ -3188,6 +3200,8 @@ fn script_tick(
             // в меню бит 0x01 — навигация влево, листала бы слоты.
             // Так ввод воспроизводится как в записи (без прямой записи памяти).
             let in_weapon_menu = base_addr != 0
+                // SAFETY: base_addr != 0 проверено в том же условии; 0x17E9F9C — MENU_STATUS в
+                // статике модуля.
                 && unsafe {
                     (base_addr as *const i32)
                         .add(0x17E9F9C / 4)

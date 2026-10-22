@@ -31,16 +31,24 @@ pub struct BonePos {
 /// Читает **все** кости из `cModelBase::BoneSet`.
 ///
 /// `player_obj_ptr` — указатель на Pl0000 (он же cModelBase, он же cParts).
+///
+/// # Safety
+///
+/// `player_obj_ptr` должен указывать на живой Pl0000 (проверен `is_readable_ptr`):
+/// по нему читаются `BoneSet::m_pBones` (+0x350) и до 512 элементов `cParts`.
 pub unsafe fn read_full_skeleton(player_obj_ptr: *const u8) -> Vec<BonePos> {
     if player_obj_ptr.is_null() {
         return Vec::new();
     }
 
+    // SAFETY: player_obj_ptr не null и проверен вызывающим (is_readable_ptr); +0x350 —
+    // BoneSet::m_pBones.
     let p_bones = unsafe { *((player_obj_ptr.add(BONESET_PBONES_OFFSET)) as *const *const u8) };
     if p_bones.is_null() {
         return Vec::new();
     }
 
+    // SAFETY: player_obj_ptr проверен вызывающим; +0x358 — m_nBoneAmount (i16), ниже ограничен 512.
     let bone_count = unsafe { *(player_obj_ptr.add(BONESET_AMOUNT_OFFSET) as *const i16) };
     if bone_count <= 0 || bone_count > 512 {
         return Vec::new();
@@ -49,10 +57,15 @@ pub unsafe fn read_full_skeleton(player_obj_ptr: *const u8) -> Vec<BonePos> {
     let mut bones = Vec::with_capacity(bone_count as usize);
 
     for i in 0..bone_count as usize {
+        // SAFETY: p_bones — массив cParts модели, i < m_nBoneAmount (<= 512), шаг BONE_SIZE.
         let bone = unsafe { p_bones.add(i * BONE_SIZE) };
+        // SAFETY: bone — элемент массива p_bones (см. выше); +0x40 — m_PositionMatrix._41.
         let x = unsafe { *(bone.add(BONE_POS_X) as *const f32) };
+        // SAFETY: bone — элемент массива p_bones; +0x44 — m_PositionMatrix._42.
         let y = unsafe { *(bone.add(BONE_POS_Y) as *const f32) };
+        // SAFETY: bone — элемент массива p_bones; +0x48 — m_PositionMatrix._43.
         let z = unsafe { *(bone.add(BONE_POS_Z) as *const f32) };
+        // SAFETY: bone — элемент массива p_bones; +0xA0 — m_nBoneIndex (i16).
         let idx = unsafe { *(bone.add(BONE_INDEX) as *const i16) as u16 };
 
         bones.push(BonePos {
@@ -80,6 +93,8 @@ pub fn build_bone_edges(bones: &[BonePos]) -> Vec<(usize, usize)> {
     let mut edges = Vec::new();
 
     for (i, bone) in bones.iter().enumerate() {
+        // SAFETY: bone.ptr — адрес cParts, снятый с живого скелета; +0xA8 — m_pParentBone (может
+        // быть 0).
         let parent_ptr = unsafe { *((bone.ptr as *const u8).add(BONE_PARENT) as *const usize) };
         if parent_ptr == 0 {
             continue;
@@ -98,9 +113,14 @@ pub fn draw_skeleton_overlay(ui: &Ui, bones: &[BonePos], camera_ptr: *const u8, 
         return;
     }
 
+    // SAFETY: camera_ptr по контракту — живой cCameraGame (проверен только на null); +0x200 —
+    // view-projection.
     let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
+    // SAFETY: camera_ptr по контракту — живой cCameraGame; +0x1B0 — мировая X камеры.
     let cam_x = unsafe { *(camera_ptr.add(0x1B0) as *const f32) };
+    // SAFETY: camera_ptr по контракту — живой cCameraGame; +0x1B4 — мировая Y камеры.
     let cam_y = unsafe { *(camera_ptr.add(0x1B4) as *const f32) };
+    // SAFETY: camera_ptr по контракту — живой cCameraGame; +0x1B8 — мировая Z камеры.
     let cam_z = unsafe { *(camera_ptr.add(0x1B8) as *const f32) };
     let [sw, sh] = ui.io().display_size;
 
@@ -178,6 +198,7 @@ pub fn bones_to_wire(bones: &[BonePos]) -> Vec<SkeletonBone> {
     bones
         .iter()
         .map(|b| {
+            // SAFETY: b.ptr — адрес cParts из этого же кадра; +0xA8 — m_pParentBone (может быть 0).
             let parent_ptr = unsafe { *((b.ptr as *const u8).add(BONE_PARENT) as *const usize) };
             let parent_index = if parent_ptr == 0 {
                 -1i16
@@ -218,9 +239,14 @@ pub fn draw_remote_skeleton(ui: &Ui, bones: &[SkeletonBone], camera_ptr: *const 
         return;
     }
 
+    // SAFETY: camera_ptr по контракту — живой cCameraGame (проверен только на null); +0x200 —
+    // view-projection.
     let view_proj = unsafe { *(camera_ptr.add(0x200) as *const [f32; 16]) };
+    // SAFETY: camera_ptr по контракту — живой cCameraGame; +0x1B0 — мировая X камеры.
     let cam_x = unsafe { *(camera_ptr.add(0x1B0) as *const f32) };
+    // SAFETY: camera_ptr по контракту — живой cCameraGame; +0x1B4 — мировая Y камеры.
     let cam_y = unsafe { *(camera_ptr.add(0x1B4) as *const f32) };
+    // SAFETY: camera_ptr по контракту — живой cCameraGame; +0x1B8 — мировая Z камеры.
     let cam_z = unsafe { *(camera_ptr.add(0x1B8) as *const f32) };
     let [sw, sh] = ui.io().display_size;
 

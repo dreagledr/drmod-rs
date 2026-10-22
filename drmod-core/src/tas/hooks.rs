@@ -212,6 +212,7 @@ pub(crate) fn clear_raw_keys() {
     unstick_raw_keys_cache();
     let addr = UPDATE_KEYBOARD_ADDR.load(Ordering::Relaxed);
     if addr != 0 {
+        // SAFETY: addr != 0 (проверено выше) — слот флага пересчёта клавиатуры в статике модуля.
         unsafe { *(addr as *mut u8) = 1 };
     }
 }
@@ -268,6 +269,7 @@ pub(crate) fn read_raw_keys_sampled() -> ([u32; 6], [u32; 6]) {
 /// I/O) — при рестарте это даёт рекурсию access violation (см. docs/REPLAY_FINDINGS.md).
 unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_index: i32) {
     if let Some(&orig) = ORIG_UPDATE_INPUT_UNIT.get() {
+        // SAFETY: orig — trampoline updateInputUnit из MinHook; unit/index переданы игрой.
         unsafe { orig(unit, user_index) };
     }
 
@@ -283,6 +285,8 @@ unsafe extern "C" fn update_input_unit_detour(unit: *mut types::InputUnit, user_
         let addr = KEY_INPUT_ADDR.load(Ordering::Relaxed);
         if addr != 0 {
             let k = addr as *const types::KeyInput;
+            // SAFETY: addr != 0 и k указывает на ms_InputKeys в статике модуля; читаем
+            // keys_down/pressed.
             unsafe {
                 for i in 0..6 {
                     RAW_DOWN_SAMPLED[i].fetch_or((*k).keys_down[i], Ordering::Relaxed);
@@ -327,6 +331,7 @@ pub(crate) fn apply_raw_keys() {
         return;
     }
     let k = addr as *mut types::KeyInput;
+    // SAFETY: k — ms_InputKeys в статике модуля; пишем только массивы keys_down/keys_pressed.
     unsafe {
         for i in 0..6 {
             (*k).keys_down[i] = RAW_KEYS_DOWN[i].load(Ordering::Relaxed);
@@ -336,6 +341,7 @@ pub(crate) fn apply_raw_keys() {
     RAW_KEYS_IN_CACHE.store(1, Ordering::Relaxed);
     let ua = UPDATE_KEYBOARD_ADDR.load(Ordering::Relaxed);
     if ua != 0 {
+        // SAFETY: ua != 0 (проверено выше) — слот флага пересчёта клавиатуры в статике модуля.
         unsafe { *(ua as *mut u8) = 0 };
     }
 }
@@ -351,6 +357,7 @@ fn unstick_raw_keys_cache() {
         return;
     }
     let k = addr as *mut types::KeyInput;
+    // SAFETY: k — ms_InputKeys в статике модуля; зануляем только массивы keys_down/keys_pressed.
     unsafe {
         for i in 0..6 {
             (*k).keys_down[i] = 0;
@@ -376,6 +383,7 @@ unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
     let result = if emulated {
         1
     } else if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
+        // SAFETY: orig — trampoline isKeybindPressed; keybind проверен диапазоном выше.
         unsafe { orig(keybind) }
     } else {
         0
@@ -404,6 +412,7 @@ unsafe extern "C" fn is_keybind_down_detour(keybind: i32) -> i32 {
     let result = if emulated {
         1
     } else if let Some(&orig) = ORIG_IS_KEYBIND_DOWN.get() {
+        // SAFETY: orig — trampoline isKeybindDown; keybind проверен диапазоном выше.
         unsafe { orig(keybind) }
     } else {
         0
@@ -441,6 +450,7 @@ fn menu_key_slot(vkey: i32) -> Option<(usize, u32, i32)> {
     if base == 0 {
         return None;
     }
+    // SAFETY: base — база модуля (проверена вызывающим); GAME_MENU_STATUS — i32 в его статике.
     let status = unsafe { *((base + addresses::GAME_MENU_STATUS) as *const i32) };
     if status == 1 {
         return None; // геймплей — это не меню
@@ -470,6 +480,7 @@ pub(crate) fn log_key_state_changes() {
     let ki = KEY_INPUT_ADDR.load(Ordering::Relaxed);
     if ki != 0 {
         let k = ki as *const types::KeyInput;
+        // SAFETY: ki != 0 и указывает на KeyInput в статике модуля; копируем два массива по 6 u32.
         let (down, pressed) = unsafe { ((*k).keys_down, (*k).keys_pressed) };
         for i in 0..6 {
             let prev = PREV_KEYS_DOWN[i].swap(down[i], Ordering::Relaxed);
@@ -494,6 +505,7 @@ pub(crate) fn log_key_state_changes() {
     }
     let addr = base + addresses::INPUT_KEYS;
     for byte in 0..256usize {
+        // SAFETY: addr = base + INPUT_KEYS; byte < 256 — внутри битмапа клавиш модуля.
         let value = unsafe { *((addr + byte) as *const u8) };
         let word = byte >> 5;
         let bit = 1u32 << (byte & 31);
@@ -537,6 +549,7 @@ pub(crate) fn clear_dik_mask() {
 /// `GetDeviceState` заполняет `ms_InputKeys`), затем подмешивает наши DIK-биты.
 unsafe extern "thiscall" fn keyboard_poll_detour(this: *const u8) {
     if let Some(&orig) = ORIG_KEYBOARD_POLL.get() {
+        // SAFETY: orig — trampoline keyboard poll; this — указатель устройства из игры.
         unsafe { orig(this) };
     }
     let base = BASE_ADDR.load(Ordering::Relaxed);
@@ -554,6 +567,7 @@ unsafe extern "thiscall" fn keyboard_poll_detour(this: *const u8) {
                 continue;
             }
             let dik = word_index * 32 + bit;
+            // SAFETY: keys — ms_InputKeys из статики модуля; dik < 256, индекс внутри битмапа.
             unsafe { *keys.add(dik) |= 0x80 };
         }
     }
@@ -577,6 +591,7 @@ unsafe extern "thiscall" fn is_key_down_detour(this: *const u8, vkey: i32) -> i3
         return 1;
     }
     let result = if let Some(&orig) = ORIG_IS_KEY_DOWN.get() {
+        // SAFETY: orig — trampoline isKeyDown; this/vkey переданы игрой.
         unsafe { orig(this, vkey) }
     } else {
         0
@@ -594,6 +609,7 @@ unsafe extern "thiscall" fn is_key_pressed_detour(this: *const u8, vkey: i32) ->
         return 1;
     }
     let result = if let Some(&orig) = ORIG_IS_KEY_PRESSED.get() {
+        // SAFETY: orig — trampoline isKeyPressed; this/vkey переданы игрой.
         unsafe { orig(this, vkey) }
     } else {
         0
@@ -609,6 +625,7 @@ unsafe extern "thiscall" fn is_key_pressed_detour(this: *const u8, vkey: i32) ->
 /// лёгким: только записи по готовому указателю, без логов и аллокаций.
 unsafe extern "thiscall" fn frame_time_detour(this: *mut u8, flag: i32, rate: f32) {
     if let Some(&orig) = ORIG_FRAME_TIME.get() {
+        // SAFETY: orig — trampoline updateFrameTime; аргументы переданы игрой.
         unsafe { orig(this, flag, rate) };
     }
     crate::api::after_frame_time(this as usize, flag);
@@ -631,6 +648,7 @@ fn set_original_frame_time(orig: unsafe extern "thiscall" fn(*mut u8, i32, f32))
 /// `api::rng_pin` — детерминированный пин для решений ИИ.
 unsafe extern "thiscall" fn rand_range_detour(this: *mut u32, lo: u32, hi: u32) -> u32 {
     let real = match ORIG_RAND_RANGE.get() {
+        // SAFETY: orig — trampoline randRange; this — состояние LCG, переданное игрой.
         Some(&orig) => unsafe { orig(this, lo, hi) },
         None => lo,
     };
@@ -641,6 +659,7 @@ unsafe extern "thiscall" fn rand_range_detour(this: *mut u32, lo: u32, hi: u32) 
 /// Детур `randRange` (signed).
 unsafe extern "thiscall" fn rand_range_signed_detour(this: *mut u32, lo: i32, hi: i32) -> i32 {
     let real = match ORIG_RAND_RANGE_SIGNED.get() {
+        // SAFETY: orig — trampoline randRange(signed); this — состояние LCG, переданное игрой.
         Some(&orig) => unsafe { orig(this, lo, hi) },
         None => lo,
     };
@@ -665,6 +684,7 @@ fn set_original_rand_range_signed(
 /// Детур `randFloat(lo, hi)` — float-бросок того же LCG (случайные задержки ИИ).
 unsafe extern "thiscall" fn rand_float_detour(this: *mut u32, lo: f32, hi: f32) -> f32 {
     let real = match ORIG_RAND_FLOAT.get() {
+        // SAFETY: orig — trampoline randFloat; this — состояние LCG, переданное игрой.
         Some(&orig) => unsafe { orig(this, lo, hi) },
         None => lo,
     };
@@ -812,6 +832,8 @@ impl InputHooks {
         }
         let target = (base_addr + addresses::UPDATE_INPUT_UNIT) as *mut c_void;
         let detour = update_input_unit_detour as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
@@ -823,12 +845,15 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "C" fn(*mut types::InputUnit, i32) =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_update_input_unit(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!("create_input_hook: queue_enable FAIL err={:?}", e));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_input_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -850,6 +875,8 @@ impl InputHooks {
         }
         let target = (base_addr + addresses::IS_KEYBIND_PRESSED) as *mut c_void;
         let detour = is_keybind_pressed_detour as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
@@ -861,8 +888,10 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "C" fn(i32) -> i32 =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_is_keybind_pressed(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_keybind_hook: queue_enable FAIL err={:?}",
@@ -870,6 +899,7 @@ impl InputHooks {
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_keybind_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -890,6 +920,8 @@ impl InputHooks {
         }
         let target = (base_addr + addresses::IS_KEYBIND_DOWN) as *mut c_void;
         let detour = is_keybind_down_detour as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
@@ -901,8 +933,10 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "C" fn(i32) -> i32 =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_is_keybind_down(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_keybind_down_hook: queue_enable FAIL err={:?}",
@@ -910,6 +944,7 @@ impl InputHooks {
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_keybind_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -930,6 +965,8 @@ impl InputHooks {
         }
         let target = (base_addr + addresses::IS_KEY_DOWN) as *mut c_void;
         let detour = is_key_down_detour as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
@@ -941,8 +978,10 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "thiscall" fn(*const u8, i32) -> i32 =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_is_key_down(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_key_down_hook: queue_enable FAIL err={:?}",
@@ -950,6 +989,7 @@ impl InputHooks {
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_key_down_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -970,6 +1010,8 @@ impl InputHooks {
             return None;
         }
         let target = (base_addr + addresses::KEYBOARD_POLL) as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, keyboard_poll_detour as *mut c_void) } {
             Ok(h) => h,
             Err(e) => {
@@ -981,8 +1023,10 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "thiscall" fn(*const u8) =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_keyboard_poll(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_keyboard_poll_hook: queue_enable FAIL err={:?}",
@@ -990,6 +1034,7 @@ impl InputHooks {
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_keyboard_poll_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -1010,6 +1055,8 @@ impl InputHooks {
         }
         let target = (base_addr + addresses::IS_KEY_PRESSED) as *mut c_void;
         let detour = is_key_pressed_detour as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, detour) } {
             Ok(h) => h,
             Err(e) => {
@@ -1021,8 +1068,10 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "thiscall" fn(*const u8, i32) -> i32 =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_is_key_pressed(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_key_pressed_hook: queue_enable FAIL err={:?}",
@@ -1030,6 +1079,7 @@ impl InputHooks {
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_key_pressed_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -1049,6 +1099,8 @@ impl InputHooks {
             return None;
         }
         let target = (base_addr + addresses::FRAME_TIME_UPDATE) as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, frame_time_detour as *mut c_void) } {
             Ok(h) => h,
             Err(e) => {
@@ -1060,8 +1112,10 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "thiscall" fn(*mut u8, i32, f32) =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_frame_time(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_frame_time_hook: queue_enable FAIL err={:?}",
@@ -1069,6 +1123,7 @@ impl InputHooks {
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_frame_time_hook: OK target=0x{:08X} detour=0x{:08X} trampoline=0x{:08X}",
@@ -1088,6 +1143,8 @@ impl InputHooks {
             return None;
         }
         let target = (base_addr + addresses::RAND_RANGE) as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, rand_range_detour as *mut c_void) } {
             Ok(h) => h,
             Err(e) => {
@@ -1099,14 +1156,17 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "thiscall" fn(*mut u32, u32, u32) -> u32 =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_rand_range(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_rand_range_hook: queue_enable FAIL err={e:?}"
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_rand_range_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -1124,6 +1184,8 @@ impl InputHooks {
             return None;
         }
         let target = (base_addr + addresses::RAND_RANGE_SIGNED) as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, rand_range_signed_detour as *mut c_void) } {
             Ok(h) => h,
             Err(e) => {
@@ -1135,14 +1197,17 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "thiscall" fn(*mut u32, i32, i32) -> i32 =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_rand_range_signed(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_rand_range_signed_hook: queue_enable FAIL err={e:?}"
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_rand_range_signed_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -1160,6 +1225,8 @@ impl InputHooks {
             return None;
         }
         let target = (base_addr + addresses::RAND_FLOAT) as *mut c_void;
+        // SAFETY: target — base + RVA функции игры (таблица addresses), detour — наша
+        // extern-заглушка.
         let hook = match unsafe { MhHook::new(target, rand_float_detour as *mut c_void) } {
             Ok(h) => h,
             Err(e) => {
@@ -1171,14 +1238,17 @@ impl InputHooks {
             }
         };
         let trampoline: unsafe extern "thiscall" fn(*mut u32, f32, f32) -> f32 =
+            // SAFETY: trampoline() от MinHook указывает на оригинал; сигнатура совпадает с detour.
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_rand_float(trampoline);
+        // SAFETY: hook создан выше над этим target; queue_enable допустим только для своего MhHook.
         if let Err(e) = unsafe { hook.queue_enable() } {
             logger::log_line(&format!(
                 "create_rand_float_hook: queue_enable FAIL err={e:?}"
             ));
             return None;
         }
+        // SAFETY: очередь MinHook заполнена нами; вызов из render-цикла при создании хуков.
         let _ = unsafe { MH_ApplyQueued() };
         logger::log_line(&format!(
             "create_rand_float_hook: OK target=0x{:08X} trampoline=0x{:08X}",
@@ -1196,6 +1266,7 @@ pub fn read_keys() -> Option<([u32; 6], [u32; 6])> {
     if addr == 0 {
         return None;
     }
+    // SAFETY: addr != 0 (проверено выше) — ms_InputKeys в статике модуля; POD-чтение по значению.
     let k: types::KeyInput = unsafe { (addr as *const types::KeyInput).read() };
     Some((k.keys_down, k.keys_pressed))
 }
@@ -1208,6 +1279,7 @@ pub fn read_mouse() -> Option<types::MouseState> {
         return None;
     }
     let base = addr as *const u8;
+    // SAFETY: addr != 0 (проверено выше) — ms_MouseState в статике модуля; читаем только buttons.
     Some(unsafe {
         types::MouseState {
             buttons: *(base.cast::<i32>()),

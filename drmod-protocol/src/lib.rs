@@ -48,10 +48,13 @@ impl PositionPacket {
         Some(Self::from_bytes(&arr))
     }
 
+    // SAFETY: PositionPacket — #[repr(C, packed)] из семи полей без padding; размер 28 байт
+    // проверяет transmute.
     pub fn to_bytes(&self) -> [u8; 28] {
         unsafe { std::mem::transmute(*self) }
     }
 
+    // SAFETY: симметрично to_bytes: [u8; 28] совпадает по размеру и layout с packed-структурой.
     pub fn from_bytes(bytes: &[u8; 28]) -> Self {
         unsafe { std::mem::transmute(*bytes) }
     }

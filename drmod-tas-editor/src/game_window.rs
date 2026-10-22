@@ -33,6 +33,8 @@ pub fn activate(tries: usize) -> bool {
     };
 
     for attempt in 0..tries {
+        // SAFETY: `window` is the live handle from `find`; ShowWindow accepts any HWND and is
+        // best-effort.
         unsafe {
             let _ = ShowWindow(window, SW_RESTORE);
         }
@@ -41,6 +43,8 @@ pub fn activate(tries: usize) -> bool {
             return true;
         }
 
+        // SAFETY: same live HWND; z-order/foreground calls are best-effort and their errors are
+        // ignored.
         unsafe {
             // Pushing the window to the top of the z-order first is what makes the following
             // foreground request likely to be granted: a window that is already on top is one the
@@ -78,16 +82,19 @@ pub fn running() -> bool {
 }
 
 fn find() -> windows::core::Result<HWND> {
+    // SAFETY: FindWindowW only queries the desktop; the title literal is NUL-terminated.
     unsafe { FindWindowW(None, w!("METAL GEAR RISING: REVENGEANCE")) }
 }
 
 fn foreground() -> HWND {
+    // SAFETY: GetForegroundWindow has no preconditions and cannot fail.
     unsafe { GetForegroundWindow() }
 }
 
 /// Whether a window is minimised — a game that is cannot take focus until it is restored, which
 /// [`activate`] does.
 pub fn minimised(window: HWND) -> bool {
+    // SAFETY: IsIconic only reads window state; an invalid handle returns false.
     unsafe { IsIconic(window).as_bool() }
 }
 
@@ -99,10 +106,12 @@ pub fn handle_value() -> Option<isize> {
 /// The thread that owns a window — the pair `AttachThreadInput` needs, and the value that says
 /// whether the game's input queue and this process's are already joined.
 pub fn owning_thread(window: HWND) -> u32 {
+    // SAFETY: GetWindowThreadProcessId reads the owner of `window`; we pass no out-pointer.
     unsafe { GetWindowThreadProcessId(window, None) }
 }
 
 /// Whatever window currently owns the keyboard focus.
 pub fn active_window() -> HWND {
+    // SAFETY: GetActiveWindow has no preconditions and cannot fail.
     unsafe { GetActiveWindow() }
 }

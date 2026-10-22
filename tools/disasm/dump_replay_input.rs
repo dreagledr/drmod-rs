@@ -53,6 +53,8 @@ fn main() {
     for row in rows {
         let (fi, buf, state_buf, _camera) = row.unwrap();
         let mut u = InputUnit::default();
+        // SAFETY: копируем не больше size_of::<InputUnit>() в локальную структуру; buf — Vec<u8> из
+        // SQLite.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 buf.as_ptr() as *const u8,

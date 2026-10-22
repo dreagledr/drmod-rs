@@ -30,6 +30,8 @@ pub(crate) fn is_readable_ptr(addr: usize) -> bool {
     );
 
     let mut mbi = MEMORY_BASIC_INFORMATION::default();
+    // SAFETY: VirtualQuery по произвольному addr безопасен; mbi — локальная структура нужного
+    // размера.
     let ok = unsafe {
         VirtualQuery(
             Some(addr as *const core::ffi::c_void),

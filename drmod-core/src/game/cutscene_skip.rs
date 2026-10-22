@@ -357,18 +357,23 @@ impl CutsceneSkip {
     }
 
     fn read_u32(addr: usize) -> u32 {
+        // SAFETY: addr — статика модуля (base + RVA) или объект меню, проверенный is_readable_ptr.
         unsafe { *(addr as *const u32) }
     }
 
     fn read_usize(addr: usize) -> usize {
+        // SAFETY: addr — статика модуля (base + RVA) или объект меню, проверенный is_readable_ptr.
         unsafe { *(addr as *const usize) }
     }
 
     fn read_i32(addr: usize) -> i32 {
+        // SAFETY: addr — статика модуля (base + RVA) или объект меню, проверенный is_readable_ptr.
         unsafe { *(addr as *const i32) }
     }
 
     fn write_u32(addr: usize, value: u32) {
+        // SAFETY: addr — статика модуля (base + RVA); пишем только из render-цикла и только биты
+        // staFlags.
         unsafe { *(addr as *mut u32) = value };
     }
 }

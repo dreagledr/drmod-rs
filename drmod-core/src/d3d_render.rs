@@ -116,6 +116,8 @@ impl CylinderRenderer {
 
     unsafe fn draw_raw(&self, device: &IDirect3DDevice9) {
         let stride = std::mem::size_of::<Vertex>() as u32;
+        // SAFETY: device — живой IDirect3DDevice9 из render-цикла; буферы живут до конца вызова,
+        // stride = Vertex.
         unsafe {
             device
                 .DrawIndexedPrimitiveUP(
@@ -146,6 +148,8 @@ impl CylinderRenderer {
         color: u32,
         view_proj: &[f32; 16],
     ) {
+        // SAFETY: device пришёл как &IDirect3DDevice9 из render-цикла; COM-вызовы требуют лишь
+        // живой указатель.
         unsafe {
             // ── Save state ──────────────────────────────────────────
             let mut saved_fvf: u32 = 0;
@@ -359,6 +363,8 @@ impl CylinderRenderer {
             M44: 1.0,
         };
 
+        // SAFETY: device — живой device из render-цикла; состояние RenderState сохраняется и
+        // восстанавливается.
         unsafe {
             let mut saved_fvf: u32 = 0;
             let _ = device.GetFVF(&mut saved_fvf);
@@ -497,6 +503,8 @@ impl CylinderRenderer {
         if capsules.is_empty() {
             return;
         }
+        // SAFETY: device — живой device из render-цикла; батч рисует буферы, собранные в этом же
+        // вызове.
         unsafe {
             let mut saved_fvf: u32 = 0;
             let _ = device.GetFVF(&mut saved_fvf);
@@ -731,6 +739,8 @@ impl SphereRenderer {
 
     unsafe fn draw_raw(&self, device: &IDirect3DDevice9) {
         let stride = std::mem::size_of::<Vertex>() as u32;
+        // SAFETY: device — живой IDirect3DDevice9 из render-цикла; буферы живут до конца вызова,
+        // stride = Vertex.
         unsafe {
             device
                 .DrawIndexedPrimitiveUP(
@@ -774,6 +784,8 @@ impl SphereRenderer {
             M43: cz,
             M44: 1.0,
         };
+        // SAFETY: device — живой device из render-цикла; состояние RenderState сохраняется и
+        // восстанавливается.
         unsafe {
             let mut saved_fvf: u32 = 0;
             let _ = device.GetFVF(&mut saved_fvf);
@@ -909,6 +921,12 @@ struct LineVertex {
     pos: [f32; 3],
 }
 
+/// Рисует набор 3D-линий (отрезков) одним вызовом `DrawPrimitiveUP`.
+///
+/// # Safety
+///
+/// `device` должен быть живым `IDirect3DDevice9` из render-цикла игры: вызовы его
+/// методов идут напрямую в COM-объект, без проверок на null.
 pub unsafe fn draw_lines_3d(
     device: &IDirect3DDevice9,
     segments: &[(f32, f32, f32, f32, f32, f32)],
@@ -918,6 +936,8 @@ pub unsafe fn draw_lines_3d(
     if segments.is_empty() {
         return;
     }
+    // SAFETY: device — живой device из render-цикла (контракт draw_lines_3d); сегменты живут на
+    // время вызова.
     unsafe {
         let mut saved_fvf: u32 = 0;
         let _ = device.GetFVF(&mut saved_fvf);

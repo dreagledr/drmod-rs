@@ -92,6 +92,8 @@ fn read_registry_string(
     subkey: windows::core::PCWSTR,
     name: windows::core::PCWSTR,
 ) -> Option<String> {
+    // SAFETY: Win32 registry API: root/subkey/name валидны от вызывающего, buffer — локальный [u16;
+    // MAX_PATH].
     unsafe {
         let mut key = HKEY::default();
         if RegOpenKeyExW(root, subkey, None, KEY_READ, &mut key) != ERROR_SUCCESS {

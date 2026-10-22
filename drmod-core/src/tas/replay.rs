@@ -200,6 +200,8 @@ pub(super) fn feed_playback(unit: *mut InputUnit) -> bool {
             frame.input.right_stick[0] += g.rsx_correction;
             g.rsx_correction = 0.0;
         }
+        // SAFETY: unit — указатель, который игра передала в детур updateInputUnit; валиден на время
+        // вызова.
         unsafe { *unit = frame.input };
         // Raw-клавиши меню и blade/ripper — в атомики; детур применит raw
         // ниже (apply_raw_keys), blade/ripper игра прочитает в handleActions
@@ -214,6 +216,8 @@ pub(super) fn feed_playback(unit: *mut InputUnit) -> bool {
         }
     } else {
         // Конец: отпустить кнопки, render вскоре остановит воспроизведение.
+        // SAFETY: unit — указатель из детура updateInputUnit (конец прогона); валиден на время
+        // вызова.
         unsafe { *unit = InputUnit::default() };
         g.done = true;
     }
@@ -428,6 +432,8 @@ fn game_menu_status() -> i32 {
     if base == 0 {
         return -1;
     }
+    // SAFETY: base != 0 — модуль игры загружен; 0x17E9F9C — MENU_STATUS в его статике;
+    // read_unaligned.
     unsafe { (base as *const i32).add(0x17E9F9C / 4).read_unaligned() }
 }
 
@@ -480,6 +486,7 @@ pub(super) fn apply_override(unit: *mut InputUnit) {
     if let Ok(guard) = INPUT_OVERRIDE.lock()
         && guard.active
     {
+        // SAFETY: unit — указатель из детура updateInputUnit; валиден на время вызова.
         unsafe { *unit = guard.input };
     }
 }

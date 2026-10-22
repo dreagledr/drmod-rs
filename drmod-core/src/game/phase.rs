@@ -37,6 +37,8 @@ const STA_EVENT_MASK: u32 = 0x4000_0000;
 /// Хэш имени, как его считает движок (для сопоставления с сценарными данными).
 pub(crate) fn hash_name(base_addr: usize, name: &str) -> Option<u32> {
     let cname = CString::new(name).ok()?;
+    // SAFETY: base_addr — база модуля игры; HASH_FN_RVA — cdecl hash_fn, сигнатура из
+    // дизассемблирования.
     unsafe {
         let hash_name: extern "cdecl" fn(*const i8) -> u32 =
             std::mem::transmute(base_addr + HASH_FN_RVA);
@@ -55,6 +57,8 @@ pub(crate) fn order_subphase(
     clear_event: bool,
 ) -> Option<()> {
     let cname = CString::new(name).ok()?;
+    // SAFETY: трансмут адреса request_subphase в fn(thiscall) и запись STA_FLAGS — только из
+    // render-цикла игры.
     unsafe {
         if clear_event {
             let flags = (base_addr + STA_FLAGS_RVA) as *mut u32;
@@ -74,6 +78,8 @@ pub(crate) fn order_subphase(
 /// Смена фазы/подфазы. Вызывать только из render-цикла (поток игры):
 /// движок не потокобезопасен.
 pub(crate) fn change_phase(base_addr: usize, id: u32, arg2: i32, arg3: i32, mode: u32) {
+    // SAFETY: трансмут change_phase (thiscall, 4 аргумента), this — менеджер фаз; только
+    // render-цикл.
     unsafe {
         let change_phase: extern "thiscall" fn(*mut u8, u32, i32, i32, u32) -> u32 =
             std::mem::transmute(base_addr + CHANGE_PHASE_RVA);

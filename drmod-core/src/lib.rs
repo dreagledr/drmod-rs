@@ -168,6 +168,8 @@ static IN_VEH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::ne
 unsafe extern "system" fn veh_handler(
     info: *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS,
 ) -> i32 {
+    // SAFETY: info — не-null EXCEPTION_POINTERS от VEH-диспетчера; ExceptionRecord валиден на время
+    // вызова.
     let record = unsafe { &*(*info).ExceptionRecord };
     let code = record.ExceptionCode.0 as u32;
     // Пропускаем benign-исключения, которые массово летят при загрузке/создании
@@ -182,6 +184,7 @@ unsafe extern "system" fn veh_handler(
     // Запоминаем Eip писателя и продолжаем — без логирования (может быть часто).
     if code == crate::tas::watch::STATUS_SINGLE_STEP {
         let (eip, caller, chain) =
+            // SAFETY: info пришёл от VEH и не null; ContextRecord валиден на время обработчика.
             unsafe { (*info).ContextRecord.as_ref() }.map_or((0, 0, [0usize; 4]), |c| {
                 // У записи в поле сеттерами без пролога `[esp]` — адрес возврата
                 // вызывающего; выше по стеку ищем ещё кандидатов-возвратов
@@ -192,11 +195,14 @@ unsafe extern "system" fn veh_handler(
                 let mut caller = 0;
                 if c.Esp != 0 {
                     let sp = c.Esp as *const usize;
+                    // SAFETY: Esp — указатель стека остановленного потока; читаем ровно одно слово.
                     caller = unsafe { *sp };
                     for i in 1..48 {
                         if nc >= chain.len() {
                             break;
                         }
+                        // SAFETY: sp — стек потока; читаем до 48 слов вглубь, значения фильтруются
+                        // диапазоном модуля.
                         let v = unsafe { *sp.add(i) };
                         if v >= start && v < end {
                             chain[nc] = v;
@@ -254,6 +260,7 @@ impl HelloHud {
 
         // Логируем SEH-исключения (креши) в debug.log — диагностика.
         #[cfg(debug_assertions)]
+        // SAFETY: AddVectoredExceptionHandler принимает валидный fn-указатель; владения не требует.
         unsafe {
             windows::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(
                 1,
@@ -263,6 +270,7 @@ impl HelloHud {
 
         let (current_run_start, prev_run_start, db_conn) = init_db();
 
+        // SAFETY: GetModuleHandleA(null) — запрос базы exe; предусловий нет, null означает ошибку.
         let base_addr = unsafe {
             windows::Win32::System::LibraryLoader::GetModuleHandleA(windows::core::PCSTR::null())
         }
@@ -360,8 +368,11 @@ impl HelloHud {
         if self.base_addr != 0 {
             // --- GAME MENU STATUS (первым: от него зависит, можно ли читать остальное) ---
             let menu_status_addr = self.base_addr + 0x17E9F9C;
+            // SAFETY: base_addr != 0 — модуль игры загружен; 0x17E9F9C — MENU_STATUS в его статике.
             state.menu_status_raw = unsafe { *(menu_status_addr as *const i32) };
             if (0..=18).contains(&state.menu_status_raw) {
+                // SAFETY: raw проверен в 0..=18 — ровно столько вариантов у GameMenuStatus
+                // (repr(i32)).
                 state.menu_status = unsafe {
                     std::mem::transmute::<i32, game::GameMenuStatus>(state.menu_status_raw)
                 };
@@ -388,15 +399,21 @@ impl HelloHud {
             // --- MISSION ---
             if player_readable {
                 let mission_id_addr = self.base_addr + 0x1764670;
+                // SAFETY: player_readable — страница игрока читаема; 0x1764670 — mission_id в
+                // статике модуля.
                 state.mission_id_raw = unsafe { *(mission_id_addr as *const i32) };
                 let (name_addr, eff_id) = if state.mission_id_raw != 0 {
                     (self.base_addr + 0x1764674, state.mission_id_raw)
                 } else {
+                    // SAFETY: player_readable и base_addr != 0; 0x1766004 — id миссии по умолчанию
+                    // в статике.
                     (self.base_addr + 0x1766008, unsafe {
                         *((self.base_addr + 0x1766004) as *const i32)
                     })
                 };
                 state.mission_id = eff_id;
+                // SAFETY: name_addr — CStr в статике модуля; строка нуль-терминирована, читается
+                // при player_readable.
                 state.mission_name = unsafe { std::ffi::CStr::from_ptr(name_addr as *const i8) }
                     .to_string_lossy()
                     .into_owned();
@@ -405,14 +422,20 @@ impl HelloHud {
             // --- gStr / gStr2 / gStr4 (ASL location strings) ---
             if player_readable {
                 gstr =
+                    // SAFETY: 0x14B9181 — gStr в статике модуля, читается только при
+                    // player_readable; CStr.
                     unsafe { std::ffi::CStr::from_ptr((self.base_addr + 0x14B9181) as *const i8) }
                         .to_string_lossy()
                         .into_owned();
                 gstr2 =
+                    // SAFETY: 0x14B91AD — gStr2 в статике модуля; читается только при
+                    // player_readable.
                     unsafe { std::ffi::CStr::from_ptr((self.base_addr + 0x14B91AD) as *const i8) }
                         .to_string_lossy()
                         .into_owned();
                 gstr4 =
+                    // SAFETY: 0x14B91A8 — gStr4 в статике модуля; читается только при
+                    // player_readable.
                     unsafe { std::ffi::CStr::from_ptr((self.base_addr + 0x14B91A8) as *const i8) }
                         .to_string_lossy()
                         .into_owned();
@@ -737,6 +760,7 @@ impl ImguiRenderLoop for HelloHud {
         // Read D3D viewport — единственный надёжный источник размера области рендера
         {
             let mut vp = windows::Win32::Graphics::Direct3D9::D3DVIEWPORT9::default();
+            // SAFETY: device — живой IDirect3DDevice9 из render-цикла; vp — локальная структура.
             unsafe {
                 device.GetViewport(&mut vp).ok();
             }
@@ -942,6 +966,8 @@ impl ImguiRenderLoop for HelloHud {
                 // Глобальный InputUnit[0] (0x01AEB850 = base+0x177B850) —
                 // реальный источник входа игрока.
                 let g = if self.base_addr != 0 {
+                    // SAFETY: base_addr != 0; GLOBAL_INPUT_UNIT0 — InputUnit[0] в статике модуля
+                    // (POD-чтение).
                     let u = unsafe {
                         ((self.base_addr + addresses::GLOBAL_INPUT_UNIT0)
                             as *const types::InputUnit)

@@ -50,6 +50,8 @@ impl Player {
         let static_ptr_addr = if base_addr == 0 {
             None
         } else {
+            // SAFETY: base_addr — база загруженного модуля игры, 0x177B4A4 — статический указатель
+            // Pl0000 из SDK.
             NonNull::new(unsafe { (base_addr as *mut u8).add(0x177B4A4) })
         };
         Self {
@@ -67,6 +69,8 @@ impl Player {
     pub(crate) fn refresh(&mut self, player_readable: bool) {
         self.cached_player_obj_ptr = if let Some(static_ptr) = self.static_ptr_addr {
             if player_readable {
+                // SAFETY: static_ptr смотрит в статику модуля; читаем, только когда страница игрока
+                // читаема (player_readable).
                 unsafe { *(static_ptr.as_ptr() as *const *mut u8) }
             } else {
                 std::ptr::null_mut()
@@ -97,6 +101,8 @@ impl Player {
             return None;
         }
         let p = self.cached_player_obj_ptr;
+        // SAFETY: объект игрока не null и проверен is_readable_ptr в refresh; 0x50..0x58 — позиция
+        // Pl0000.
         Some(unsafe {
             segment::Vec3 {
                 x: *(p.add(0x50) as *const f32),
@@ -111,6 +117,7 @@ impl Player {
         if self.cached_player_obj_ptr.is_null() {
             return 0;
         }
+        // SAFETY: объект проверен is_readable_ptr; 0x618 — r_anim (текущая анимация Pl0000).
         unsafe { *(self.cached_player_obj_ptr.add(0x618) as *const i32) }
     }
 
@@ -121,6 +128,8 @@ impl Player {
             return None;
         }
         let p = self.cached_player_obj_ptr;
+        // SAFETY: объект проверен is_readable_ptr; 0x900..0x908 — прошлая позиция Pl0000 (лаг 1
+        // кадр).
         Some(unsafe {
             [
                 *(p.add(0x900) as *const f32),
@@ -135,6 +144,7 @@ impl Player {
         if self.cached_player_obj_ptr.is_null() {
             return;
         }
+        // SAFETY: объект проверен is_readable_ptr; 0x54 — Y-координата Pl0000 (debug-сдвиг).
         unsafe {
             *(self.cached_player_obj_ptr.add(0x54) as *mut f32) += dy;
         }
@@ -146,6 +156,7 @@ impl Player {
             return;
         }
         let p = self.cached_player_obj_ptr;
+        // SAFETY: объект проверен is_readable_ptr; 0x50..0x58 — позиция Pl0000 (debug-телепорт).
         unsafe {
             *(p.add(0x50) as *mut f32) = pos.0;
             *(p.add(0x54) as *mut f32) = pos.1;
@@ -158,6 +169,8 @@ impl Player {
         if self.cached_player_obj_ptr.is_null() {
             return types::InputUnit::default();
         }
+        // SAFETY: объект проверен is_readable_ptr; CURRENT_INPUT_OFFSET — m_CurrentInput (POD
+        // InputUnit).
         unsafe {
             self.cached_player_obj_ptr
                 .add(addresses::CURRENT_INPUT_OFFSET)
@@ -173,6 +186,7 @@ impl Player {
             return types::PlInputSnapshot::default();
         }
         let p = self.cached_player_obj_ptr;
+        // SAFETY: объект проверен is_readable_ptr; PL_INPUT_DIR/PL_BUTTON_JUMP — смещения из SDK.
         unsafe {
             types::PlInputSnapshot {
                 input_direction: *(p.add(addresses::PL_INPUT_DIR) as *const f32),
@@ -189,6 +203,7 @@ impl Player {
             return None;
         }
         let p = self.cached_player_obj_ptr;
+        // SAFETY: объект проверен is_readable_ptr; смещения — поля PlayerState из SDK (POD-чтение).
         Some(unsafe {
             types::PlayerState {
                 pos: [
@@ -229,6 +244,8 @@ impl Player {
         if self.cached_player_obj_ptr.is_null() {
             return Vec::new();
         }
+        // SAFETY: объект проверен is_readable_ptr; read_full_skeleton сам валидирует кости (см.
+        // skeleton).
         unsafe { crate::skeleton::read_full_skeleton(self.cached_player_obj_ptr) }
     }
 
@@ -256,6 +273,8 @@ impl Player {
             None
         } else {
             let p = self.cached_player_obj_ptr;
+            // SAFETY: объект проверен is_readable_ptr; 0x50..0x58 — позиция Pl0000 для дистанций до
+            // врагов.
             Some(unsafe {
                 [
                     *(p.add(0x50) as *const f32),
@@ -268,18 +287,25 @@ impl Player {
         if !is_readable_ptr(list as usize) {
             return (0, out);
         }
+        // SAFETY: list проверен is_readable_ptr; +0x0C — size у cFixedList
+        // (EntitySystem::m_EntityList).
         let total = unsafe { *(list.add(0x0C) as *const usize) };
+        // SAFETY: list проверен is_readable_ptr; +0x14 — m_pFirst, первый узел списка сущностей.
         let first = unsafe { *(list.add(0x14) as *const *mut u8) };
         let mut node = first;
         for _ in 0..total.min(256) {
             if node.is_null() || !is_readable_ptr(node as usize) {
                 break;
             }
+            // SAFETY: node проверен is_readable_ptr; узел cFixedList начинается с указателя на
+            // Entity.
             let ent = unsafe { *(node as *const *mut u8) };
             if !ent.is_null() && is_readable_ptr(ent as usize) {
+                // SAFETY: ent проверен is_readable_ptr; +0x04 — имя Entity (CStr в образе игры).
                 let name = unsafe { std::ffi::CStr::from_ptr(ent.add(0x04) as *const i8) }
                     .to_string_lossy()
                     .into_owned();
+                // SAFETY: ent проверен is_readable_ptr; +0x3C — Behavior* (Entity::m_pSceneModel).
                 let behavior = unsafe { *(ent.add(0x3C) as *const *mut u8) };
                 // Клинок врага (часть): мировая высота из матрицы, владелец
                 // (Body) — для сопоставления с врагом после цикла.
@@ -287,6 +313,8 @@ impl Player {
                     && !behavior.is_null()
                     && is_readable_ptr(behavior as usize)
                 {
+                    // SAFETY: behavior проверен is_readable_ptr; +0x518 — владелец части, +0x44 —
+                    // мировая Y клинка.
                     unsafe {
                         let owner = *(behavior.add(0x518) as *const *mut u8);
                         let world_y = *(behavior.add(0x44) as *const f32);
@@ -305,6 +333,8 @@ impl Player {
                         || name.starts_with("Ba")
                         || name.starts_with("Pl001"));
                 if is_enemy_candidate && !behavior.is_null() && is_readable_ptr(behavior as usize) {
+                    // SAFETY: behavior проверен is_readable_ptr; смещения Behavior — как у игрока
+                    // (+0x50..+0x8B4).
                     unsafe {
                         let pos = [
                             *(behavior.add(0x50) as *const f32),
@@ -343,11 +373,15 @@ impl Player {
                     }
                 }
             }
+            // SAFETY: node проверен is_readable_ptr; +0x08 — next узла cFixedList (проверяется на
+            // следующем шаге).
             node = unsafe { *(node.add(0x08) as *const *mut u8) };
         }
         // Сопоставление клинков с врагами: Blade.owner (Em0160Body) +0x360 → враг.
         for (body_beh, y) in &blades {
             if is_readable_ptr(*body_beh as usize) {
+                // SAFETY: body_beh проверен is_readable_ptr; +0x360 — Entity* врага, владеющего
+                // телом.
                 unsafe {
                     let enemy = *(body_beh.add(0x360) as *const *mut u8);
                     if let Some((_, idx)) = enemy_beh.iter().find(|(b, _)| *b == enemy) {
