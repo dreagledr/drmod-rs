@@ -25,7 +25,7 @@
 //! shared DTOs (`drmod-script-gen/README.md`).
 
 use drmod_tas_editor::script::frames;
-use drmod_tas_editor::script::{dsl, json, ScriptDocument};
+use drmod_tas_editor::script::{ScriptDocument, dsl, json};
 
 /// The fixture names, extension included — the C# `ScriptFixtures.Fixtures()` list.
 const FIXTURES: [&str; 5] = [
@@ -113,12 +113,19 @@ fn the_text_of_every_expressible_fixture_writes_into_its_golden() {
         let text = dsl::write(&script)
             .unwrap_or_else(|refused| panic!("{fixture}: does not write: {}", refused.message()));
 
-        assert_eq!(text, expected, "{fixture}: the text differs from the C# editor's");
+        assert_eq!(
+            text, expected,
+            "{fixture}: the text differs from the C# editor's"
+        );
 
         // A golden is what a user edits: reading it back has to give the same text, or every round
         // trip through the editor would rewrite the file.
-        let again = dsl::parse(&text)
-            .unwrap_or_else(|refused| panic!("{fixture}: its own text does not parse: {}", refused.message()));
+        let again = dsl::parse(&text).unwrap_or_else(|refused| {
+            panic!(
+                "{fixture}: its own text does not parse: {}",
+                refused.message()
+            )
+        });
         assert_eq!(
             dsl::write(&again).expect("the re-parse writes"),
             text,
@@ -137,7 +144,10 @@ fn the_text_of_a_fixture_is_the_same_script_as_its_json() {
 
         let text = dsl::write(&script).expect("it is expressible");
         let from_text = dsl::parse(&text).unwrap_or_else(|refused| {
-            panic!("{fixture}: its own text does not parse: {}", refused.message())
+            panic!(
+                "{fixture}: its own text does not parse: {}",
+                refused.message()
+            )
         });
 
         // The rules line is a lossless spelling of name/trigger/restart, so comparing the written
@@ -149,7 +159,11 @@ fn the_text_of_a_fixture_is_the_same_script_as_its_json() {
         );
 
         // The frames are what the two forms must agree on, movement aside.
-        assert_same_frames(fixture, &frames::expand(&script), &frames::expand(&from_text));
+        assert_same_frames(
+            fixture,
+            &frames::expand(&script),
+            &frames::expand(&from_text),
+        );
     }
 }
 
@@ -186,12 +200,8 @@ fn assert_same_frames(
         "{fixture}: the two forms run for different lengths"
     );
 
-    let movement = drmod_tas_editor::script::keys::command_mask(&[
-        "forward",
-        "backward",
-        "left",
-        "right",
-    ]);
+    let movement =
+        drmod_tas_editor::script::keys::command_mask(&["forward", "backward", "left", "right"]);
 
     for (index, (json_frame, text_frame)) in json_frames.iter().zip(text_frames).enumerate() {
         assert_eq!(
@@ -220,13 +230,7 @@ fn assert_same_frames(
 }
 
 /// A stick compared by the axes it stands for, within the thousandth the text keeps.
-fn assert_axes(
-    fixture: &str,
-    frame: usize,
-    side: &str,
-    expected: (f64, f64),
-    actual: (f64, f64),
-) {
+fn assert_axes(fixture: &str, frame: usize, side: &str, expected: (f64, f64), actual: (f64, f64)) {
     let vector = |(angle, amount): (f64, f64)| {
         let radians = angle * std::f64::consts::PI / 180.0;
         [

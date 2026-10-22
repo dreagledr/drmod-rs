@@ -14,8 +14,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// Каталог фикстур редактора — тот же, куда пишет `script_gen`.
-const FIXTURES: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../drmod-tas-editor/tests/fixtures/golden");
+const FIXTURES: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../drmod-tas-editor/tests/fixtures/golden"
+);
 
 /// Суффикс JSON, записанного редактором (совпадает с `fixtures::EXPECTED_SUFFIX`).
 const EXPECTED_SUFFIX: &str = ".expected.json";
@@ -35,7 +37,11 @@ fn every_fixture_has_an_expected_file() {
         );
         fixtures += 1;
     }
-    assert!(fixtures > 0, "в {} нет фикстур — прогоните `cargo run -p drmod-script-gen`", dir.display());
+    assert!(
+        fixtures > 0,
+        "в {} нет фикстур — прогоните `cargo run -p drmod-script-gen`",
+        dir.display()
+    );
 }
 
 #[test]
@@ -60,8 +66,8 @@ fn csharp_json_is_accepted_and_matches_the_fixture() {
 
 /// JSON-фикстуры каталога (без золотых файлов редактора), по алфавиту.
 fn fixtures_in(dir: &Path) -> Vec<PathBuf> {
-    let entries = fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("каталог фикстур {}: {e}", dir.display()));
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|e| panic!("каталог фикстур {}: {e}", dir.display()));
     let mut fixtures: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|entry| entry.path()))
         .filter(|path| {
@@ -88,10 +94,16 @@ fn check_mod_limits(request: &ScriptRequest, name: &str) {
             command.t + command.duration <= MAX_SCRIPT_FRAMES,
             "{name}: commands[{i}] выходит за {MAX_SCRIPT_FRAMES} кадров"
         );
-        assert!(!command.input.is_empty(), "{name}: commands[{i}] input пуст");
+        assert!(
+            !command.input.is_empty(),
+            "{name}: commands[{i}] input пуст"
+        );
     }
 }
 
 fn file_name(path: &Path) -> String {
-    path.file_name().and_then(|name| name.to_str()).unwrap_or_default().to_string()
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default()
+        .to_string()
 }

@@ -37,7 +37,10 @@ impl HookExample {
             .unwrap()
             .into_rgba8();
 
-        HookExample { image, image_id: None }
+        HookExample {
+            image,
+            image_id: None,
+        }
     }
 }
 
@@ -50,7 +53,11 @@ impl Default for HookExample {
 impl ImguiRenderLoop for HookExample {
     fn initialize<'a>(&'a mut self, _ctx: &mut Context, render_context: &'a mut dyn RenderContext) {
         self.image_id = render_context
-            .load_texture(self.image.as_bytes(), self.image.width() as _, self.image.height() as _)
+            .load_texture(
+                self.image.as_bytes(),
+                self.image.width() as _,
+                self.image.height() as _,
+            )
             .ok();
 
         println!("{:?}", self.image_id);
@@ -64,8 +71,11 @@ impl ImguiRenderLoop for HookExample {
                 ui.text("Hello from `hudhook`!");
 
                 if let Some(tex_id) = self.image_id {
-                    Image::new(tex_id, [self.image.width() as f32, self.image.height() as f32])
-                        .build(ui);
+                    Image::new(
+                        tex_id,
+                        [self.image.width() as f32, self.image.height() as f32],
+                    )
+                    .build(ui);
                 }
             });
     }

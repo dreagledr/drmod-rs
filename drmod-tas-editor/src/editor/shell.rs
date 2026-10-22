@@ -21,7 +21,7 @@ use dear_imgui_cte::TextEditor;
 use crate::editor::script_controls::{self, ControlsView};
 use crate::editor::text_cache::TextCache;
 use crate::editor::{
-    mod_panel, table, text_pane, workspace_panel, Editor, ScriptActions, DOCKSPACE_ID, WINDOW_TITLE,
+    DOCKSPACE_ID, Editor, ScriptActions, WINDOW_TITLE, mod_panel, table, text_pane, workspace_panel,
 };
 
 /// What a frame decided, in the order the caller applies it. Everything else in a frame is drawing.

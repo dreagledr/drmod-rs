@@ -56,9 +56,11 @@ pub fn draw_world_pos(
 ) {
     let [vp_x, vp_y, vp_w, vp_h] = viewport;
 
-    if let Some(([scr_x, scr_y], dist)) = world_to_screen(world_pos, view_proj, viewport, camera_pos)
+    if let Some(([scr_x, scr_y], dist)) =
+        world_to_screen(world_pos, view_proj, viewport, camera_pos)
     {
-        let on_screen = scr_x >= vp_x && scr_x <= vp_x + vp_w && scr_y >= vp_y && scr_y <= vp_y + vp_h;
+        let on_screen =
+            scr_x >= vp_x && scr_x <= vp_x + vp_w && scr_y >= vp_y && scr_y <= vp_y + vp_h;
 
         // Screen-space radius for a 0.5m world-space offset
         let (wx, wy, wz) = world_pos;

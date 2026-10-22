@@ -99,7 +99,10 @@ pub fn loader(game_folder: Option<&Path>, payload: &Payload) -> (bool, bool) {
         return (false, false);
     }
 
-    (true, same_bytes(safe_read(&path).as_deref(), &payload.loader))
+    (
+        true,
+        same_bytes(safe_read(&path).as_deref(), &payload.loader),
+    )
 }
 
 /// Writes the mod into the game folder.

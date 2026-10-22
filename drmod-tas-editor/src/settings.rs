@@ -88,10 +88,8 @@ impl Settings {
                 }
                 "custom_fps" => {
                     if let Ok(fps) = value.parse::<u32>() {
-                        settings.rules.custom_fps = fps.clamp(
-                            PlaybackRules::MIN_FPS,
-                            PlaybackRules::MAX_FPS,
-                        );
+                        settings.rules.custom_fps =
+                            fps.clamp(PlaybackRules::MIN_FPS, PlaybackRules::MAX_FPS);
                     }
                 }
                 "pin_seed" => {

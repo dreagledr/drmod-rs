@@ -24,7 +24,7 @@ use dear_app::imgui::Ui;
 use dear_imgui_cte::{CteUiExt, TextEditor};
 
 use crate::script::commands;
-use crate::script::{dsl, ScriptTextStatus};
+use crate::script::{ScriptTextStatus, dsl};
 
 /// What a frame of this panel decided.
 #[derive(Clone, Debug, Default)]
@@ -81,7 +81,11 @@ pub fn draw_text(ui: &Ui, editor: &mut TextEditor) -> bool {
 /// A row is not clickable and nothing here follows the caret: this is a reference, so a row is text.
 pub fn draw_reference(ui: &Ui) {
     ui.text("Frame");
-    ui.text_wrapped(&format!("{}  —  {}", commands::FRAME.spelling, commands::FRAME.help));
+    ui.text_wrapped(&format!(
+        "{}  —  {}",
+        commands::FRAME.spelling,
+        commands::FRAME.help
+    ));
 
     ui.text("Commands");
     ui.text_wrapped(":frames holds a token that long — 1 by default");

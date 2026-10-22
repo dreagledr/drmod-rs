@@ -255,7 +255,10 @@ fn read_stick(
             if left {
                 ScriptFrame { left: stick, ..row }
             } else {
-                ScriptFrame { right: stick, ..row }
+                ScriptFrame {
+                    right: stick,
+                    ..row
+                }
             }
         }),
     })

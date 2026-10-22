@@ -12,7 +12,7 @@
 use dear_app::imgui::Ui;
 
 use crate::buffers::{self, Buffers};
-use crate::editor::{mod_panel::ModPanelView, Editor, PendingFolder};
+use crate::editor::{Editor, PendingFolder, mod_panel::ModPanelView};
 use crate::workspace::Listing;
 
 /// What a frame of this panel decided. Returned rather than applied because the list is taken by

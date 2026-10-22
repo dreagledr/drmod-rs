@@ -30,7 +30,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::process;
-use crate::{done, step, util, Error, Result};
+use crate::{Error, Result, done, step, util};
 
 /// The mod's DLL, as the root build leaves it. The triple is spelled out because it is a contract:
 /// `drmod-injector/src/main.rs` embeds the same path with `include_bytes!`.
@@ -49,8 +49,14 @@ pub fn build(root: PathBuf) -> Result<()> {
     let exe = target.join("drmod.exe");
     let dll = target.join("drmod_rs_lib.dll");
 
-    util::require_file(&exe, "the launcher did not build — check the cargo output above")?;
-    util::require_file(&dll, "the library did not build — check the cargo output above")?;
+    util::require_file(
+        &exe,
+        "the launcher did not build — check the cargo output above",
+    )?;
+    util::require_file(
+        &dll,
+        "the library did not build — check the cargo output above",
+    )?;
 
     let out = root.join("out");
     std::fs::create_dir_all(&out)
@@ -78,7 +84,10 @@ pub fn build(root: PathBuf) -> Result<()> {
     util::clean_dir(&stage)?;
     util::copy(&dll, &stage.join("plugins").join("drmod_rs_lib.asi"))?;
     util::copy(&loader, &stage.join("d3d9.dll"))?;
-    util::copy(&root.join("docs").join("asi-readme.txt"), &stage.join("readme.txt"))?;
+    util::copy(
+        &root.join("docs").join("asi-readme.txt"),
+        &stage.join("readme.txt"),
+    )?;
 
     let asi_zip = out.join("drmod-asi.zip");
     zip_assembled_tree(&asi_zip, &stage)?;
@@ -174,7 +183,10 @@ pub fn build_tools(root: PathBuf) -> Result<()> {
         format!("target/{MOD_TARGET}/release/dump-replay-input.exe"),
     ] {
         let built = root.join(&relative);
-        util::require_file(&built, "the tool did not build — check the cargo output above")?;
+        util::require_file(
+            &built,
+            "the tool did not build — check the cargo output above",
+        )?;
 
         let name = built
             .file_name()
@@ -214,9 +226,8 @@ fn zip_file(archive: &Path, entries: &[(PathBuf, String)]) -> Result<()> {
         add_file(&mut file, source, name)?;
     }
 
-    file.finish().map_err(|error| {
-        Error::new(format!("cannot finish {}: {error}", archive.display()))
-    })?;
+    file.finish()
+        .map_err(|error| Error::new(format!("cannot finish {}: {error}", archive.display())))?;
 
     Ok(())
 }
@@ -230,16 +241,15 @@ pub fn zip_assembled_tree(archive: &Path, dir: &Path) -> Result<()> {
     let mut file = create_archive(archive)?;
 
     for path in util::files_recursive(dir)? {
-        let relative = path
-            .strip_prefix(dir)
-            .map_err(|_| Error::new(format!("{} is not under {}", path.display(), dir.display())))?;
+        let relative = path.strip_prefix(dir).map_err(|_| {
+            Error::new(format!("{} is not under {}", path.display(), dir.display()))
+        })?;
         let name = relative.to_string_lossy().replace('\\', "/");
         add_file(&mut file, &path, &name)?;
     }
 
-    file.finish().map_err(|error| {
-        Error::new(format!("cannot finish {}: {error}", archive.display()))
-    })?;
+    file.finish()
+        .map_err(|error| Error::new(format!("cannot finish {}: {error}", archive.display())))?;
 
     Ok(())
 }
@@ -251,8 +261,9 @@ fn create_archive(archive: &Path) -> Result<zip::ZipWriter<std::fs::File>> {
     }
 
     if archive.exists() {
-        std::fs::remove_file(archive)
-            .map_err(|error| Error::new(format!("cannot replace {}: {error}", archive.display())))?;
+        std::fs::remove_file(archive).map_err(|error| {
+            Error::new(format!("cannot replace {}: {error}", archive.display()))
+        })?;
     }
 
     let file = std::fs::File::create(archive)

@@ -66,20 +66,65 @@ pub const FRAME: ScriptCommandHelp = ScriptCommandHelp {
 /// They are not flags of the DSL's input table — a stick is the shape of a whole command — so
 /// the vocabulary does not carry them and they are spelled here.
 pub const STICKS: [ScriptCommandHelp; 6] = [
-    ScriptCommandHelp { token: "ls", spelling: "ls:<angle>", help: "full press by compass angle", kind: ScriptCommandKind::Stick },
-    ScriptCommandHelp { token: "lsx", spelling: "lsx:<value>", help: "exact X axis of the left stick, ±1000", kind: ScriptCommandKind::Stick },
-    ScriptCommandHelp { token: "lsy", spelling: "lsy:<value>", help: "exact Y axis of the left stick, ±1000", kind: ScriptCommandKind::Stick },
-    ScriptCommandHelp { token: "rs", spelling: "rs:<angle>", help: "full camera press, the same compass as ls", kind: ScriptCommandKind::Stick },
-    ScriptCommandHelp { token: "rsx", spelling: "rsx:<value>", help: "exact X axis of the camera, ±1000", kind: ScriptCommandKind::Stick },
-    ScriptCommandHelp { token: "rsy", spelling: "rsy:<value>", help: "exact Y axis of the camera, ±1000", kind: ScriptCommandKind::Stick },
+    ScriptCommandHelp {
+        token: "ls",
+        spelling: "ls:<angle>",
+        help: "full press by compass angle",
+        kind: ScriptCommandKind::Stick,
+    },
+    ScriptCommandHelp {
+        token: "lsx",
+        spelling: "lsx:<value>",
+        help: "exact X axis of the left stick, ±1000",
+        kind: ScriptCommandKind::Stick,
+    },
+    ScriptCommandHelp {
+        token: "lsy",
+        spelling: "lsy:<value>",
+        help: "exact Y axis of the left stick, ±1000",
+        kind: ScriptCommandKind::Stick,
+    },
+    ScriptCommandHelp {
+        token: "rs",
+        spelling: "rs:<angle>",
+        help: "full camera press, the same compass as ls",
+        kind: ScriptCommandKind::Stick,
+    },
+    ScriptCommandHelp {
+        token: "rsx",
+        spelling: "rsx:<value>",
+        help: "exact X axis of the camera, ±1000",
+        kind: ScriptCommandKind::Stick,
+    },
+    ScriptCommandHelp {
+        token: "rsy",
+        spelling: "rsy:<value>",
+        help: "exact Y axis of the camera, ±1000",
+        kind: ScriptCommandKind::Stick,
+    },
 ];
 
 /// The rules line's attributes — a line of their own in the reference, since a rules line spells
 /// no frames.
 pub const RULES: [ScriptCommandHelp; 3] = [
-    ScriptCommandHelp { token: "name", spelling: "name=<word>", help: "the script's name, no spaces", kind: ScriptCommandKind::Rule },
-    ScriptCommandHelp { token: "trig", spelling: "trig=pos:x,y,z", help: "where the script starts — or trig=ticks:N for a tick count", kind: ScriptCommandKind::Rule },
-    ScriptCommandHelp { token: "restart", spelling: "restart[:k=v,…]", help: "restart the mission from the pause menu first", kind: ScriptCommandKind::Rule },
+    ScriptCommandHelp {
+        token: "name",
+        spelling: "name=<word>",
+        help: "the script's name, no spaces",
+        kind: ScriptCommandKind::Rule,
+    },
+    ScriptCommandHelp {
+        token: "trig",
+        spelling: "trig=pos:x,y,z",
+        help: "where the script starts — or trig=ticks:N for a tick count",
+        kind: ScriptCommandKind::Rule,
+    },
+    ScriptCommandHelp {
+        token: "restart",
+        spelling: "restart[:k=v,…]",
+        help: "restart the mission from the pause menu first",
+        kind: ScriptCommandKind::Rule,
+    },
 ];
 
 /// What each token means on the pad.

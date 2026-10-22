@@ -62,7 +62,11 @@ pub(crate) fn order_subphase(
         }
         let request: extern "thiscall" fn(*mut u8, *const i8, u32) =
             std::mem::transmute(base_addr + REQUEST_SUBPHASE_RVA);
-        request((base_addr + STATE_OBJECT_RVA) as *mut u8, cname.as_ptr(), arg);
+        request(
+            (base_addr + STATE_OBJECT_RVA) as *mut u8,
+            cname.as_ptr(),
+            arg,
+        );
     }
     Some(())
 }
@@ -73,6 +77,12 @@ pub(crate) fn change_phase(base_addr: usize, id: u32, arg2: i32, arg3: i32, mode
     unsafe {
         let change_phase: extern "thiscall" fn(*mut u8, u32, i32, i32, u32) -> u32 =
             std::mem::transmute(base_addr + CHANGE_PHASE_RVA);
-        change_phase((base_addr + PHASE_MANAGER_RVA) as *mut u8, id, arg2, arg3, mode);
+        change_phase(
+            (base_addr + PHASE_MANAGER_RVA) as *mut u8,
+            id,
+            arg2,
+            arg3,
+            mode,
+        );
     }
 }

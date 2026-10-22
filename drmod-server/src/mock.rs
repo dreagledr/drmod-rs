@@ -50,11 +50,7 @@ pub fn update_mock_skeleton(room: &mut Room, real_skel_data: &[u8]) -> Option<Ve
     for bone in &mut bones {
         bone.offset(MOCK_OFFSET.0, MOCK_OFFSET.1, MOCK_OFFSET.2);
     }
-    let mock_wire = SkeletonPacket {
-        id: MOCK_ID,
-        bones,
-    }
-    .to_wire();
+    let mock_wire = SkeletonPacket { id: MOCK_ID, bones }.to_wire();
     if let Some(mc) = room.clients.get_mut(&MOCK_ID) {
         mc.last_skeleton = Some(mock_wire.clone());
     }

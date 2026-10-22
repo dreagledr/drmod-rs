@@ -6,8 +6,8 @@
 //! конечному пользователю они не нужны, а диагностировать релиз всё равно
 //! иногда приходится.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 static LOG_MUTEX: Mutex<()> = Mutex::new(());
 

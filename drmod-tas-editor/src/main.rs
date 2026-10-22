@@ -16,11 +16,11 @@
 
 use std::time::Instant;
 
+use dear_app::imgui;
 use dear_app::{
     AppConfig, Application, DockingConfig, FrameContext, InitContext, PrepareFrameContext,
     RunError, Theme,
 };
-use dear_app::imgui;
 use dear_imgui_cte::{
     AutocompleteConfig, AutocompleteRequest, Language, Palette, TextEditor, dejavu_font_source,
 };
@@ -158,11 +158,7 @@ impl Spike {
     /// Применить то, что решил кадр: панели рисуются по `&`-заимствованиям состояния редактора,
     /// поэтому менять его внутри кадра нельзя — все действия собираются и применяются здесь,
     /// по одному разу на кадр.
-    fn apply(
-        &mut self,
-        actions: FrameActions,
-        context: &mut FrameContext<'_>,
-    ) {
+    fn apply(&mut self, actions: FrameActions, context: &mut FrameContext<'_>) {
         let editor = &mut self.editor;
 
         // Рабочая папка.
@@ -332,9 +328,12 @@ impl Application for Spike {
                 // Подсказки — токены DSL, а не идентификаторы документа: у `.tas` роль словаря
                 // играют имена токенов.
                 let config = AutocompleteConfig::new();
-                match editor_text.set_autocomplete(&config, |request: &mut AutocompleteRequest<'_>| {
-                    let _ = request.set_suggestions(autocomplete_tokens());
-                }) {
+                match editor_text.set_autocomplete(
+                    &config,
+                    |request: &mut AutocompleteRequest<'_>| {
+                        let _ = request.set_suggestions(autocomplete_tokens());
+                    },
+                ) {
                     Ok(()) => println!(
                         "[editor] автодополнение: {} токенов DSL по Ctrl+Space",
                         autocomplete_tokens().len()
@@ -383,7 +382,14 @@ impl Application for Spike {
                 ..Default::default()
             }
             .apply_to_style(context.style_mut());
-            println!("[editor] тема: {}", if self.editor.settings.light_theme { "светлая" } else { "тёмная" });
+            println!(
+                "[editor] тема: {}",
+                if self.editor.settings.light_theme {
+                    "светлая"
+                } else {
+                    "тёмная"
+                }
+            );
         }
 
         Ok(())
@@ -427,13 +433,7 @@ impl Application for Spike {
             .as_mut()
             .expect("редактор CTE создан в configure_imgui");
 
-        shell::frame(
-            ui,
-            &self.editor,
-            &mut self.shell,
-            text_editor,
-            &mut actions,
-        );
+        shell::frame(ui, &self.editor, &mut self.shell, text_editor, &mut actions);
         self.apply(actions, context);
 
         let ui_ms = ui_started.elapsed().as_secs_f64() * 1000.0;

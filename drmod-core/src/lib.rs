@@ -181,9 +181,8 @@ unsafe extern "system" fn veh_handler(
     // Аппаратная точка останова (`watch`): data breakpoint шлёт STATUS_SINGLE_STEP.
     // Запоминаем Eip писателя и продолжаем — без логирования (может быть часто).
     if code == crate::tas::watch::STATUS_SINGLE_STEP {
-        let (eip, caller, chain) = unsafe { (*info).ContextRecord.as_ref() }.map_or(
-            (0, 0, [0usize; 4]),
-            |c| {
+        let (eip, caller, chain) =
+            unsafe { (*info).ContextRecord.as_ref() }.map_or((0, 0, [0usize; 4]), |c| {
                 // У записи в поле сеттерами без пролога `[esp]` — адрес возврата
                 // вызывающего; выше по стеку ищем ещё кандидатов-возвратов
                 // (фильтр — диапазон кода модуля игры), чтобы дойти до решения.
@@ -206,8 +205,7 @@ unsafe extern "system" fn veh_handler(
                     }
                 }
                 (c.Eip as usize, caller, chain)
-            },
-        );
+            });
         if crate::tas::watch::handle_single_step(eip, caller, &chain) {
             return windows::Win32::System::Diagnostics::Debug::EXCEPTION_CONTINUE_EXECUTION;
         }
@@ -406,21 +404,18 @@ impl HelloHud {
 
             // --- gStr / gStr2 / gStr4 (ASL location strings) ---
             if player_readable {
-                gstr = unsafe {
-                    std::ffi::CStr::from_ptr((self.base_addr + 0x14B9181) as *const i8)
-                }
-                .to_string_lossy()
-                .into_owned();
-                gstr2 = unsafe {
-                    std::ffi::CStr::from_ptr((self.base_addr + 0x14B91AD) as *const i8)
-                }
-                .to_string_lossy()
-                .into_owned();
-                gstr4 = unsafe {
-                    std::ffi::CStr::from_ptr((self.base_addr + 0x14B91A8) as *const i8)
-                }
-                .to_string_lossy()
-                .into_owned();
+                gstr =
+                    unsafe { std::ffi::CStr::from_ptr((self.base_addr + 0x14B9181) as *const i8) }
+                        .to_string_lossy()
+                        .into_owned();
+                gstr2 =
+                    unsafe { std::ffi::CStr::from_ptr((self.base_addr + 0x14B91AD) as *const i8) }
+                        .to_string_lossy()
+                        .into_owned();
+                gstr4 =
+                    unsafe { std::ffi::CStr::from_ptr((self.base_addr + 0x14B91A8) as *const i8) }
+                        .to_string_lossy()
+                        .into_owned();
             }
         }
 
@@ -519,10 +514,11 @@ impl HelloHud {
 
         // --- POSITION BUFFER PUSH ---
         if state.player_found
-            && let (Some(seg), Some(pos)) = (self.active_segment.as_ref(), state.position) {
-                let dur = seg.start_instant.elapsed().as_millis() as i64;
-                self.position_buffer.push((pos, dur));
-            }
+            && let (Some(seg), Some(pos)) = (self.active_segment.as_ref(), state.position)
+        {
+            let dur = seg.start_instant.elapsed().as_millis() as i64;
+            self.position_buffer.push((pos, dur));
+        }
 
         self.segment_was_active = self.active_segment.is_some();
 
@@ -535,16 +531,14 @@ impl HelloHud {
     /// отрисовка не подменяет логику кадра и не обязана идти каждый кадр.
     ///
     /// `ui_state` читает только окно диагностики (debug-сборка).
-    fn draw_overlay(
-        &mut self,
-        ui: &Ui,
-        #[allow(unused_variables)] ui_state: &ui::UiState,
-    ) {
+    fn draw_overlay(&mut self, ui: &Ui, #[allow(unused_variables)] ui_state: &ui::UiState) {
         // --- ОТРИСОВКА СОХРАНЁННОЙ ПОЗИЦИИ НА ЭКРАНЕ (debug) ---
         #[cfg(debug_assertions)]
-        if let (Some((sx, sy, sz)), Some(vp), Some(cam_pos)) =
-            (self.saved_position, self.camera.view_proj(), self.camera.pos())
-        {
+        if let (Some((sx, sy, sz)), Some(vp), Some(cam_pos)) = (
+            self.saved_position,
+            self.camera.view_proj(),
+            self.camera.pos(),
+        ) {
             overlay::draw_world_pos(
                 ui,
                 (sx, sy, sz),
@@ -682,7 +676,11 @@ impl HelloHud {
         settings::save(
             conn,
             settings::K_SHOW_BEST_GHOST,
-            if self.settings.show_best_ghost { "1" } else { "0" },
+            if self.settings.show_best_ghost {
+                "1"
+            } else {
+                "0"
+            },
         );
         settings::save(
             conn,
@@ -692,7 +690,11 @@ impl HelloHud {
         settings::save(
             conn,
             settings::K_CUTSCENE_SKIP,
-            if self.settings.cutscene_skip { "1" } else { "0" },
+            if self.settings.cutscene_skip {
+                "1"
+            } else {
+                "0"
+            },
         );
         settings::save(
             conn,
@@ -815,7 +817,11 @@ impl ImguiRenderLoop for HelloHud {
                 }
                 // Delta-компенсация по XZ + Y с учётом feet→pelvis offset (~1.0m)
                 let (dx, dy, dz) = if let Some(root) = rp.skeleton.iter().find(|b| b.index == 0) {
-                    (rp.pos.x - root.x, rp.pos.y - root.y + 1.0, rp.pos.z - root.z)
+                    (
+                        rp.pos.x - root.x,
+                        rp.pos.y - root.y + 1.0,
+                        rp.pos.z - root.z,
+                    )
                 } else {
                     (0.0, 0.0, 0.0)
                 };
@@ -825,8 +831,12 @@ impl ImguiRenderLoop for HelloHud {
                     let pb = &rp.skeleton[p];
                     let cb = &rp.skeleton[c];
                     all_capsules.push((
-                        pb.x + dx, pb.y + dy, pb.z + dz,
-                        cb.x + dx, cb.y + dy, cb.z + dz,
+                        pb.x + dx,
+                        pb.y + dy,
+                        pb.z + dz,
+                        cb.x + dx,
+                        cb.y + dy,
+                        cb.z + dz,
                     ));
                 }
                 // Сфера на голове (bone index 5)
@@ -933,10 +943,16 @@ impl ImguiRenderLoop for HelloHud {
                 // реальный источник входа игрока.
                 let g = if self.base_addr != 0 {
                     let u = unsafe {
-                        ((self.base_addr + addresses::GLOBAL_INPUT_UNIT0) as *const types::InputUnit)
+                        ((self.base_addr + addresses::GLOBAL_INPUT_UNIT0)
+                            as *const types::InputUnit)
                             .read()
                     };
-                    (u.buttons_down, u.buttons_pressed, u.left_stick, u.valid_input)
+                    (
+                        u.buttons_down,
+                        u.buttons_pressed,
+                        u.left_stick,
+                        u.valid_input,
+                    )
                 } else {
                     (0, 0, [0.0, 0.0], 0)
                 };
@@ -1008,12 +1024,27 @@ impl ImguiRenderLoop for HelloHud {
             logger::log_state_line(&format!(
                 "f={} pos=({:.3},{:.3},{:.3}) vel=({:.3},{:.3},{:.3}) prev=({:.3},{:.3},{:.3}) rot=({:.3},{:.3},{:.3}) heading={:.3} dir={:.3} ripper={} blade={} ninja={} jump={} cam=({:.1},{:.1},{:.1})",
                 self.d3d_frame_count,
-                pos[0], pos[1], pos[2],
-                vel[0], vel[1], vel[2],
-                prev[0], prev[1], prev[2],
-                rot[0], rot[1], rot[2],
-                heading, dir, ripper, blade, ninja, jump,
-                cam[0], cam[1], cam[2]
+                pos[0],
+                pos[1],
+                pos[2],
+                vel[0],
+                vel[1],
+                vel[2],
+                prev[0],
+                prev[1],
+                prev[2],
+                rot[0],
+                rot[1],
+                rot[2],
+                heading,
+                dir,
+                ripper,
+                blade,
+                ninja,
+                jump,
+                cam[0],
+                cam[1],
+                cam[2]
             ));
         }
 
@@ -1156,19 +1187,19 @@ impl ImguiRenderLoop for HelloHud {
         // --- Заказ смены подфазы через API: POST /order вызывает штатную
         // движковую функцию заказа (тот же путь, что у сценария). ---
         if let Some(order) = self.api.take_order_request() {
-            let ok = game::order_subphase(
-                self.base_addr,
-                &order.name,
-                order.arg,
-                order.clear_event,
-            )
-            .is_some();
+            let ok =
+                game::order_subphase(self.base_addr, &order.name, order.arg, order.clear_event)
+                    .is_some();
             logger::log_line(&format!(
                 "order: subphase {} arg={} clear_event={} → {}",
                 order.name,
                 order.arg,
                 order.clear_event,
-                if ok { "вызвано" } else { "не удалось" }
+                if ok {
+                    "вызвано"
+                } else {
+                    "не удалось"
+                }
             ));
         }
     }

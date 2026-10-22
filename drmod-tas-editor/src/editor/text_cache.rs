@@ -11,8 +11,8 @@
 //! So the text is read once a frame, and the reading is rebuilt only when the *text* changes. That
 //! makes the cost proportional to what the author types rather than to how long the window is open.
 
-use crate::script::projection::{self, ScriptFrame};
 use crate::script::ScriptTextStatus;
+use crate::script::projection::{self, ScriptFrame};
 
 /// The parse of a text and the frames it projects to, kept together because the panels want both.
 pub struct TextCache {

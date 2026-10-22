@@ -170,7 +170,8 @@ impl TempFolder {
     fn new() -> Self {
         // The same shape the C# sibling uses: the process id stands in for a GUID, which is enough
         // because the name only has to be unique among the tests running at once.
-        let path = std::env::temp_dir().join(format!("drmod-tas-editor-game-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("drmod-tas-editor-game-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("the temp folder can be made");
         Self { path }

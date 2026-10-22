@@ -280,7 +280,10 @@ mod tests {
     fn gameplay_bits_stay_gameplay() {
         let frames = [frame(
             0,
-            unit(input_bits::WEAPON_SELECT | input_bits::AR_MODE | input_bits::JUMP, [0.0, 0.0]),
+            unit(
+                input_bits::WEAPON_SELECT | input_bits::AR_MODE | input_bits::JUMP,
+                [0.0, 0.0],
+            ),
             MENU_IN_GAME,
         )];
         let input = decode(&frames[0]).expect("input");
@@ -306,11 +309,7 @@ mod tests {
     #[test]
     fn direction_flags_build_the_stick_only_when_it_differs() {
         // A plain forward run: the flag implies (0,−1000), so no explicit stick is written.
-        let plain = frame(
-            0,
-            unit(input_bits::FORWARD, [0.0, -1000.0]),
-            MENU_IN_GAME,
-        );
+        let plain = frame(0, unit(input_bits::FORWARD, [0.0, -1000.0]), MENU_IN_GAME);
         assert_eq!(decode(&plain).expect("input").left_stick, None);
 
         // Forward+right with a straight forward stick: the flags would imply the diagonal, so the

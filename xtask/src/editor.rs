@@ -21,7 +21,7 @@
 use std::path::PathBuf;
 
 use crate::process;
-use crate::{done, step, util, Error, Result};
+use crate::{Error, Result, done, step, util};
 
 /// The editor's own triple. Its `.cargo/config.toml` says x64 because the window stack does not build
 /// for the i686 the root config forces, which is why the path names the triple rather than the host.
@@ -62,7 +62,11 @@ pub fn pack(root: PathBuf, args: &[String]) -> Result<()> {
     crate::announce(&root);
 
     let crate_dir = root.join(CRATE);
-    let exe = crate_dir.join("target").join(TARGET).join("release").join("drmod-tas-editor.exe");
+    let exe = crate_dir
+        .join("target")
+        .join(TARGET)
+        .join("release")
+        .join("drmod-tas-editor.exe");
     let examples = crate_dir.join("examples");
 
     step("cargo build --release (editor)");
@@ -150,8 +154,15 @@ pub fn pack(root: PathBuf, args: &[String]) -> Result<()> {
 
     println!();
     step(&format!("Done: {}", staged.display()));
-    println!("      files: {}, size: {}", files.len(), util::human_size(total));
-    println!("      exe: {} (payload embedded)", util::human_size(exe_size));
+    println!(
+        "      files: {}, size: {}",
+        files.len(),
+        util::human_size(total)
+    );
+    println!(
+        "      exe: {} (payload embedded)",
+        util::human_size(exe_size)
+    );
     done(&archive);
     println!("      unpack and run: drmod-tas-editor.exe");
 

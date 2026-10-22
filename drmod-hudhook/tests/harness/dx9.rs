@@ -50,7 +50,12 @@ impl Dx9Harness {
                     lpszMenuName: PCSTR(null_mut()),
                 };
                 unsafe { RegisterClassA(&wnd_class) };
-                let mut rect = RECT { left: 0, top: 0, right: 800, bottom: 600 };
+                let mut rect = RECT {
+                    left: 0,
+                    top: 0,
+                    right: 800,
+                    bottom: 600,
+                };
                 unsafe { AdjustWindowRect(&mut rect, WS_OVERLAPPEDWINDOW | WS_VISIBLE, false) }
                     .unwrap();
                 let handle = unsafe {
@@ -97,7 +102,14 @@ impl Dx9Harness {
                     eprintln!("Present...");
                     unsafe {
                         device
-                            .Clear(0, std::ptr::null(), D3DCLEAR_TARGET as _, 0x0022cc22, 1.0, 0)
+                            .Clear(
+                                0,
+                                std::ptr::null(),
+                                D3DCLEAR_TARGET as _,
+                                0x0022cc22,
+                                1.0,
+                                0,
+                            )
                             .unwrap();
                         device
                             .Present(std::ptr::null(), std::ptr::null(), handle, std::ptr::null())
@@ -115,7 +127,11 @@ impl Dx9Harness {
             }
         }));
 
-        Self { child, done, _caption: caption }
+        Self {
+            child,
+            done,
+            _caption: caption,
+        }
     }
 }
 
@@ -149,7 +165,7 @@ unsafe extern "system" fn window_proc(
         WM_DESTROY => {
             PostQuitMessage(0);
             LRESULT(0)
-        },
+        }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
     }
 }

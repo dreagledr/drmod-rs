@@ -1,9 +1,9 @@
 use std::sync::Arc;
 use tokio::net::UdpSocket;
 
+use crate::MAX_UDP;
 use crate::mock::{update_mock_position, update_mock_skeleton};
 use crate::system::System;
-use crate::MAX_UDP;
 use drmod_protocol::{PKT_POSITION, PKT_SKELETON, PositionPacket};
 
 pub(crate) async fn handle_udp(udp: Arc<UdpSocket>, system: Arc<System>) {

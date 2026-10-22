@@ -366,10 +366,11 @@ impl Player {
     /// API-скриптов, а API есть и в release (гейт по геймплею — выше, в вызове).
     pub(crate) fn read_nearest_enemy(&self) -> types::EnemyState {
         let (_, enemies) = self.read_enemies();
-        let nearest = enemies
-            .iter()
-            .filter(|e| e.dist.is_some())
-            .min_by(|a, b| a.dist.partial_cmp(&b.dist).unwrap_or(std::cmp::Ordering::Equal));
+        let nearest = enemies.iter().filter(|e| e.dist.is_some()).min_by(|a, b| {
+            a.dist
+                .partial_cmp(&b.dist)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         // Адрес Behavior ближайшего врага — для аппаратной точки останова
         // (`POST /watch {"enemy": true, "off": "0x…"}`), читается только в
         // debug-диагностике.

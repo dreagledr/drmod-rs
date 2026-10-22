@@ -51,18 +51,13 @@ fn parse_args() -> Result<(i64, PathBuf, PathBuf, bool, bool), String> {
             }
         }
     }
-    Ok((
-        run_id.ok_or_else(usage)?,
-        out,
-        db,
-        script,
-        pretty,
-    ))
+    Ok((run_id.ok_or_else(usage)?, out, db, script, pretty))
 }
 
 fn run() -> Result<(), String> {
     let (run_id, out, db, script, pretty) = parse_args()?;
-    let conn = Connection::open(&db).map_err(|e| format!("Не удалось открыть БД {}: {e}", db.display()))?;
+    let conn = Connection::open(&db)
+        .map_err(|e| format!("Не удалось открыть БД {}: {e}", db.display()))?;
 
     let meta = match dump::load_run_meta(&conn, run_id)? {
         Some(m) => m,

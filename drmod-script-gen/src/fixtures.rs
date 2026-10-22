@@ -20,8 +20,10 @@ use serde_json::Value;
 /// Каталог фикстур редактора по умолчанию — относительно этого крейта, чтобы
 /// `cargo run` из любого каталога писал туда же. Фикстуры (`*.json`) и золотые
 /// файлы (`*.expected.*`) лежат рядом, как их читает `drmod-tas-editor/tests/golden.rs`.
-pub const DEFAULT_OUT: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../drmod-tas-editor/tests/fixtures/golden");
+pub const DEFAULT_OUT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../drmod-tas-editor/tests/fixtures/golden"
+);
 
 /// Все фикстуры в порядке записи: (имя файла, тело).
 pub fn all() -> Vec<(&'static str, Fixture)> {
@@ -134,12 +136,23 @@ fn all_inputs() -> ScriptRequest {
                 },
             ),
             // Одиночный кадр.
-            command(10, 1, ScriptInput { jump: true, ..Default::default() }),
+            command(
+                10,
+                1,
+                ScriptInput {
+                    jump: true,
+                    ..Default::default()
+                },
+            ),
             // Явный left_stick, совпадающий с подразумеваемым направлением.
             command(
                 11,
                 2,
-                ScriptInput { forward: true, left_stick: Some([0.0, -1000.0]), ..Default::default() },
+                ScriptInput {
+                    forward: true,
+                    left_stick: Some([0.0, -1000.0]),
+                    ..Default::default()
+                },
             ),
             // Дробный стик; команда перекрывается следующей (прыжок в беге).
             command(
@@ -152,11 +165,39 @@ fn all_inputs() -> ScriptRequest {
                     ..Default::default()
                 },
             ),
-            command(15, 10, ScriptInput { heavy_attack: true, ..Default::default() }),
+            command(
+                15,
+                10,
+                ScriptInput {
+                    heavy_attack: true,
+                    ..Default::default()
+                },
+            ),
             // Подряд идущие одинаковые входы (склеиваются в кадрах) и разрыв.
-            command(25, 10, ScriptInput { forward: true, ..Default::default() }),
-            command(35, 10, ScriptInput { forward: true, ..Default::default() }),
-            command(45, 5, ScriptInput { forward: true, ..Default::default() }),
+            command(
+                25,
+                10,
+                ScriptInput {
+                    forward: true,
+                    ..Default::default()
+                },
+            ),
+            command(
+                35,
+                10,
+                ScriptInput {
+                    forward: true,
+                    ..Default::default()
+                },
+            ),
+            command(
+                45,
+                5,
+                ScriptInput {
+                    forward: true,
+                    ..Default::default()
+                },
+            ),
         ],
         trigger: None,
         restart: None,
@@ -170,20 +211,42 @@ fn edge_inputs() -> ScriptRequest {
         name: "edge-inputs".to_string(),
         commands: vec![
             // Сырой игровой код клавиши (0x8B).
-            command(0, 1, ScriptInput { raw_key: Some(139), ..Default::default() }),
+            command(
+                0,
+                1,
+                ScriptInput {
+                    raw_key: Some(139),
+                    ..Default::default()
+                },
+            ),
             // Сырой DIK-код DirectInput (0xD0 — стрелка вниз).
-            command(2, 2, ScriptInput { dik_key: Some(208), ..Default::default() }),
+            command(
+                2,
+                2,
+                ScriptInput {
+                    dik_key: Some(208),
+                    ..Default::default()
+                },
+            ),
             // Ripper + явный стик в угол [1000,1000].
             command(
                 5,
                 1,
-                ScriptInput { ripper: true, left_stick: Some([1000.0, 1000.0]), ..Default::default() },
+                ScriptInput {
+                    ripper: true,
+                    left_stick: Some([1000.0, 1000.0]),
+                    ..Default::default()
+                },
             ),
             // Условие по врагу: минимальный набор (гейт только по высоте игрока).
             ScriptCommand {
                 t: 9,
                 duration: 24,
-                input: ScriptInput { forward: true, heavy_attack: true, ..Default::default() },
+                input: ScriptInput {
+                    forward: true,
+                    heavy_attack: true,
+                    ..Default::default()
+                },
                 when_enemy: Some(EnemyCondition {
                     anim: vec![65545],
                     player_y_min: 0.3,
@@ -196,7 +259,10 @@ fn edge_inputs() -> ScriptRequest {
             ScriptCommand {
                 t: 40,
                 duration: 30,
-                input: ScriptInput { heavy_attack: true, ..Default::default() },
+                input: ScriptInput {
+                    heavy_attack: true,
+                    ..Default::default()
+                },
                 when_enemy: Some(EnemyCondition {
                     anim: vec![19, 24],
                     frame_min: 5,
@@ -223,9 +289,15 @@ fn rules_restart() -> ScriptRequest {
         commands: vec![command(
             0,
             40,
-            ScriptInput { forward: true, ..Default::default() },
+            ScriptInput {
+                forward: true,
+                ..Default::default()
+            },
         )],
-        trigger: Some(ScriptTrigger { pos: Some([-24.70, 12.15, 120.70]), ticks: None }),
+        trigger: Some(ScriptTrigger {
+            pos: Some([-24.70, 12.15, 120.70]),
+            ticks: None,
+        }),
         restart: Some(RestartSpec {
             ups: 2,
             downs: 1,
@@ -245,11 +317,37 @@ fn rules_ticks() -> ScriptRequest {
     ScriptRequest {
         name: "r03-barrier-ticks".to_string(),
         commands: vec![
-            command(0, 6, ScriptInput { forward: true, ..Default::default() }),
-            command(6, 2, ScriptInput { forward: true, jump: true, ..Default::default() }),
-            command(20, 24, ScriptInput { forward: true, heavy_attack: true, ..Default::default() }),
+            command(
+                0,
+                6,
+                ScriptInput {
+                    forward: true,
+                    ..Default::default()
+                },
+            ),
+            command(
+                6,
+                2,
+                ScriptInput {
+                    forward: true,
+                    jump: true,
+                    ..Default::default()
+                },
+            ),
+            command(
+                20,
+                24,
+                ScriptInput {
+                    forward: true,
+                    heavy_attack: true,
+                    ..Default::default()
+                },
+            ),
         ],
-        trigger: Some(ScriptTrigger { pos: None, ticks: Some(0) }),
+        trigger: Some(ScriptTrigger {
+            pos: None,
+            ticks: Some(0),
+        }),
         restart: None,
     }
 }
@@ -259,12 +357,18 @@ fn rules_ticks() -> ScriptRequest {
 fn minimal() -> Fixture {
     let request = ScriptRequest {
         name: "script".to_string(),
-        commands: vec![command(0, 1, ScriptInput { jump: true, ..Default::default() })],
+        commands: vec![command(
+            0,
+            1,
+            ScriptInput {
+                jump: true,
+                ..Default::default()
+            },
+        )],
         trigger: None,
         restart: None,
     };
-    let mut value =
-        serde_json::to_value(&request).expect("ScriptRequest сериализуется");
+    let mut value = serde_json::to_value(&request).expect("ScriptRequest сериализуется");
     let object = value.as_object_mut().expect("ScriptRequest — объект");
     let removed = object.remove("name");
     assert!(removed.is_some(), "у ScriptRequest есть поле name");
@@ -272,7 +376,12 @@ fn minimal() -> Fixture {
 }
 
 fn command(t: u32, duration: u32, input: ScriptInput) -> ScriptCommand {
-    ScriptCommand { t, duration, input, when_enemy: None }
+    ScriptCommand {
+        t,
+        duration,
+        input,
+        when_enemy: None,
+    }
 }
 
 #[cfg(test)]
@@ -293,7 +402,10 @@ mod tests {
     fn covered_input_keys() -> Vec<String> {
         let mut keys: Vec<String> = Vec::new();
         for (_, fixture) in all() {
-            for command in value_of(&fixture)["commands"].as_array().expect("commands — массив") {
+            for command in value_of(&fixture)["commands"]
+                .as_array()
+                .expect("commands — массив")
+            {
                 for key in command["input"].as_object().expect("input — объект").keys() {
                     if !keys.contains(key) {
                         keys.push(key.clone());
@@ -383,7 +495,10 @@ mod tests {
                     command.t + command.duration <= MAX_SCRIPT_FRAMES,
                     "{name}: commands[{i}] выходит за {MAX_SCRIPT_FRAMES} кадров"
                 );
-                assert!(!command.input.is_empty(), "{name}: commands[{i}] input пуст");
+                assert!(
+                    !command.input.is_empty(),
+                    "{name}: commands[{i}] input пуст"
+                );
             }
         }
     }
@@ -421,11 +536,17 @@ mod tests {
         let value = value_of(&request(edge_inputs()));
         let minimal = &value["commands"][3]["when_enemy"];
         assert_eq!(
-            minimal.as_object().expect("объект").keys().collect::<Vec<_>>(),
+            minimal
+                .as_object()
+                .expect("объект")
+                .keys()
+                .collect::<Vec<_>>(),
             vec!["anim", "player_vy_max", "player_y_max", "player_y_min"]
         );
 
-        let full = value["commands"][4]["when_enemy"].as_object().expect("объект");
+        let full = value["commands"][4]["when_enemy"]
+            .as_object()
+            .expect("объект");
         assert_eq!(full.len(), 9);
     }
 
@@ -450,6 +571,13 @@ mod tests {
     #[test]
     fn json_keys_are_sorted() {
         let object = json!({ "b": 1, "a": 2 });
-        assert_eq!(object.as_object().expect("объект").keys().collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(
+            object
+                .as_object()
+                .expect("объект")
+                .keys()
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
     }
 }

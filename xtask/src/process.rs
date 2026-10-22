@@ -45,7 +45,11 @@ pub fn run(dir: &Path, program: &str, args: &[&str]) -> Result<()> {
 /// one invocation, and setting it in the parent process — the way the PowerShell script did — leaks
 /// it into everything this tool runs afterwards. Here it is set on the child only.
 pub fn cargo_with_env(dir: &Path, args: &[&str], env: &str, value: &str) -> Result<()> {
-    println!("    ({}) {env}={value} cargo {}", dir.display(), args.join(" "));
+    println!(
+        "    ({}) {env}={value} cargo {}",
+        dir.display(),
+        args.join(" ")
+    );
 
     let status = Command::new("cargo")
         .args(args)

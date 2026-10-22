@@ -105,7 +105,12 @@ fn trigger_fields(trigger: &ScriptTrigger) -> Vec<(&'static str, Node)> {
     if let Some(position) = trigger.pos {
         fields.push((
             "pos",
-            Node::Array(position.iter().map(|value| Node::text(number(*value))).collect()),
+            Node::Array(
+                position
+                    .iter()
+                    .map(|value| Node::text(number(*value)))
+                    .collect(),
+            ),
         ));
     }
 
@@ -267,7 +272,12 @@ fn condition_fields(condition: &EnemyCondition) -> Vec<(&'static str, Node)> {
 
 /// A two-number array — a stick or a camera.
 fn pair(values: [f32; 2]) -> Node {
-    Node::Array(values.iter().map(|value| Node::text(number(*value))).collect())
+    Node::Array(
+        values
+            .iter()
+            .map(|value| Node::text(number(*value)))
+            .collect(),
+    )
 }
 
 /// Two spaces per level, the indent .NET's `WriteIndented` uses.
@@ -422,4 +432,3 @@ pub fn validate(document: &ScriptDocument) -> ScriptResult<()> {
 
     Ok(())
 }
-

@@ -65,7 +65,10 @@ impl Process {
             )
         };
 
-        debug!("WriteProcessMemory: written {} bytes, returned {:?}", bytes_written, res);
+        debug!(
+            "WriteProcessMemory: written {} bytes, returned {:?}",
+            bytes_written, res
+        );
 
         let thread = unsafe {
             CreateRemoteThread(
@@ -157,8 +160,10 @@ unsafe fn get_process_by_name32(name_str: &str) -> Result<HANDLE> {
     let name = name.as_encoded_bytes();
 
     let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?;
-    let mut pe32 =
-        PROCESSENTRY32 { dwSize: mem::size_of::<PROCESSENTRY32>() as u32, ..Default::default() };
+    let mut pe32 = PROCESSENTRY32 {
+        dwSize: mem::size_of::<PROCESSENTRY32>() as u32,
+        ..Default::default()
+    };
 
     if let Err(e) = Process32First(snapshot, &mut pe32) {
         CloseHandle(snapshot).ok();
@@ -166,10 +171,18 @@ unsafe fn get_process_by_name32(name_str: &str) -> Result<HANDLE> {
     }
 
     let pid = loop {
-        let zero_idx = pe32.szExeFile.iter().position(|&x| x == 0).unwrap_or(pe32.szExeFile.len());
+        let zero_idx = pe32
+            .szExeFile
+            .iter()
+            .position(|&x| x == 0)
+            .unwrap_or(pe32.szExeFile.len());
         let proc_name = &pe32.szExeFile[..zero_idx];
 
-        if proc_name.iter().zip(name.iter()).fold(true, |v, (&a, &b)| v && (a as u8 == b)) {
+        if proc_name
+            .iter()
+            .zip(name.iter())
+            .fold(true, |v, (&a, &b)| v && (a as u8 == b))
+        {
             break Ok(pe32.th32ProcessID);
         }
 
@@ -189,8 +202,10 @@ unsafe fn get_process_by_name64(name_str: &str) -> Result<HANDLE> {
     let name = HSTRING::from(name_str);
 
     let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)?;
-    let mut pe32 =
-        PROCESSENTRY32W { dwSize: mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+    let mut pe32 = PROCESSENTRY32W {
+        dwSize: mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
 
     if let Err(e) = Process32FirstW(snapshot, &mut pe32) {
         CloseHandle(snapshot).ok();
@@ -198,7 +213,11 @@ unsafe fn get_process_by_name64(name_str: &str) -> Result<HANDLE> {
     }
 
     let pid = loop {
-        let zero_idx = pe32.szExeFile.iter().position(|&x| x == 0).unwrap_or(pe32.szExeFile.len());
+        let zero_idx = pe32
+            .szExeFile
+            .iter()
+            .position(|&x| x == 0)
+            .unwrap_or(pe32.szExeFile.len());
         let proc_name = HSTRING::from_wide(&pe32.szExeFile[..zero_idx]);
 
         if name == proc_name {

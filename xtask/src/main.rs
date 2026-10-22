@@ -31,6 +31,7 @@
 //! `[build] target` without the `pushd` the PowerShell script needed.
 
 mod editor;
+mod hooks;
 mod package;
 mod process;
 mod test_api;
@@ -51,6 +52,7 @@ Commands:
   pack-editor          Assemble the TAS editor distribution (add --zip to archive it)
   test-api             Smoke-test the mod's HTTP API (game running with the mod injected)
   test-connect         Smoke-test the multiplayer server (dashboard, TCP connect/disconnect)
+  install-hooks        Install the git hooks from .githooks/ (rustfmt check before a commit)
 
 Options:
   -h, --help           Show this message (also: cargo xtask help)
@@ -69,7 +71,10 @@ fn main() -> ExitCode {
     // convention describes, so every path below is derived from `<root>/xtask/..` rather than from
     // the caller's current directory.
     let Some(root) = util::workspace_root() else {
-        eprintln!("xtask: cannot find the repository root from {}", env!("CARGO_MANIFEST_DIR"));
+        eprintln!(
+            "xtask: cannot find the repository root from {}",
+            env!("CARGO_MANIFEST_DIR")
+        );
         return ExitCode::FAILURE;
     };
 
@@ -80,6 +85,7 @@ fn main() -> ExitCode {
         "pack-editor" => editor::pack(root, rest),
         "test-api" => test_api::run(root, rest),
         "test-connect" => test_connect::run(root, rest),
+        "install-hooks" => hooks::install(&root),
         "help" | "-h" | "--help" => {
             println!("{USAGE}");
             Ok(())
@@ -143,7 +149,11 @@ pub fn step(message: &str) {
 /// a user.
 pub fn done(path: &std::path::Path) {
     match std::fs::metadata(path) {
-        Ok(meta) => println!("==> Done: {} ({})", path.display(), util::human_size(meta.len())),
+        Ok(meta) => println!(
+            "==> Done: {} ({})",
+            path.display(),
+            util::human_size(meta.len())
+        ),
         Err(_) => println!("==> Done: {}", path.display()),
     }
 }

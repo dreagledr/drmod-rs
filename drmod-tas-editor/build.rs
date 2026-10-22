@@ -48,7 +48,8 @@ use std::process::Command;
 
 fn main() {
     let crate_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR for a build script"));
+    let out_dir =
+        PathBuf::from(std::env::var("OUT_DIR").expect("cargo sets OUT_DIR for a build script"));
 
     let Some(repo_root) = crate_dir.parent().map(Path::to_path_buf) else {
         fail("the editor crate has no parent directory to find the mod in");
@@ -56,7 +57,10 @@ fn main() {
 
     let payload_dir = out_dir.join("Mod");
     if let Err(reason) = std::fs::create_dir_all(&payload_dir) {
-        fail(&format!("cannot create {}: {reason}", payload_dir.display()));
+        fail(&format!(
+            "cannot create {}: {reason}",
+            payload_dir.display()
+        ));
     }
 
     // Watch the mod so the payload cannot go stale: a change to the mod's own sources — or to the
@@ -90,7 +94,11 @@ fn main() {
     stage_loader(&loader, &payload_dir);
     stage_mod(&repo_root, &dll, &payload_dir);
 
-    println!("cargo:warning=mod payload embedded from {} and {}", dll.display(), loader.display());
+    println!(
+        "cargo:warning=mod payload embedded from {} and {}",
+        dll.display(),
+        loader.display()
+    );
 }
 
 /// Copies the ASI loader out of `vendor/`, where it is checked in as a binary.
@@ -140,7 +148,14 @@ fn stage_mod(repo_root: &Path, dll: &Path, payload_dir: &Path) {
         let mut command = Command::new(&cargo);
         command
             .current_dir(repo_root)
-            .args(["build", "--release", "--lib", "-p", "drmod-core", "--target-dir"])
+            .args([
+                "build",
+                "--release",
+                "--lib",
+                "-p",
+                "drmod-core",
+                "--target-dir",
+            ])
             .arg(repo_root.join("target"));
 
         // ⚠️ **The inherited build environment is stripped, and this is not tidiness.**

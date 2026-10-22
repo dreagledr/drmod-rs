@@ -69,7 +69,10 @@ pub fn list(folder: Option<&Path>) -> Listing {
     if !folder.is_dir() {
         return Listing {
             scripts: Vec::new(),
-            error: Some(format!("The workspace folder is gone: {}", folder.display())),
+            error: Some(format!(
+                "The workspace folder is gone: {}",
+                folder.display()
+            )),
         };
     }
 
@@ -91,11 +94,7 @@ pub fn list(folder: Option<&Path>) -> Listing {
         }
     }
 
-    scripts.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-    });
+    scripts.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
 
     Listing {
         scripts,
@@ -161,10 +160,7 @@ pub fn rename(path: &Path, name: &str) -> (Option<PathBuf>, Option<String>) {
     }
 
     if let Some(invalid) = stem.chars().find(|c| is_invalid_file_char(*c)) {
-        return (
-            None,
-            Some(format!("A file name cannot hold '{invalid}'")),
-        );
+        return (None, Some(format!("A file name cannot hold '{invalid}'")));
     }
 
     let Some(folder) = path.parent() else {

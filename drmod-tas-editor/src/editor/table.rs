@@ -137,10 +137,7 @@ fn draw_row(ui: &Ui, frame: &ScriptFrame, columns: &[&str]) {
             // A held flag is the accent fill; the surface is painted on every cell so the
             // checkerboard reads as a matrix rather than as gaps.
             if frame.holds(bit) {
-                ui.table_set_cell_bg_color(
-                    [0.20, 0.45, 0.72, 1.0],
-                    TableColumnRef::Current,
-                );
+                ui.table_set_cell_bg_color([0.20, 0.45, 0.72, 1.0], TableColumnRef::Current);
             }
 
             continue;

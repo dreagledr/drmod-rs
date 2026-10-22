@@ -2,8 +2,8 @@
 
 use rusqlite::Connection;
 
-use drmod_replay_types::to_bytes;
 use super::types::{ReplayFrame, ReplayRunMeta};
+use drmod_replay_types::to_bytes;
 
 /// Создаёт таблицы Record/Replay (если их нет).
 pub(crate) fn create_replay_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
@@ -84,7 +84,10 @@ fn ensure_replay_frame_columns(conn: &Connection, table: &str) -> Result<(), rus
         Ok(())
     };
     add("blade_down", "blade_down INTEGER NOT NULL DEFAULT 0")?;
-    add("ripper_pressed", "ripper_pressed INTEGER NOT NULL DEFAULT 0")?;
+    add(
+        "ripper_pressed",
+        "ripper_pressed INTEGER NOT NULL DEFAULT 0",
+    )?;
     add("raw_down", "raw_down BLOB")?;
     add("raw_pressed", "raw_pressed BLOB")?;
     add("enemy", "enemy BLOB")?;
@@ -119,8 +122,12 @@ pub(crate) fn flush_replay(
     }
 
     let sql = match meta.kind {
-        "record" => "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed, enemy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-        _ => "INSERT INTO replay_playback_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed, enemy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        "record" => {
+            "INSERT INTO replay_record_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed, enemy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        }
+        _ => {
+            "INSERT INTO replay_playback_frames (replay_id, frame_index, duration_ms, input_unit, state, camera, blade_down, ripper_pressed, raw_down, raw_pressed, enemy) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        }
     };
 
     let _ = conn.execute("BEGIN", []);

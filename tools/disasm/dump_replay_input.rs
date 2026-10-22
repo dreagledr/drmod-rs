@@ -19,7 +19,8 @@ struct InputUnit {
 }
 
 fn main() {
-    let db_path = Path::new(&std::env::var("LOCALAPPDATA").unwrap_or_default()).join("drmod/runs.db");
+    let db_path =
+        Path::new(&std::env::var("LOCALAPPDATA").unwrap_or_default()).join("drmod/runs.db");
     let conn = Connection::open(&db_path).expect("open db");
     // id берём из аргумента (по умолчанию последний record)
     let want_id: Option<i64> = std::env::args().nth(1).and_then(|s| s.parse().ok());

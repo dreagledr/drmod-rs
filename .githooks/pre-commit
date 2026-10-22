@@ -1,0 +1,77 @@
+#!/bin/sh
+# Pre-commit: refuse to commit Rust sources that rustfmt would rewrite.
+#
+# The repository is four Cargo workspaces — the root one plus `drmod-tas-editor`, `xtask` and
+# `tools/disasm` — and `cargo fmt --check` only covers the workspace it is run in. This hook looks
+# at the staged `*.rs` files, decides which workspaces they belong to and checks only those, so
+# unformatted WIP in an unrelated crate does not block a commit.
+#
+# Installed per clone with `cargo xtask install-hooks` (`git config core.hooksPath .githooks`).
+# Bypass one commit with `git commit --no-verify`.
+#
+# Kept POSIX sh on purpose: Git for Windows runs hooks through its own sh, so this works on every
+# developer machine without a Python/Node toolchain.
+
+set -u
+
+root=$(git rev-parse --show-toplevel) || exit 0
+cd "$root" || exit 0
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo is not in PATH — skipping the rustfmt check" >&2
+    exit 0
+fi
+
+staged=$(mktemp) || exit 0
+trap 'rm -f "$staged"' EXIT INT TERM
+git diff --cached --name-only --diff-filter=ACMR -- '*.rs' > "$staged"
+[ -s "$staged" ] || exit 0
+
+needs_root=0
+needs_editor=0
+needs_xtask=0
+needs_tools=0
+
+while IFS= read -r file; do
+    case "$file" in
+        drmod-tas-editor/*) needs_editor=1 ;;
+        xtask/*) needs_xtask=1 ;;
+        tools/disasm/*) needs_tools=1 ;;
+        *) needs_root=1 ;;
+    esac
+done < "$staged"
+
+failed=0
+
+# check <workdir> <label> <cargo-fmt-args...>
+check() {
+    dir=$1
+    label=$2
+    shift 2
+
+    echo "pre-commit: rustfmt — $label"
+    if (cd "$dir" && cargo fmt "$@"); then
+        return 0
+    fi
+
+    failed=1
+    if [ "$dir" = "." ]; then
+        fix="cargo fmt --all"
+    else
+        fix="cd $dir && cargo fmt"
+    fi
+    {
+        echo ""
+        echo "pre-commit: $label is not rustfmt-clean."
+        echo "            fix:  $fix"
+        echo "            then: git add -u"
+        echo "            or:   git commit --no-verify   (skip this check once)"
+    } >&2
+}
+
+[ "$needs_root" = 1 ] && check "." "root workspace" --all -- --check
+[ "$needs_editor" = 1 ] && check "drmod-tas-editor" "drmod-tas-editor" -- --check
+[ "$needs_xtask" = 1 ] && check "xtask" "xtask" -- --check
+[ "$needs_tools" = 1 ] && check "tools/disasm" "tools/disasm" -- --check
+
+exit "$failed"

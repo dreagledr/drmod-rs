@@ -122,9 +122,14 @@ enum Stage {
     /// Флаги выставлены, ждём подтверждения пункта в консольном меню.
     Armed,
     /// Меню убирается движком — ждём уничтожения объекта.
-    Closing { item: i32, frames: u32 },
+    Closing {
+        item: i32,
+        frames: u32,
+    },
     /// Скип заказан — карантин, чтобы не поймать меню следующей сцены.
-    Cooldown { frames: u32 },
+    Cooldown {
+        frames: u32,
+    },
 }
 
 /// Кадровый автомат скипа катсцены (см. документацию модуля).
@@ -216,7 +221,11 @@ impl CutsceneSkip {
         };
         logger::log_line(&format!(
             "cutscene_skip: игрок подтвердил пункт {} — убираю меню движком",
-            if item == ITEM_SKIP { "SKIP" } else { "CONTINUE" }
+            if item == ITEM_SKIP {
+                "SKIP"
+            } else {
+                "CONTINUE"
+            }
         ));
         // Статус 6 + шаг 6: движок сам уничтожает объект меню и ведёт статус
         // 6 → 12 → 1 (шаг 5 у него непроходим — см. документацию модуля).
@@ -230,7 +239,10 @@ impl CutsceneSkip {
     /// SKIP) заказываем следующую подфазу.
     fn closing(&mut self, base_addr: usize, item: i32, frames: u32) {
         let closed = Self::menu_object(base_addr) == 0
-            && !matches!(Self::menu_status_raw(base_addr), MENU_CUTSCENE | MENU_PAUSE1);
+            && !matches!(
+                Self::menu_status_raw(base_addr),
+                MENU_CUTSCENE | MENU_PAUSE1
+            );
         if !closed && frames <= CLOSE_TIMEOUT_FRAMES {
             self.stage = Stage::Closing {
                 item,
@@ -253,7 +265,11 @@ impl CutsceneSkip {
             let ok = crate::game::order_subphase(base_addr, NEXT, 1, true).is_some();
             logger::log_line(&format!(
                 "cutscene_skip: заказ подфазы {NEXT} → {}",
-                if ok { "вызвано" } else { "не удалось" }
+                if ok {
+                    "вызвано"
+                } else {
+                    "не удалось"
+                }
             ));
             if ok {
                 STAGE.store(STAGE_SKIPPED, Ordering::Relaxed);
@@ -359,7 +375,7 @@ impl CutsceneSkip {
 
 #[cfg(test)]
 mod tests {
-    use super::{sub_hash, CutsceneSkip, NEXT, WATCH};
+    use super::{CutsceneSkip, NEXT, WATCH, sub_hash};
 
     /// Хэши подфаз сверены с живыми чтениями объекта состояния игры.
     #[test]

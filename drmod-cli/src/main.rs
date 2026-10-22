@@ -198,19 +198,26 @@ fn ensure_gameplay(client: &Client) -> Result<(), String> {
         return Ok(());
     }
 
-    if FAIL_MENUS.iter().any(|known| known.eq_ignore_ascii_case(&menu)) {
-        play_menu(client, "fail-retry", |input| drmod_script::model::ScriptInput {
-            confirm: true,
-            ..input
+    if FAIL_MENUS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(&menu))
+    {
+        play_menu(client, "fail-retry", |input| {
+            drmod_script::model::ScriptInput {
+                confirm: true,
+                ..input
+            }
         })?;
         return wait_menu(client, "In Game", Duration::from_secs(10))
             .ok_or_else(|| format!("the fail menu did not clear (still \"{menu}\")"));
     }
 
     if menu.eq_ignore_ascii_case("Pause Menu") {
-        play_menu(client, "close-menu", |input| drmod_script::model::ScriptInput {
-            pause: true,
-            ..input
+        play_menu(client, "close-menu", |input| {
+            drmod_script::model::ScriptInput {
+                pause: true,
+                ..input
+            }
         })?;
         return wait_menu(client, "In Game", Duration::from_secs(3))
             .ok_or_else(|| "the pause menu did not close".to_owned());
@@ -219,16 +226,23 @@ fn ensure_gameplay(client: &Client) -> Result<(), String> {
     // The codec is closed with Esc as a **raw DIK key** (DirectInput), not the `pause` bit: the
     // codec screen reads the device key, and `pause` does nothing there (measured).
     if menu.eq_ignore_ascii_case("Codec") {
-        play_menu(client, "close-codec", |input| drmod_script::model::ScriptInput {
-            dik_key: Some(DIK_ESCAPE),
-            ..input
+        play_menu(client, "close-codec", |input| {
+            drmod_script::model::ScriptInput {
+                dik_key: Some(DIK_ESCAPE),
+                ..input
+            }
         })?;
         return wait_menu(client, "In Game", Duration::from_secs(3))
             .ok_or_else(|| "the codec did not close".to_owned());
     }
 
-    if LOADING_MENUS.iter().any(|known| known.eq_ignore_ascii_case(&menu)) {
-        return Err(format!("the game is loading (\"{menu}\") — a run needs gameplay"));
+    if LOADING_MENUS
+        .iter()
+        .any(|known| known.eq_ignore_ascii_case(&menu))
+    {
+        return Err(format!(
+            "the game is loading (\"{menu}\") — a run needs gameplay"
+        ));
     }
 
     Err(format!(
@@ -299,7 +313,11 @@ fn wait_menu(client: &Client, menu: &str, timeout: Duration) -> Option<()> {
 /// parser cannot read is printed verbatim rather than lost.
 fn get(rest: &[String]) -> Result<(), String> {
     let parsed = Parsed::of(rest)?;
-    let id = parsed.positional.first().map(String::as_str).unwrap_or("last");
+    let id = parsed
+        .positional
+        .first()
+        .map(String::as_str)
+        .unwrap_or("last");
     let client = Client::new(&parsed.url());
 
     let (status, body) = client.get(&format!("/script/{id}.tas"))?;
@@ -416,7 +434,8 @@ fn export(rest: &[String]) -> Result<(), String> {
         })
         .collect();
 
-    let mut document = drmod_script::record::document(&records).map_err(|e| e.message().to_owned())?;
+    let mut document =
+        drmod_script::record::document(&records).map_err(|e| e.message().to_owned())?;
     if let Some(name) = parsed.value("name") {
         document.name = name.to_string();
     }
@@ -530,10 +549,7 @@ impl Client {
                 None => request.send_empty(),
             }
         } else {
-            self.agent
-                .get(&url)
-                .header("Connection", "close")
-                .call()
+            self.agent.get(&url).header("Connection", "close").call()
         };
 
         read_call(call)
@@ -736,4 +752,3 @@ impl LogInput {
         }
     }
 }
-

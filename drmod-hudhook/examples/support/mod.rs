@@ -63,7 +63,11 @@ impl HookExample {
             .unwrap()
             .into_rgba8();
 
-        Self { open: true, image, image_id: None }
+        Self {
+            open: true,
+            image,
+            image_id: None,
+        }
     }
 }
 
@@ -74,7 +78,11 @@ impl ImguiRenderLoop for HookExample {
         render_context: &'a mut dyn RenderContext,
     ) {
         let tex_id = render_context
-            .load_texture(self.image.as_bytes(), self.image.width(), self.image.height())
+            .load_texture(
+                self.image.as_bytes(),
+                self.image.width(),
+                self.image.height(),
+            )
             .unwrap();
 
         self.image_id = Some(tex_id);
@@ -85,10 +93,10 @@ impl ImguiRenderLoop for HookExample {
             .size([192.0, 192.0], Condition::FirstUseEver)
             .position([16.0, 16.0], Condition::FirstUseEver)
             .build(|| {
-                Image::new(self.image_id.unwrap(), [
-                    self.image.width() as f32,
-                    self.image.height() as f32,
-                ])
+                Image::new(
+                    self.image_id.unwrap(),
+                    [self.image.width() as f32, self.image.height() as f32],
+                )
                 .build(ui);
             });
 

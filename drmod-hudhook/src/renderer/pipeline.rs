@@ -93,7 +93,9 @@ impl<T: RenderEngine> Pipeline<T> {
             tx,
         });
 
-        PIPELINE_STATES.lock().insert(hwnd.0 as usize, Arc::clone(&shared_state));
+        PIPELINE_STATES
+            .lock()
+            .insert(hwnd.0 as usize, Arc::clone(&shared_state));
 
         let queue_buffer = OnceCell::from(Vec::new());
 
@@ -118,18 +120,23 @@ impl<T: RenderEngine> Pipeline<T> {
                 imgui_wnd_proc_impl(hwnd, umsg, wparam, lparam, self);
             },
         );
-        self.queue_buffer.set(queue_buffer).expect("OnceCell should be empty");
+        self.queue_buffer
+            .set(queue_buffer)
+            .expect("OnceCell should be empty");
 
         let message_filter = self.render_loop.message_filter(self.ctx.io());
 
-        self.shared_state.message_filter.store(message_filter.bits(), Ordering::SeqCst);
+        self.shared_state
+            .message_filter
+            .store(message_filter.bits(), Ordering::SeqCst);
 
         let io = self.ctx.io_mut();
 
         io.nav_active = true;
         io.nav_visible = true;
 
-        self.render_loop.before_render(&mut self.ctx, &mut self.engine);
+        self.render_loop
+            .before_render(&mut self.ctx, &mut self.engine);
 
         Ok(())
     }
@@ -179,7 +186,11 @@ impl<T: RenderEngine> Pipeline<T> {
 
     pub(crate) fn cleanup(&mut self) {
         unsafe {
-            SetWindowLongPtrW(self.hwnd, GWLP_WNDPROC, self.shared_state.wnd_proc as usize as _)
+            SetWindowLongPtrW(
+                self.hwnd,
+                GWLP_WNDPROC,
+                self.shared_state.wnd_proc as usize as _,
+            )
         };
         PIPELINE_STATES.lock().remove(&(self.hwnd.0 as usize));
     }
@@ -210,7 +221,10 @@ unsafe extern "system" fn pipeline_wnd_proc(
         Arc::clone(shared_state)
     };
 
-    if let Err(e) = shared_state.tx.send(PipelineMessage(SendableHwnd(hwnd), msg, wparam, lparam)) {
+    if let Err(e) = shared_state
+        .tx
+        .send(PipelineMessage(SendableHwnd(hwnd), msg, wparam, lparam))
+    {
         error!("Could not send window message through pipeline: {e:?}");
     }
 

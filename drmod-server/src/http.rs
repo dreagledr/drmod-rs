@@ -1,6 +1,6 @@
+use axum::{Router, extract::State, response::Html, routing::get};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use axum::{Router, extract::State, response::Html, routing::get};
 
 use crate::system::System;
 
@@ -15,7 +15,10 @@ pub(crate) async fn serve_http(system: Arc<System>, public_addr: String) {
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080);
 
-    let state = Arc::new(AppState { system, public_addr: public_addr.clone() });
+    let state = Arc::new(AppState {
+        system,
+        public_addr: public_addr.clone(),
+    });
 
     let app = Router::new()
         .route("/", get(root_handler))
@@ -34,7 +37,10 @@ async fn root_handler(State(state): State<Arc<AppState>>) -> Html<String> {
     Html(html)
 }
 
-fn render_page(public_addr: &str, rooms: &std::collections::HashMap<String, Arc<tokio::sync::Mutex<crate::system::Room>>>) -> String {
+fn render_page(
+    public_addr: &str,
+    rooms: &std::collections::HashMap<String, Arc<tokio::sync::Mutex<crate::system::Room>>>,
+) -> String {
     let mut rows = String::new();
     let mut room_count = 0usize;
     let mut player_count = 0usize;

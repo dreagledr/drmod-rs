@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{ERROR_SUCCESS, MAX_PATH};
 use windows::Win32::System::Registry::{
-    HKEY, HKEY_CURRENT_USER, KEY_READ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW, REG_SZ,
+    HKEY, HKEY_CURRENT_USER, KEY_READ, REG_SZ, RegCloseKey, RegOpenKeyExW, RegQueryValueExW,
 };
 use windows::core::w;
 
@@ -56,7 +56,12 @@ pub fn libraries() -> Vec<PathBuf> {
 pub fn game_folder() -> Option<PathBuf> {
     libraries()
         .into_iter()
-        .map(|library| library.join("steamapps").join("common").join(GAME_FOLDER_NAME))
+        .map(|library| {
+            library
+                .join("steamapps")
+                .join("common")
+                .join(GAME_FOLDER_NAME)
+        })
         .find(|candidate| is_game_folder(Some(candidate.as_path())))
 }
 
@@ -70,7 +75,11 @@ pub fn is_game_folder(folder: Option<&Path>) -> bool {
 
 /// The Steam installation root, from the per-user registry key Steam writes on every run.
 pub fn steam_root() -> Option<PathBuf> {
-    let path = read_registry_string(HKEY_CURRENT_USER, w!("Software\\Valve\\Steam"), w!("SteamPath"))?;
+    let path = read_registry_string(
+        HKEY_CURRENT_USER,
+        w!("Software\\Valve\\Steam"),
+        w!("SteamPath"),
+    )?;
 
     // Steam writes forward slashes; Windows accepts them, and `Path` reads the result fine.
     let root = PathBuf::from(path);
@@ -78,7 +87,11 @@ pub fn steam_root() -> Option<PathBuf> {
 }
 
 /// One `REG_SZ` value out of the registry, or `None` for any of the ways that can fail.
-fn read_registry_string(root: HKEY, subkey: windows::core::PCWSTR, name: windows::core::PCWSTR) -> Option<String> {
+fn read_registry_string(
+    root: HKEY,
+    subkey: windows::core::PCWSTR,
+    name: windows::core::PCWSTR,
+) -> Option<String> {
     unsafe {
         let mut key = HKEY::default();
         if RegOpenKeyExW(root, subkey, None, KEY_READ, &mut key) != ERROR_SUCCESS {

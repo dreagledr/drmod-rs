@@ -1,5 +1,5 @@
-use drmod_rs_lib::DEFAULT_TITLE;
 use drmod_hudhook::inject::Process;
+use drmod_rs_lib::DEFAULT_TITLE;
 use std::env;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
@@ -62,7 +62,10 @@ fn main() {
     // «инжект прошёл, а мода нет». Здесь код выхода печатается (HMODULE или 0).
     match inject_and_check(process.handle(), &dll_path) {
         Ok(handle) if handle != 0 => {
-            println!("инжект OK: LoadLibraryW вернул 0x{handle:08X} ({})", dll_path.display());
+            println!(
+                "инжект OK: LoadLibraryW вернул 0x{handle:08X} ({})",
+                dll_path.display()
+            );
         }
         Ok(_) => {
             let msg = format!(
@@ -99,7 +102,13 @@ fn inject_and_check(
             GetModuleHandleW(w!("Kernel32")).map_err(|e| format!("GetModuleHandleW: {e}"))?;
         let load_library =
             GetProcAddress(kernel32, s!("LoadLibraryW")).ok_or("нет LoadLibraryW")?;
-        let remote = VirtualAllocEx(process, None, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        let remote = VirtualAllocEx(
+            process,
+            None,
+            bytes,
+            MEM_RESERVE | MEM_COMMIT,
+            PAGE_READWRITE,
+        );
         if remote.is_null() {
             return Err("VirtualAllocEx вернул NULL".into());
         }

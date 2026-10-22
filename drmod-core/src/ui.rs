@@ -1,10 +1,10 @@
+use crate::HelloHud;
 use crate::api;
 use crate::game;
 use crate::net;
 #[cfg(debug_assertions)]
 use crate::overlay;
 use crate::segment;
-use crate::HelloHud;
 use imgui::*;
 
 /// Данные для отрисовки основного окна, собранные до вызова UI.
@@ -191,11 +191,8 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
 
             if hud.net_client.is_none() {
                 if ui.button("Connect")
-                    && let Ok(nc) = net::NetClient::new(
-                        &hud.server_addr,
-                        &hud.player_name,
-                        &hud.room_name,
-                    )
+                    && let Ok(nc) =
+                        net::NetClient::new(&hud.server_addr, &hud.player_name, &hud.room_name)
                 {
                     hud.net_client = Some(nc);
                 }
@@ -225,9 +222,11 @@ pub fn render_multiplayer_window(ui: &Ui, hud: &mut HelloHud) {
 
                 for rp in &nc.remote_players {
                     let mission = format!("0x{:04X}", rp.mission_id);
-                    let active = if hud.active_segment.as_ref().is_some_and(|s| {
-                        s.mission_id == rp.mission_id
-                    }) {
+                    let active = if hud
+                        .active_segment
+                        .as_ref()
+                        .is_some_and(|s| s.mission_id == rp.mission_id)
+                    {
                         " [active]"
                     } else {
                         ""
@@ -345,10 +344,7 @@ fn render_tas_controls(ui: &Ui, base_addr: usize) -> bool {
             api::set_rng_pin(mode as u32, seed.max(0) as u32);
             changed = true;
         }
-        ui.text_colored(
-            [0.6, 0.6, 0.6, 1.0],
-            "сид применится на 1-м тике скрипта",
-        );
+        ui.text_colored([0.6, 0.6, 0.6, 1.0], "сид применится на 1-м тике скрипта");
     }
 
     // Кап кадров (`POST /fps`).

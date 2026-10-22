@@ -165,19 +165,28 @@ fn restart_commands(spec: RestartSpec) -> Vec<ScriptCommand> {
     let menu = |dik: u32, t: u32| ScriptCommand {
         t,
         duration: spec.hold,
-        input: ScriptInput { dik_key: Some(dik), ..Default::default() },
+        input: ScriptInput {
+            dik_key: Some(dik),
+            ..Default::default()
+        },
         when_enemy: None,
     };
     let confirm = |t: u32| ScriptCommand {
         t,
         duration: 3,
-        input: ScriptInput { confirm: true, ..Default::default() },
+        input: ScriptInput {
+            confirm: true,
+            ..Default::default()
+        },
         when_enemy: None,
     };
     let pause = ScriptCommand {
         t: 0,
         duration: 3,
-        input: ScriptInput { pause: true, ..Default::default() },
+        input: ScriptInput {
+            pause: true,
+            ..Default::default()
+        },
         when_enemy: None,
     };
     let mut cmds = vec![pause];
@@ -1014,12 +1023,7 @@ pub(crate) fn set_fixed_dt_ms(ms: f32) {
 /// режим синтетических часов. Общий путь `POST /dt` и меню Settings: при
 /// включении адрес `cSlowRateManager` считается от `base_addr`, а база
 /// синтетических часов берётся от текущего `m_fTicks`.
-pub(crate) fn set_fixed_dt(
-    base_addr: usize,
-    fixed: bool,
-    ms: Option<f32>,
-    ticks: Option<bool>,
-) {
+pub(crate) fn set_fixed_dt(base_addr: usize, fixed: bool, ms: Option<f32>, ticks: Option<bool>) {
     if let Some(ms) = ms {
         FIXED_DT_MS_BITS.store(ms.to_bits(), Ordering::Relaxed);
     }
@@ -1420,10 +1424,7 @@ impl ApiServer {
         } else {
             1
         };
-        let script_phase = guard
-            .script
-            .as_ref()
-            .map(|s| script_phase_name(s.status));
+        let script_phase = guard.script.as_ref().map(|s| script_phase_name(s.status));
         let script_id = if let Some(s) = guard.script.as_mut() {
             if s.status == ScriptStatus::Restarting {
                 // Фаза рестарта: подаём меню-ввод, пока не начался loading
@@ -1656,11 +1657,7 @@ impl ApiServer {
             }
         };
         let mut guard = self.state.lock().unwrap();
-        if guard
-            .script
-            .as_ref()
-            .is_some_and(|s| s.status.is_active())
-        {
+        if guard.script.as_ref().is_some_and(|s| s.status.is_active()) {
             logger::log_line("api: builtin script ignored (another script active)");
             return;
         }
@@ -1850,13 +1847,21 @@ fn handle_connection(mut stream: TcpStream, state: &Arc<Mutex<SharedState>>) {
         match gunzip_limited(&body_bytes, MAX_INFLATED_BYTES as usize) {
             Ok(inflated) => String::from_utf8_lossy(&inflated).into_owned(),
             Err(err) => {
-                let code = if err == InflateError::TooLarge { 413 } else { 400 };
+                let code = if err == InflateError::TooLarge {
+                    413
+                } else {
+                    400
+                };
                 let message = if err == InflateError::TooLarge {
                     "inflated body too large".to_string()
                 } else {
                     format!("gzip: {err:?}")
                 };
-                respond(&mut stream, code, &Response::Error(ErrorResponse { error: message }));
+                respond(
+                    &mut stream,
+                    code,
+                    &Response::Error(ErrorResponse { error: message }),
+                );
                 return;
             }
         }
@@ -2081,7 +2086,7 @@ fn handle_render(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response)
                         "bad body: {e} (ожидается {{\"headless\": true}} или {{\"reset\": true}})"
                     ),
                 }),
-            )
+            );
         }
     };
     let base_addr = {
@@ -2140,11 +2145,9 @@ fn handle_dt(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
             return (
                 400,
                 Response::Error(ErrorResponse {
-                    error: format!(
-                        "bad body: {e} (ожидается {{\"fixed\": true, \"ms\": 17.5}})"
-                    ),
+                    error: format!("bad body: {e} (ожидается {{\"fixed\": true, \"ms\": 17.5}})"),
                 }),
-            )
+            );
         }
     };
     if let Some(ms) = req.ms
@@ -2208,7 +2211,7 @@ fn handle_fps(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
                         "bad body: {e} (ожидается {{\"cap\": \"off\"}} или {{\"fps\": 120}})"
                     ),
                 }),
-            )
+            );
         }
     };
     let (mode, value) = if let Some(fps) = req.fps {
@@ -2231,7 +2234,7 @@ fn handle_fps(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Response) {
                     Response::Error(ErrorResponse {
                         error: format!("cap=\"{other}\" неизвестен (off | game)"),
                     }),
-                )
+                );
             }
         }
     };
@@ -2281,7 +2284,7 @@ fn handle_rng(body: &str) -> (u16, Response) {
                          или {{\"pin\": \"seed\", \"seed\": N}})"
                     ),
                 }),
-            )
+            );
         }
     };
     let mode = match req.pin.as_str() {
@@ -2297,7 +2300,7 @@ fn handle_rng(body: &str) -> (u16, Response) {
                 Response::Error(ErrorResponse {
                     error: format!("unknown pin '{other}' (off|lo|mid|hi|seed|freeze)"),
                 }),
-            )
+            );
         }
     };
     set_rng_pin(mode, req.seed.unwrap_or(1));
@@ -2358,7 +2361,7 @@ fn handle_watch(body: &str) -> (u16, Response) {
                          \"off\": \"0x1744\"}} или {{\"on\": true, \"addr\": \"0x...\"}})"
                     ),
                 }),
-            )
+            );
         }
     };
     if req.on {
@@ -2426,7 +2429,7 @@ fn handle_script_run_tas(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, R
                 Response::Error(ErrorResponse {
                     error: refused.frame_aware(),
                 }),
-            )
+            );
         }
     };
 
@@ -2439,7 +2442,7 @@ fn handle_script_run_tas(body: &str, state: &Arc<Mutex<SharedState>>) -> (u16, R
                 Response::Error(ErrorResponse {
                     error: refused.frame_aware(),
                 }),
-            )
+            );
         }
     };
     let req = match parse_script(&json) {
@@ -2469,11 +2472,7 @@ fn start_script(
         );
     }
     let mut guard = state.lock().unwrap();
-    if guard
-        .script
-        .as_ref()
-        .is_some_and(|s| s.status.is_active())
-    {
+    if guard.script.as_ref().is_some_and(|s| s.status.is_active()) {
         let s = guard.script.as_ref().unwrap();
         return (
             409,
@@ -2503,7 +2502,11 @@ fn start_script(
                     ScriptStatus::Running
                 },
             };
-            (restart_commands(spec), ScriptStatus::Restarting, Some(pending))
+            (
+                restart_commands(spec),
+                ScriptStatus::Restarting,
+                Some(pending),
+            )
         }
         None => (
             req.commands,
@@ -2798,7 +2801,7 @@ fn handle_script_get_tas(path: &str, state: &Arc<Mutex<SharedState>>) -> (u16, R
                     Response::Error(ErrorResponse {
                         error: "invalid script id".into(),
                     }),
-                )
+                );
             }
         }
     };
@@ -2885,9 +2888,7 @@ fn handle_logs_tas(query: &str, state: &Arc<Mutex<SharedState>>) -> (u16, Respon
         .and_then(|v| v.parse().ok())
         .unwrap_or(MAX_LOG_LIMIT)
         .min(MAX_LOG_LIMIT);
-    let human = params
-        .get("human")
-        .is_some_and(|v| v == "1" || v == "true");
+    let human = params.get("human").is_some_and(|v| v == "1" || v == "true");
 
     let frames = guard.ring.query(from_ms, to_ms, script_id, limit);
     let records: Vec<drmod_script::record::RecordFrame> = frames
@@ -3011,7 +3012,8 @@ fn script_tick(
     // детерминированная точка движка. Запись из HTTP-потока (или по поллингу
     // /logs) слишком дрожит: число бросков до решения ИИ успевает разойтись,
     // и одинаковый сид даёт разный итог.
-    if k == 0 && (RNG_PIN.load(Ordering::Relaxed) == 4 || RNG_PIN.load(Ordering::Relaxed) == 5)
+    if k == 0
+        && (RNG_PIN.load(Ordering::Relaxed) == 4 || RNG_PIN.load(Ordering::Relaxed) == 5)
         && base_addr != 0
     {
         let addr = base_addr + RNG_STATE;
@@ -3024,7 +3026,9 @@ fn script_tick(
                 "api: rng freeze 0x{seed:08X} на первом тике скрипта"
             ));
         } else {
-            logger::log_line(&format!("api: rng seed 0x{seed:08X} на первом тике скрипта"));
+            logger::log_line(&format!(
+                "api: rng seed 0x{seed:08X} на первом тике скрипта"
+            ));
         }
     }
     // Условные команды (`when_enemy`): спят, пока не выполнено условие по врагу.
@@ -3184,7 +3188,12 @@ fn script_tick(
             // в меню бит 0x01 — навигация влево, листала бы слоты.
             // Так ввод воспроизводится как в записи (без прямой записи памяти).
             let in_weapon_menu = base_addr != 0
-                && unsafe { (base_addr as *const i32).add(0x17E9F9C / 4).read_unaligned() == 9 };
+                && unsafe {
+                    (base_addr as *const i32)
+                        .add(0x17E9F9C / 4)
+                        .read_unaligned()
+                        == 9
+                };
             if !in_weapon_menu {
                 unit.buttons_down |= addresses::input_bits::WEAPON_SELECT;
                 unit.buttons_pressed |= addresses::input_bits::WEAPON_SELECT;
@@ -3484,8 +3493,8 @@ fn decode_buttons(down: u32) -> Vec<&'static str> {
 #[cfg(test)]
 mod gunzip_tests {
     use super::*;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
+    use flate2::write::GzEncoder;
 
     fn gzip(data: &[u8]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
@@ -3520,7 +3529,10 @@ mod gunzip_tests {
             Err(InflateError::TooLarge)
         );
         // Тот же поток с достаточным лимитом распаковывается целиком.
-        assert_eq!(gunzip_limited(&bomb, 2 * 1024 * 1024).unwrap().len(), 1024 * 1024);
+        assert_eq!(
+            gunzip_limited(&bomb, 2 * 1024 * 1024).unwrap().len(),
+            1024 * 1024
+        );
     }
 
     #[test]

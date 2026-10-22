@@ -136,7 +136,7 @@ fn handle_raw_keyboard_input(io: &mut Io, raw_keyboard: &RAWKEYBOARD) {
                 0 => virtual_key.0,
                 i => i as u16,
             }
-        },
+        }
         VIRTUAL_KEY(virtual_key) => virtual_key,
     } as usize;
 
@@ -156,7 +156,9 @@ fn handle_raw_keyboard_input(io: &mut Io, raw_keyboard: &RAWKEYBOARD) {
 
 // Handle WM_INPUT events.
 fn handle_raw_input(io: &mut Io, WPARAM(wparam): WPARAM, LPARAM(lparam): LPARAM) {
-    let mut raw_data = RAWINPUT { ..Default::default() };
+    let mut raw_data = RAWINPUT {
+        ..Default::default()
+    };
     let mut raw_data_size = size_of::<RAWINPUT>() as u32;
     let raw_data_header_size = size_of::<RAWINPUTHEADER>() as u32;
 
@@ -185,11 +187,11 @@ fn handle_raw_input(io: &mut Io, WPARAM(wparam): WPARAM, LPARAM(lparam): LPARAM)
     match RID_DEVICE_INFO_TYPE(raw_data.header.dwType) {
         RIM_TYPEMOUSE => {
             handle_raw_mouse_input(io, unsafe { &raw_data.data.mouse });
-        },
+        }
         RIM_TYPEKEYBOARD => {
             handle_raw_keyboard_input(io, unsafe { &raw_data.data.keyboard });
-        },
-        _ => {},
+        }
+        _ => {}
     }
 }
 
@@ -211,14 +213,14 @@ fn map_vkey(wparam: u16, lparam: usize) -> VIRTUAL_KEY {
             } else {
                 VK_LCONTROL
             }
-        },
+        }
         VK_MENU => {
             if lparam & 0x01000000 != 0 {
                 VK_RMENU
             } else {
                 VK_LMENU
             }
-        },
+        }
         _ => VIRTUAL_KEY(wparam),
     }
 }
@@ -278,10 +280,14 @@ pub fn imgui_wnd_proc_impl<T: RenderEngine>(
     LPARAM(lparam): LPARAM,
     pipeline: &mut Pipeline<T>,
 ) {
-    if pipeline.render_loop().before_wnd_proc(hwnd, umsg, WPARAM(wparam), LPARAM(lparam))
+    if pipeline
+        .render_loop()
+        .before_wnd_proc(hwnd, umsg, WPARAM(wparam), LPARAM(lparam))
         == BeforeWndProc::Break
     {
-        pipeline.render_loop().after_wnd_proc(hwnd, umsg, WPARAM(wparam), LPARAM(lparam));
+        pipeline
+            .render_loop()
+            .after_wnd_proc(hwnd, umsg, WPARAM(wparam), LPARAM(lparam));
         return;
     }
 
@@ -291,16 +297,16 @@ pub fn imgui_wnd_proc_impl<T: RenderEngine>(
         WM_INPUT => handle_raw_input(io, WPARAM(wparam), LPARAM(lparam)),
         state @ (WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP) if wparam < 256 => {
             handle_input(io, state, WPARAM(wparam), LPARAM(lparam))
-        },
+        }
         WM_LBUTTONDOWN | WM_LBUTTONDBLCLK => {
             io.add_mouse_button_event(MouseButton::Left, true);
-        },
+        }
         WM_RBUTTONDOWN | WM_RBUTTONDBLCLK => {
             io.add_mouse_button_event(MouseButton::Right, true);
-        },
+        }
         WM_MBUTTONDOWN | WM_MBUTTONDBLCLK => {
             io.add_mouse_button_event(MouseButton::Middle, true);
-        },
+        }
         WM_XBUTTONDOWN | WM_XBUTTONDBLCLK => {
             let btn = if hiword(wparam as _) == XBUTTON1 {
                 MouseButton::Extra1
@@ -308,16 +314,16 @@ pub fn imgui_wnd_proc_impl<T: RenderEngine>(
                 MouseButton::Extra2
             };
             io.add_mouse_button_event(btn, true);
-        },
+        }
         WM_LBUTTONUP => {
             io.add_mouse_button_event(MouseButton::Left, false);
-        },
+        }
         WM_RBUTTONUP => {
             io.add_mouse_button_event(MouseButton::Right, false);
-        },
+        }
         WM_MBUTTONUP => {
             io.add_mouse_button_event(MouseButton::Middle, false);
-        },
+        }
         WM_XBUTTONUP => {
             let btn = if hiword(wparam as _) == XBUTTON1 {
                 MouseButton::Extra1
@@ -325,30 +331,32 @@ pub fn imgui_wnd_proc_impl<T: RenderEngine>(
                 MouseButton::Extra2
             };
             io.add_mouse_button_event(btn, false);
-        },
+        }
         WM_MOUSEWHEEL => {
             // This `hiword` call is equivalent to GET_WHEEL_DELTA_WPARAM
             let wheel_delta_wparam = hiword(wparam as _);
             let wheel_delta = WHEEL_DELTA as f32;
             io.add_mouse_wheel_event([0.0, (wheel_delta_wparam as i16 as f32) / wheel_delta]);
-        },
+        }
         WM_MOUSEHWHEEL => {
             // This `hiword` call is equivalent to GET_WHEEL_DELTA_WPARAM
             let wheel_delta_wparam = hiword(wparam as _);
             let wheel_delta = WHEEL_DELTA as f32;
             io.add_mouse_wheel_event([(wheel_delta_wparam as i16 as f32) / wheel_delta, 0.0]);
-        },
+        }
         WM_MOUSEMOVE => {
             let x = lowordi(lparam as u32) as f32;
             let y = hiwordi(lparam as u32) as f32;
             io.add_mouse_pos_event([x, y]);
-        },
+        }
         WM_CHAR => io.add_input_character(char::from_u32(wparam as u32).unwrap()),
         WM_SIZE => {
             pipeline.resize(loword(lparam as u32) as u32, hiword(lparam as u32) as u32);
-        },
-        _ => {},
+        }
+        _ => {}
     };
 
-    pipeline.render_loop().after_wnd_proc(hwnd, umsg, WPARAM(wparam), LPARAM(lparam));
+    pipeline
+        .render_loop()
+        .after_wnd_proc(hwnd, umsg, WPARAM(wparam), LPARAM(lparam));
 }

@@ -21,8 +21,8 @@ pub(crate) use player::Player;
 /// по такому адресу даёт ACCESS_VIOLATION.
 pub(crate) fn is_readable_ptr(addr: usize) -> bool {
     use windows::Win32::System::Memory::{
-        VirtualQuery, MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE,
-        PAGE_GUARD, PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE,
+        MEMORY_BASIC_INFORMATION, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE, PAGE_GUARD,
+        PAGE_PROTECTION_FLAGS, PAGE_READONLY, PAGE_READWRITE, VirtualQuery,
     };
 
     const PAGE_READABLE: PAGE_PROTECTION_FLAGS = PAGE_PROTECTION_FLAGS(
@@ -40,9 +40,7 @@ pub(crate) fn is_readable_ptr(addr: usize) -> bool {
     // PAGE_GUARD (0x100) — комбинированный флаг: чтение guard-страницы даёт
     // STATUS_GUARD_PAGE_VIOLATION, хотя бит «readable» в protect может стоять.
     // Исключаем (см. docs/REPLAY_FINDINGS.md №3).
-    ok != 0
-        && (mbi.Protect & PAGE_READABLE).0 != 0
-        && (mbi.Protect & PAGE_GUARD).0 == 0
+    ok != 0 && (mbi.Protect & PAGE_READABLE).0 != 0 && (mbi.Protect & PAGE_GUARD).0 == 0
 }
 
 #[allow(dead_code)]

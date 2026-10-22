@@ -83,7 +83,11 @@ impl HookExample {
                     image0.clone()
                 } else {
                     dynamic_image
-                        .resize((i + 1) as u32 * 10, (i + 1) as u32 * 10, FilterType::Lanczos3)
+                        .resize(
+                            (i + 1) as u32 * 10,
+                            (i + 1) as u32 * 10,
+                            FilterType::Lanczos3,
+                        )
                         .to_rgba8()
                 }
             })
@@ -143,7 +147,11 @@ impl ImguiRenderLoop for HookExample {
         _ctx: &mut Context,
         render_context: &'a mut dyn RenderContext,
     ) {
-        let elapsed = self.first_time.get_or_insert(Instant::now()).elapsed().as_secs();
+        let elapsed = self
+            .first_time
+            .get_or_insert(Instant::now())
+            .elapsed()
+            .as_secs();
         if elapsed != self.last_upload_time {
             self.last_upload_time = elapsed;
 
@@ -178,7 +186,11 @@ impl ImguiRenderLoop for HookExample {
             self.frame_times.iter().sum::<Duration>() / self.frame_times.len() as u32
         };
 
-        let last = self.frame_times.last().copied().unwrap_or_else(|| Duration::from_nanos(0));
+        let last = self
+            .frame_times
+            .last()
+            .copied()
+            .unwrap_or_else(|| Duration::from_nanos(0));
 
         ui.window("Hello world")
             .size([376.0, 568.0], Condition::FirstUseEver)
@@ -208,7 +220,10 @@ impl ImguiRenderLoop for HookExample {
                 ui.text(if ui.io().key_alt { "ALT" } else { "alt" });
                 ui.separator();
                 let mouse_pos = ui.io().mouse_pos;
-                ui.text(format!("Mouse Position: ({:.1},{:.1})", mouse_pos[0], mouse_pos[1]));
+                ui.text(format!(
+                    "Mouse Position: ({:.1},{:.1})",
+                    mouse_pos[0], mouse_pos[1]
+                ));
                 ui.text(format!("Frame time: {:8.2}", last.as_secs_f64() * 1000.));
                 ui.text(format!("Avg:        {:8.2}", avg.as_secs_f64() * 1000.));
                 ui.text(format!("FPS:        {:8.2}", 1. / last.as_secs_f64()));

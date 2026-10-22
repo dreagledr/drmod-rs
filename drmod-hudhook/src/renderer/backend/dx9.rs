@@ -62,9 +62,18 @@ impl D3D9RenderEngine {
 
         ctx.set_ini_filename(None);
         ctx.io_mut().backend_flags |= BackendFlags::RENDERER_HAS_VTX_OFFSET;
-        ctx.set_renderer_name(String::from(concat!("drmod-hudhook-dx9@", env!("CARGO_PKG_VERSION"))));
+        ctx.set_renderer_name(String::from(concat!(
+            "drmod-hudhook-dx9@",
+            env!("CARGO_PKG_VERSION")
+        )));
 
-        Ok(Self { device, texture_heap, vertex_buffer, index_buffer, projection_buffer })
+        Ok(Self {
+            device,
+            texture_heap,
+            vertex_buffer,
+            index_buffer,
+            projection_buffer,
+        })
     }
 }
 
@@ -72,7 +81,8 @@ impl RenderContext for D3D9RenderEngine {
     fn load_texture(&mut self, data: &[u8], width: u32, height: u32) -> Result<TextureId> {
         unsafe {
             let texture_id = self.texture_heap.create_texture(width, height)?;
-            self.texture_heap.upload_texture(texture_id, data, width, height)?;
+            self.texture_heap
+                .upload_texture(texture_id, data, width, height)?;
             Ok(texture_id)
         }
     }
@@ -84,7 +94,10 @@ impl RenderContext for D3D9RenderEngine {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        unsafe { self.texture_heap.upload_texture(texture_id, data, width, height) }
+        unsafe {
+            self.texture_heap
+                .upload_texture(texture_id, data, width, height)
+        }
     }
 }
 
@@ -108,8 +121,11 @@ impl RenderEngine for D3D9RenderEngine {
     fn setup_fonts(&mut self, ctx: &mut Context) -> Result<()> {
         let fonts = ctx.fonts();
         let fonts_texture = fonts.build_rgba32_texture();
-        fonts.tex_id =
-            self.load_texture(fonts_texture.data, fonts_texture.width, fonts_texture.height)?;
+        fonts.tex_id = self.load_texture(
+            fonts_texture.data,
+            fonts_texture.width,
+            fonts_texture.height,
+        )?;
         Ok(())
     }
 }
@@ -126,15 +142,24 @@ impl D3D9RenderEngine {
         draw_data
             .draw_lists()
             .map(|draw_list| {
-                (draw_list.vtx_buffer().iter().copied(), draw_list.idx_buffer().iter().copied())
+                (
+                    draw_list.vtx_buffer().iter().copied(),
+                    draw_list.idx_buffer().iter().copied(),
+                )
             })
             .for_each(|(vertices, indices)| {
                 // CPU swizzle FTW
-                self.vertex_buffer.extend(vertices.map(|draw_vert| CustomVertex {
-                    pos: [draw_vert.pos[0], draw_vert.pos[1], 0.0],
-                    col: [draw_vert.col[2], draw_vert.col[1], draw_vert.col[0], draw_vert.col[3]],
-                    uv: draw_vert.uv,
-                }));
+                self.vertex_buffer
+                    .extend(vertices.map(|draw_vert| CustomVertex {
+                        pos: [draw_vert.pos[0], draw_vert.pos[1], 0.0],
+                        col: [
+                            draw_vert.col[2],
+                            draw_vert.col[1],
+                            draw_vert.col[0],
+                            draw_vert.col[3],
+                        ],
+                        uv: draw_vert.uv,
+                    }));
                 self.index_buffer.extend(indices);
             });
 
@@ -186,7 +211,7 @@ impl D3D9RenderEngine {
                                 let texture = self.texture_heap.get(cmd_params.texture_id);
                                 self.device.SetTexture(0, texture)?;
                                 Some(cmd_params.texture_id)
-                            },
+                            }
                         };
 
                         if r.right > r.left && r.bottom > r.top {
@@ -200,10 +225,10 @@ impl D3D9RenderEngine {
                                 count as u32 / 3,
                             )?;
                         }
-                    },
+                    }
                     DrawCmd::ResetRenderState => {
                         self.setup_render_state(draw_data)?;
-                    },
+                    }
                     DrawCmd::RawCallback { callback, raw_cmd } => callback(cl.raw(), raw_cmd),
                 }
             }
@@ -225,28 +250,46 @@ impl D3D9RenderEngine {
         })?;
         self.device.SetPixelShader(None)?;
         self.device.SetVertexShader(None)?;
-        self.device.SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE.0 as u32)?;
+        self.device
+            .SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE.0 as u32)?;
         self.device.SetRenderState(D3DRS_LIGHTING, false.into())?;
         self.device.SetRenderState(D3DRS_ZENABLE, false.into())?;
-        self.device.SetRenderState(D3DRS_ALPHABLENDENABLE, true.into())?;
-        self.device.SetRenderState(D3DRS_ALPHATESTENABLE, false.into())?;
-        self.device.SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD.0 as u32)?;
-        self.device.SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA.0 as u32)?;
-        self.device.SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA.0 as u32)?;
-        self.device.SetRenderState(D3DRS_SCISSORTESTENABLE, true.into())?;
-        self.device.SetRenderState(D3DRS_SHADEMODE, D3DSHADE_GOURAUD.0 as u32)?;
+        self.device
+            .SetRenderState(D3DRS_ALPHABLENDENABLE, true.into())?;
+        self.device
+            .SetRenderState(D3DRS_ALPHATESTENABLE, false.into())?;
+        self.device
+            .SetRenderState(D3DRS_BLENDOP, D3DBLENDOP_ADD.0 as u32)?;
+        self.device
+            .SetRenderState(D3DRS_SRCBLEND, D3DBLEND_SRCALPHA.0 as u32)?;
+        self.device
+            .SetRenderState(D3DRS_DESTBLEND, D3DBLEND_INVSRCALPHA.0 as u32)?;
+        self.device
+            .SetRenderState(D3DRS_SCISSORTESTENABLE, true.into())?;
+        self.device
+            .SetRenderState(D3DRS_SHADEMODE, D3DSHADE_GOURAUD.0 as u32)?;
         self.device.SetRenderState(D3DRS_FOGENABLE, false.into())?;
-        self.device.SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE.0 as u32)?;
-        self.device.SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE)?;
-        self.device.SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE)?;
-        self.device.SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE.0 as u32)?;
-        self.device.SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE)?;
-        self.device.SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE)?;
-        self.device.SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR.0 as u32)?;
-        self.device.SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR.0 as u32)?;
-        self.device.SetTransform(D3DTRANSFORMSTATETYPE(256), &MAT_IDENTITY)?;
+        self.device
+            .SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_MODULATE.0 as u32)?;
+        self.device
+            .SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_TEXTURE)?;
+        self.device
+            .SetTextureStageState(0, D3DTSS_COLORARG2, D3DTA_DIFFUSE)?;
+        self.device
+            .SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_MODULATE.0 as u32)?;
+        self.device
+            .SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE)?;
+        self.device
+            .SetTextureStageState(0, D3DTSS_ALPHAARG2, D3DTA_DIFFUSE)?;
+        self.device
+            .SetSamplerState(0, D3DSAMP_MINFILTER, D3DTEXF_LINEAR.0 as u32)?;
+        self.device
+            .SetSamplerState(0, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR.0 as u32)?;
+        self.device
+            .SetTransform(D3DTRANSFORMSTATETYPE(256), &MAT_IDENTITY)?;
         self.device.SetTransform(D3DTS_VIEW, &MAT_IDENTITY)?;
-        self.device.SetTransform(D3DTS_PROJECTION, &self.projection_buffer)?;
+        self.device
+            .SetTransform(D3DTS_PROJECTION, &self.projection_buffer)?;
         self.device.SetStreamSource(
             0,
             &self.vertex_buffer.resource,
@@ -276,7 +319,11 @@ impl<B: BufferType, T> Buffer<B, T> {
         let resource = B::create_resource(device, resource_capacity)?;
         let data = Vec::with_capacity(resource_capacity);
 
-        Ok(Self { resource, resource_capacity, data })
+        Ok(Self {
+            resource,
+            resource_capacity,
+            data,
+        })
     }
 
     fn clear(&mut self) {
@@ -290,7 +337,10 @@ impl<B: BufferType, T> Buffer<B, T> {
     fn upload(&mut self, device: &IDirect3DDevice9) -> Result<()> {
         let capacity = self.data.capacity();
         if capacity > self.resource_capacity {
-            drop(mem::replace(&mut self.resource, B::create_resource(device, capacity)?));
+            drop(mem::replace(
+                &mut self.resource,
+                B::create_resource(device, capacity)?,
+            ));
             self.resource_capacity = capacity;
         }
 
@@ -321,7 +371,12 @@ impl BufferType for IDirect3DVertexBuffer9 {
         unsafe {
             let mut resource_ptr = ptr::null_mut();
 
-            self.Lock(0, mem::size_of_val(data) as u32, &mut resource_ptr, D3DLOCK_DISCARD as u32)?;
+            self.Lock(
+                0,
+                mem::size_of_val(data) as u32,
+                &mut resource_ptr,
+                D3DLOCK_DISCARD as u32,
+            )?;
 
             ptr::copy_nonoverlapping(data.as_ptr(), resource_ptr as *mut T, data.len());
 
@@ -341,7 +396,11 @@ impl BufferType for IDirect3DIndexBuffer9 {
             device.CreateIndexBuffer(
                 (resource_capacity * mem::size_of::<DrawIdx>()) as u32,
                 (D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY) as u32,
-                if mem::size_of::<DrawIdx>() == 2 { D3DFMT_INDEX16 } else { D3DFMT_INDEX32 },
+                if mem::size_of::<DrawIdx>() == 2 {
+                    D3DFMT_INDEX16
+                } else {
+                    D3DFMT_INDEX32
+                },
                 D3DPOOL_DEFAULT,
                 v,
                 ptr::null_mut(),
@@ -353,7 +412,12 @@ impl BufferType for IDirect3DIndexBuffer9 {
         unsafe {
             let mut resource_ptr = ptr::null_mut();
 
-            self.Lock(0, mem::size_of_val(data) as u32, &mut resource_ptr, D3DLOCK_DISCARD as u32)?;
+            self.Lock(
+                0,
+                mem::size_of_val(data) as u32,
+                &mut resource_ptr,
+                D3DLOCK_DISCARD as u32,
+            )?;
 
             ptr::copy_nonoverlapping(data.as_ptr(), resource_ptr as *mut T, data.len());
 
@@ -380,7 +444,10 @@ struct TextureHeap {
 
 impl TextureHeap {
     fn new(device: &IDirect3DDevice9) -> Result<Self> {
-        Ok(Self { device: device.clone(), textures: Vec::new() })
+        Ok(Self {
+            device: device.clone(),
+            textures: Vec::new(),
+        })
     }
 
     fn get(&self, texture_id: TextureId) -> &IDirect3DTexture9 {
@@ -402,7 +469,12 @@ impl TextureHeap {
         })?;
 
         let id = TextureId::from(self.textures.len());
-        self.textures.push(Texture { resource, id, width, height });
+        self.textures.push(Texture {
+            resource,
+            id,
+            width,
+            height,
+        });
 
         Ok(id)
     }
@@ -481,7 +553,7 @@ impl StateBackup {
                     viewport,
                     surface,
                 })
-            },
+            }
             Err(e) => Err(e),
         }
     }

@@ -138,18 +138,10 @@ impl SkeletonPacket {
             let off = 7 + i * 16;
             let index = u16::from_le_bytes([data[off], data[off + 1]]);
             let parent_index = i16::from_le_bytes([data[off + 2], data[off + 3]]);
-            let x = f32::from_le_bytes([
-                data[off + 4],
-                data[off + 5],
-                data[off + 6],
-                data[off + 7],
-            ]);
-            let y = f32::from_le_bytes([
-                data[off + 8],
-                data[off + 9],
-                data[off + 10],
-                data[off + 11],
-            ]);
+            let x =
+                f32::from_le_bytes([data[off + 4], data[off + 5], data[off + 6], data[off + 7]]);
+            let y =
+                f32::from_le_bytes([data[off + 8], data[off + 9], data[off + 10], data[off + 11]]);
             let z = f32::from_le_bytes([
                 data[off + 12],
                 data[off + 13],

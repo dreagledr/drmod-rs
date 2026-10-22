@@ -222,9 +222,7 @@ impl ModApi {
                 // sent as bytes rather than as a string: `Content-Length` has to be the compressed
                 // length.
                 let compressed = gzipped(text.as_bytes());
-                request
-                    .header("Content-Encoding", "gzip")
-                    .send(compressed)
+                request.header("Content-Encoding", "gzip").send(compressed)
             }
             None => request.send_empty(),
         };

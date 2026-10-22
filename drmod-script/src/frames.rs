@@ -12,8 +12,8 @@
 //! documented stick arrives as an angle plus a deflection, and the axes come back from the
 //! trigonometry within a few thousandths.
 
-use super::model::{ScriptCommand, ScriptDocument, ScriptInput};
 use super::keys::{CommandKeys, command_mask};
+use super::model::{ScriptCommand, ScriptDocument, ScriptInput};
 
 /// Raw axis units per deflection unit, as in the DSL: `1.0` is a full axis, `√2` the corner —
 /// the JSON's own `[-1000, 1000]`.
@@ -174,7 +174,10 @@ fn command(row: &CommandRow, t: u32, duration: u32) -> ScriptCommand {
     }
 
     if row.right_stick_amount > 0.0 {
-        input.camera = Some(rounded(vector(row.right_stick_angle, row.right_stick_amount)));
+        input.camera = Some(rounded(vector(
+            row.right_stick_angle,
+            row.right_stick_amount,
+        )));
     }
 
     ScriptCommand {

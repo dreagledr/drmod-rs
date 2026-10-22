@@ -164,9 +164,7 @@ pub(crate) fn handle_single_step(eip: usize, caller: usize, chain: &[usize]) -> 
     let n = NHITS.load(Ordering::Relaxed);
     let mut known = false;
     for i in 0..n.min(MAX_UNIQUE) {
-        if HITS[i].load(Ordering::Relaxed) == eip
-            && CALLERS[i].load(Ordering::Relaxed) == caller
-        {
+        if HITS[i].load(Ordering::Relaxed) == eip && CALLERS[i].load(Ordering::Relaxed) == caller {
             known = true;
             break;
         }

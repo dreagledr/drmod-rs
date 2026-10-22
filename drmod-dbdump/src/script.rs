@@ -37,7 +37,11 @@ fn record_of(frame: &Frame) -> RecordFrame {
 /// первого кадра (старт миссии), команды из кадров. По умолчанию — компактный
 /// JSON (тело POST /script/run ограничено 64 КБ в api.rs); `pretty` — для
 /// чтения человеком.
-pub(crate) fn build_script(meta: &RunMeta, frames: &[Frame], pretty: bool) -> Result<String, String> {
+pub(crate) fn build_script(
+    meta: &RunMeta,
+    frames: &[Frame],
+    pretty: bool,
+) -> Result<String, String> {
     let records: Vec<RecordFrame> = frames.iter().map(record_of).collect();
     let mut document = record::document(&records).map_err(|error| error.to_string())?;
     document.name = format!("replay-{}", meta.id);
@@ -92,7 +96,11 @@ mod tests {
     #[test]
     fn decode_forward_right_emits_explicit_stick() {
         // В записи 117 при FORWARD|RIGHT стик (0,-1000), а не (1000,-1000).
-        let f = frame(0, unit(input_bits::FORWARD | input_bits::RIGHT, [0.0, -1000.0]), 0);
+        let f = frame(
+            0,
+            unit(input_bits::FORWARD | input_bits::RIGHT, [0.0, -1000.0]),
+            0,
+        );
         let inp = record::decode(&record_of(&f)).expect("forward+right");
         assert!(inp.forward && inp.right);
         assert_eq!(inp.left_stick, Some([0.0, -1000.0]));
@@ -206,10 +214,17 @@ mod tests {
             let t = c["t"].as_u64().unwrap();
             let d = c["duration"].as_u64().unwrap();
             assert!(d >= 1 && t + d <= MAX_SCRIPT_FRAMES as u64);
-            assert!(!c["input"].as_object().unwrap().is_empty(), "input не пустой");
+            assert!(
+                !c["input"].as_object().unwrap().is_empty(),
+                "input не пустой"
+            );
         }
         // Компактный JSON обязан влезать в лимит тела API (64 КБ, api.rs).
-        assert!(json.len() <= 64 * 1024, "компактный JSON {} байт > 64 КБ", json.len());
+        assert!(
+            json.len() <= 64 * 1024,
+            "компактный JSON {} байт > 64 КБ",
+            json.len()
+        );
     }
 
     #[test]
@@ -248,7 +263,11 @@ mod tests {
         };
         let frames = vec![
             frame(0, InputUnit::default(), 0),
-            frame(MAX_SCRIPT_FRAMES as i64 + 1, unit(input_bits::FORWARD, [0.0, -1000.0]), 0),
+            frame(
+                MAX_SCRIPT_FRAMES as i64 + 1,
+                unit(input_bits::FORWARD, [0.0, -1000.0]),
+                0,
+            ),
         ];
         assert!(build_script(&meta, &frames, false).is_err());
     }

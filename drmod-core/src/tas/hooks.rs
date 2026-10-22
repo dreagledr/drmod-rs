@@ -3,8 +3,8 @@
 //! чтение сырого ввода (клавиатура/мышь).
 
 use drmod_hudhook::mh::{MH_ApplyQueued, MhHook};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 
 use super::addresses;
 use super::replay;
@@ -43,8 +43,7 @@ static ORIG_IS_KEY_PRESSED: OnceLock<unsafe extern "thiscall" fn(*const u8, i32)
 /// (thiscall, 0xA03970): `(this, flag, rate)` — обновитель времени кадра из
 /// главного цикла. Детур после оригинала подаёт фиксированный шаг (см.
 /// `api::after_frame_time`).
-static ORIG_FRAME_TIME: OnceLock<unsafe extern "thiscall" fn(*mut u8, i32, f32)> =
-    OnceLock::new();
+static ORIG_FRAME_TIME: OnceLock<unsafe extern "thiscall" fn(*mut u8, i32, f32)> = OnceLock::new();
 /// Trampoline `randRange` (unsigned/signed) — глобальный LCG ИИ.
 static ORIG_RAND_RANGE: OnceLock<unsafe extern "thiscall" fn(*mut u32, u32, u32) -> u32> =
     OnceLock::new();
@@ -373,8 +372,7 @@ fn unstick_raw_keys_cache() {
 /// Сброс — в начале следующего `script_tick` (см. api.rs).
 unsafe extern "C" fn is_keybind_pressed_detour(keybind: i32) -> i32 {
     let in_range = (0..addresses::KEYBIND_TOTAL as i32).contains(&keybind);
-    let emulated =
-        in_range && KEYBIND_PRESSED[keybind as usize].load(Ordering::Relaxed) != 0;
+    let emulated = in_range && KEYBIND_PRESSED[keybind as usize].load(Ordering::Relaxed) != 0;
     let result = if emulated {
         1
     } else if let Some(&orig) = ORIG_IS_KEYBIND_PRESSED.get() {
@@ -451,7 +449,11 @@ fn menu_key_slot(vkey: i32) -> Option<(usize, u32, i32)> {
     if index >= 8 {
         return None;
     }
-    Some((index, drmod_replay_types::key_codes::bit(vkey as u32), status))
+    Some((
+        index,
+        drmod_replay_types::key_codes::bit(vkey as u32),
+        status,
+    ))
 }
 
 /// Снимки сырого состояния клавиатуры для логирования изменений (диагностика:
@@ -558,9 +560,7 @@ unsafe extern "thiscall" fn keyboard_poll_detour(this: *const u8) {
 }
 
 /// Сохраняет trampoline оригинала опроса клавиатуры.
-fn set_original_keyboard_poll(
-    orig: unsafe extern "thiscall" fn(*const u8),
-) -> Result<(), ()> {
+fn set_original_keyboard_poll(orig: unsafe extern "thiscall" fn(*const u8)) -> Result<(), ()> {
     ORIG_KEYBOARD_POLL.set(orig).map_err(|_| ())
 }
 
@@ -649,7 +649,9 @@ unsafe extern "thiscall" fn rand_range_signed_detour(this: *mut u32, lo: i32, hi
 }
 
 /// Сохраняет trampoline `randRange` (unsigned).
-fn set_original_rand_range(orig: unsafe extern "thiscall" fn(*mut u32, u32, u32) -> u32) -> Result<(), ()> {
+fn set_original_rand_range(
+    orig: unsafe extern "thiscall" fn(*mut u32, u32, u32) -> u32,
+) -> Result<(), ()> {
     ORIG_RAND_RANGE.set(orig).map_err(|_| ())
 }
 
@@ -770,10 +772,18 @@ impl InputHooks {
             if keybind_down.is_some() { "OK" } else { "FAIL" },
             if key_down.is_some() { "OK" } else { "FAIL" },
             if key_pressed.is_some() { "OK" } else { "FAIL" },
-            if keyboard_poll.is_some() { "OK" } else { "FAIL" },
+            if keyboard_poll.is_some() {
+                "OK"
+            } else {
+                "FAIL"
+            },
             if frame_time.is_some() { "OK" } else { "FAIL" },
             if rand_range.is_some() { "OK" } else { "FAIL" },
-            if rand_range_signed.is_some() { "OK" } else { "FAIL" },
+            if rand_range_signed.is_some() {
+                "OK"
+            } else {
+                "FAIL"
+            },
             if rand_float.is_some() { "OK" } else { "FAIL" }
         ));
 
@@ -854,7 +864,10 @@ impl InputHooks {
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_is_keybind_pressed(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            logger::log_line(&format!("create_keybind_hook: queue_enable FAIL err={:?}", e));
+            logger::log_line(&format!(
+                "create_keybind_hook: queue_enable FAIL err={:?}",
+                e
+            ));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };
@@ -891,7 +904,10 @@ impl InputHooks {
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_is_keybind_down(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            logger::log_line(&format!("create_keybind_down_hook: queue_enable FAIL err={:?}", e));
+            logger::log_line(&format!(
+                "create_keybind_down_hook: queue_enable FAIL err={:?}",
+                e
+            ));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };
@@ -928,7 +944,10 @@ impl InputHooks {
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_is_key_down(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            logger::log_line(&format!("create_key_down_hook: queue_enable FAIL err={:?}", e));
+            logger::log_line(&format!(
+                "create_key_down_hook: queue_enable FAIL err={:?}",
+                e
+            ));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };
@@ -1083,7 +1102,9 @@ impl InputHooks {
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_rand_range(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            logger::log_line(&format!("create_rand_range_hook: queue_enable FAIL err={e:?}"));
+            logger::log_line(&format!(
+                "create_rand_range_hook: queue_enable FAIL err={e:?}"
+            ));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };
@@ -1153,7 +1174,9 @@ impl InputHooks {
             unsafe { std::mem::transmute(hook.trampoline()) };
         let _ = set_original_rand_float(trampoline);
         if let Err(e) = unsafe { hook.queue_enable() } {
-            logger::log_line(&format!("create_rand_float_hook: queue_enable FAIL err={e:?}"));
+            logger::log_line(&format!(
+                "create_rand_float_hook: queue_enable FAIL err={e:?}"
+            ));
             return None;
         }
         let _ = unsafe { MH_ApplyQueued() };

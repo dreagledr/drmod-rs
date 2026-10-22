@@ -14,7 +14,7 @@ use std::time::Duration;
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, FindWindowW, GetForegroundWindow, SetForegroundWindow, ShowWindow, SW_RESTORE,
+    BringWindowToTop, FindWindowW, GetForegroundWindow, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
 use windows::core::w;
 

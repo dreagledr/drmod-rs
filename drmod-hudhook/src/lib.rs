@@ -1,4 +1,4 @@
-﻿//! # hudhook
+//! # hudhook
 //!
 //! This library implements a mechanism for hooking into the
 //! render loop of applications and drawing things on screen via
@@ -381,10 +381,10 @@ impl Hudhook {
     fn new() -> Self {
         // Initialize minhook.
         match unsafe { MH_Initialize() } {
-            MH_STATUS::MH_OK => {},
+            MH_STATUS::MH_OK => {}
             MH_STATUS::MH_ERROR_ALREADY_INITIALIZED => {
                 warn!("Minhook already initialized");
-            },
+            }
             status @ MH_STATUS::MH_ERROR_MEMORY_ALLOC => panic!("MH_Initialize: {status:?}"),
             _ => unreachable!(),
         }
@@ -526,7 +526,8 @@ macro_rules! drmod_hudhook {
         ) {
             use ::drmod_hudhook::*;
 
-            if reason == ::drmod_hudhook::windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH {
+            if reason == ::drmod_hudhook::windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH
+            {
                 ::drmod_hudhook::tracing::trace!("DllMain()");
                 let hmodule_raw = hmodule.0 as usize;
                 ::std::thread::spawn(move || {

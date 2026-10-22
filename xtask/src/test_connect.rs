@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use drmod_protocol::{TcpMessage, make_msg};
 
-use crate::{step, util, Error, Result};
+use crate::{Error, Result, step, util};
 
 const USAGE: &str = "\
 Usage: cargo xtask test-connect [options]
@@ -143,7 +143,10 @@ fn connect(server: &str, port: u16) -> Result<TcpStream> {
     let reply = read_line(&mut stream)?;
     match serde_json::from_str::<TcpMessage>(&reply) {
         Ok(TcpMessage::IdAssigned { id }) => println!("Server response: id {id} assigned"),
-        Ok(other) => println!("Server response: {} (unexpected, but the connection is live)", type_name(&other)),
+        Ok(other) => println!(
+            "Server response: {} (unexpected, but the connection is live)",
+            type_name(&other)
+        ),
         Err(error) => {
             return Err(Error::new(format!(
                 "the server's reply is not a protocol message: {error}\n       got: {reply}"

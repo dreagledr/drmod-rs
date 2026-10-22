@@ -57,7 +57,10 @@ fn an_unknown_token_is_refused_with_its_line() {
     let refused = dsl::parse("! name=x\n0 a\n1 nosuchtoken\n").expect_err("the token is not one");
     let message = refused.message();
 
-    assert!(message.contains("line 3"), "the refusal names the line: {message}");
+    assert!(
+        message.contains("line 3"),
+        "the refusal names the line: {message}"
+    );
     assert!(
         message.contains("nosuchtoken"),
         "the refusal names the token: {message}"
@@ -85,8 +88,7 @@ fn a_stick_said_twice_on_one_line_is_refused() {
 
 #[test]
 fn an_angle_and_an_axis_on_one_line_are_refused() {
-    let refused =
-        dsl::parse("! name=x\n0 ls:0 lsx:500\n").expect_err("a line says one stick");
+    let refused = dsl::parse("! name=x\n0 ls:0 lsx:500\n").expect_err("a line says one stick");
     assert!(
         refused.message().contains("two different sticks"),
         "the refusal explains: {}",
@@ -98,10 +100,16 @@ fn an_angle_and_an_axis_on_one_line_are_refused() {
 fn a_stick_written_as_an_angle_reads_back_as_axes() {
     let document = dsl::parse("! name=x\n0 ls:90\n").expect("the angle parses");
     let input = document.commands[0].input;
-    let axes = input.left_stick.expect("the angle becomes an explicit stick");
+    let axes = input
+        .left_stick
+        .expect("the angle becomes an explicit stick");
 
     // 90 is a full press to the right: +X, no Y.
-    assert!((axes[0] - 1000.0).abs() < 0.01, "x is +1000, got {}", axes[0]);
+    assert!(
+        (axes[0] - 1000.0).abs() < 0.01,
+        "x is +1000, got {}",
+        axes[0]
+    );
     assert!(axes[1].abs() < 0.01, "y is 0, got {}", axes[1]);
 }
 
@@ -235,19 +243,31 @@ fn restart_writes_only_the_parameters_that_differ_from_the_defaults() {
 fn the_frame_projection_shows_the_tokens_the_text_wrote() {
     let frames = projection::project("! name=x\n4 ls:0:3 lt:2\n");
 
-    assert_eq!(frames.len(), 7, "four frames to the end of the three-frame run");
+    assert_eq!(
+        frames.len(),
+        7,
+        "four frames to the end of the three-frame run"
+    );
 
     // The angle fills the `ls` column for the whole run of its own duration, and the axes stay
     // blank — the table shows what the line says, not what the angle resolves to.
     for frame in &frames[4..7] {
-        assert_eq!(frame.left.angle, Some(0.0), "frame {} carries the angle", frame.frame);
+        assert_eq!(
+            frame.left.angle,
+            Some(0.0),
+            "frame {} carries the angle",
+            frame.frame
+        );
         assert_eq!(frame.left.x, None, "and no axis the line did not write");
     }
 
     // The flag has its own, shorter run: it lights frames 4 and 5 and stops — the table keeps the
     // duration the text gave each token, not a single run for the whole line.
     let lt = FlagKeys::index_of("lt").expect("lt is a column");
-    assert!(frames[4].holds(lt) && frames[5].holds(lt), "lt holds for its two frames");
+    assert!(
+        frames[4].holds(lt) && frames[5].holds(lt),
+        "lt holds for its two frames"
+    );
     assert!(!frames[6].holds(lt), "and no longer than that");
 
     // Frames 0..3 are the blank rows the text left: they exist, and hold nothing.
@@ -262,7 +282,10 @@ fn a_duration_lights_every_frame_of_its_run() {
     let lt = FlagKeys::index_of("lt").expect("lt is a column");
 
     assert_eq!(frames.len(), 3);
-    assert!(frames.iter().all(|frame| frame.holds(lt)), "all three are lit");
+    assert!(
+        frames.iter().all(|frame| frame.holds(lt)),
+        "all three are lit"
+    );
 }
 
 #[test]
@@ -283,7 +306,9 @@ fn the_two_bit_orders_agree_with_their_own_tables() {
     // The table's order: only the flags a line can spell, each its own column.
     for flag in &FlagKeys::ALL {
         assert!(
-            dsl::vocabulary().iter().any(|(token, _)| *token == flag.token),
+            dsl::vocabulary()
+                .iter()
+                .any(|(token, _)| *token == flag.token),
             "the column {} is a token the parser accepts",
             flag.token
         );
@@ -389,7 +414,10 @@ fn a_relative_text_round_trips_through_the_relative_writer() {
     );
 
     // The absolute spelling of the same document is the canonical one.
-    assert_eq!(dsl::write(&document).expect("it writes"), "! name=x\n100 a\n110 x\n115 y\n");
+    assert_eq!(
+        dsl::write(&document).expect("it writes"),
+        "! name=x\n100 a\n110 x\n115 y\n"
+    );
 }
 
 #[test]

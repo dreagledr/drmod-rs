@@ -18,8 +18,8 @@
 use std::time::{Duration, Instant};
 
 use crate::api::{GameScriptPhase, ModApi};
-use crate::script::{json, ScriptCommand, ScriptDocument};
 use crate::script::model::ScriptInput;
+use crate::script::{ScriptCommand, ScriptDocument, json};
 
 /// Long enough for a script of a handful of frames to be played and the pause to leave, short
 /// enough that a stuck menu does not hold the caller forever.

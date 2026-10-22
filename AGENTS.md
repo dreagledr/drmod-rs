@@ -52,7 +52,12 @@ segment autosplitter, TAS record/replay, an HTTP automation API, a multiplayer s
   `#[ignore]`d, so a bare `cargo test` at the root triggers them. Test only the crate you changed.
 - Smoke tests need a running game+mod or server: `cargo xtask test-api` (`--eject` unloads the DLL),
   `cargo xtask test-connect`.
-- `clippy.toml` only raises thresholds; there is no root rustfmt config.
+- `clippy.toml` only raises thresholds. Formatting is plain rustfmt defaults (`max_width = 100`)
+  with **no** `rustfmt.toml` — the vendored hudhook config (nightly-only options) was removed so
+  all crates format the same way. `cargo fmt --check` must be clean in the root workspace,
+  `drmod-tas-editor`, `xtask` and `tools/disasm`; `.gitattributes` pins `*.rs` to LF. See
+  `docs/STYLE_REVIEW.md`. `cargo xtask install-hooks` wires `.githooks/pre-commit` (a per-clone
+  `core.hooksPath`), which runs exactly those four checks on the workspaces a commit touches.
 
 ## Build automation (`cargo xtask`)
 
@@ -68,6 +73,8 @@ x64 `.cargo/config.toml` applies only if you build from inside `xtask/`). Output
 - `cargo xtask build-tools` → `out/dbdump.exe` (x64) + `out/drmod-tas.exe` (x64) + `out/drmod-tas.zip` + `out/dump-replay-input.exe` (i686)
 - `cargo xtask pack-editor [--skip-cargo]` → `out/drmod-tas-editor/` + `.zip` (always builds;
   `--skip-cargo` sets `TAS_EDITOR_SKIP_MOD_BUILD=1` for the nested call only)
+- `cargo xtask install-hooks` → `git config core.hooksPath .githooks` (per clone; the pre-commit
+  hook runs `cargo fmt --check` for the workspaces a commit touches; `--no-verify` skips it once)
 - CI release order: `cargo xtask build`, then `cargo xtask pack-editor --skip-cargo`.
 
 ## Layout

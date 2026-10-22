@@ -7,9 +7,9 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Float32Array, Int64Array, StringBuilder};
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use drmod_replay_types::{from_bytes, CameraState, EnemyState, InputUnit, PlayerState};
+use drmod_replay_types::{CameraState, EnemyState, InputUnit, PlayerState, from_bytes};
 use parquet::arrow::arrow_writer::ArrowWriter;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 
 /// Метаданные прогона из `replay_runs`.
 #[derive(Clone)]
@@ -325,7 +325,9 @@ pub(crate) fn print_recent_runs(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("prepare: {e}"))?;
     let rows: Result<Vec<(i64, String, i64, String, i64)>, _> = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
         .map_err(|e| format!("query: {e}"))?
         .collect();
     let rows = rows.map_err(|e| format!("row: {e}"))?;
@@ -334,7 +336,9 @@ pub(crate) fn print_recent_runs(conn: &Connection) -> Result<(), String> {
     } else {
         println!("  Последние прогоны:");
         for (id, kind, mission_id, started_at, count) in rows {
-            println!("    id={id} kind={kind} mission_id={mission_id} frames={count} started={started_at}");
+            println!(
+                "    id={id} kind={kind} mission_id={mission_id} frames={count} started={started_at}"
+            );
         }
     }
     Ok(())
@@ -370,7 +374,9 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
         present.join(", "),
         table
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| format!("prepare frames: {e}"))?;
+    let mut stmt = conn
+        .prepare(&sql)
+        .map_err(|e| format!("prepare frames: {e}"))?;
     let idx = |name: &str| present.iter().position(|c| *c == name);
     let i_frame = idx("frame_index").expect("frame_index колонка");
     let i_dur = idx("duration_ms").expect("duration_ms колонка");
@@ -452,23 +458,21 @@ pub(crate) fn load_frames(conn: &Connection, meta: &RunMeta) -> Result<Vec<Frame
             ),
             None => None,
         };
-        let raw_pressed = match raw_p {
-            Some(b) => Some(
-                from_bytes::<[u32; 6]>(&b)
-                    .ok_or_else(|| format!("Кадр {fi}: raw_pressed BLOB размер {} != 24", b.len()))?,
-            ),
-            None => None,
-        };
+        let raw_pressed =
+            match raw_p {
+                Some(b) => Some(from_bytes::<[u32; 6]>(&b).ok_or_else(|| {
+                    format!("Кадр {fi}: raw_pressed BLOB размер {} != 24", b.len())
+                })?),
+                None => None,
+            };
         let enemy = match enemy_b {
-            Some(b) => Some(
-                from_bytes::<EnemyState>(&b).ok_or_else(|| {
-                    format!(
-                        "Кадр {fi}: enemy BLOB размер {} != {}",
-                        b.len(),
-                        std::mem::size_of::<EnemyState>()
-                    )
-                })?,
-            ),
+            Some(b) => Some(from_bytes::<EnemyState>(&b).ok_or_else(|| {
+                format!(
+                    "Кадр {fi}: enemy BLOB размер {} != {}",
+                    b.len(),
+                    std::mem::size_of::<EnemyState>()
+                )
+            })?),
             None => None,
         };
         frames.push(Frame {
@@ -543,7 +547,11 @@ pub(crate) fn write_parquet(path: &Path, rows: &[Vec<Cell>]) -> Result<(), Strin
                     match &row[ci] {
                         Cell::Int(v) => b.append_value(*v),
                         Cell::Null => b.append_null(),
-                        other => return Err(format!("колонка {name}: ожидался Int, получено {other:?}")),
+                        other => {
+                            return Err(format!(
+                                "колонка {name}: ожидался Int, получено {other:?}"
+                            ));
+                        }
                     }
                 }
                 arrays.push(Arc::new(b.finish()));
@@ -554,7 +562,11 @@ pub(crate) fn write_parquet(path: &Path, rows: &[Vec<Cell>]) -> Result<(), Strin
                     match &row[ci] {
                         Cell::Float(v) => b.append_value(*v),
                         Cell::Null => b.append_null(),
-                        other => return Err(format!("колонка {name}: ожидался Float, получено {other:?}")),
+                        other => {
+                            return Err(format!(
+                                "колонка {name}: ожидался Float, получено {other:?}"
+                            ));
+                        }
                     }
                 }
                 arrays.push(Arc::new(b.finish()));
@@ -565,7 +577,11 @@ pub(crate) fn write_parquet(path: &Path, rows: &[Vec<Cell>]) -> Result<(), Strin
                     match &row[ci] {
                         Cell::Str(s) => b.append_value(s),
                         Cell::Null => b.append_null(),
-                        other => return Err(format!("колонка {name}: ожидалась строка, получено {other:?}")),
+                        other => {
+                            return Err(format!(
+                                "колонка {name}: ожидалась строка, получено {other:?}"
+                            ));
+                        }
                     }
                 }
                 arrays.push(Arc::new(b.finish()));
@@ -577,7 +593,9 @@ pub(crate) fn write_parquet(path: &Path, rows: &[Vec<Cell>]) -> Result<(), Strin
     let file = File::create(path).map_err(|e| format!("create {}: {e}", path.display()))?;
     let mut writer =
         ArrowWriter::try_new(file, schema, None).map_err(|e| format!("parquet: {e}"))?;
-    writer.write(&batch).map_err(|e| format!("parquet write: {e}"))?;
+    writer
+        .write(&batch)
+        .map_err(|e| format!("parquet write: {e}"))?;
     writer.close().map_err(|e| format!("parquet close: {e}"))?;
     Ok(())
 }
@@ -588,7 +606,8 @@ fn read_parquet(path: &Path) -> Result<RecordBatch, String> {
     use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
     let file = File::open(path).map_err(|e| format!("open: {e}"))?;
-    let builder = ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| format!("reader: {e}"))?;
+    let builder =
+        ParquetRecordBatchReaderBuilder::try_new(file).map_err(|e| format!("reader: {e}"))?;
     let mut reader = builder.build().map_err(|e| format!("build: {e}"))?;
     reader
         .next()
@@ -691,7 +710,9 @@ mod tests {
             pos: [1.0, 2.0, 3.0],
             look_at: [4.0, 5.0, 6.0],
             roll: 0.5,
-            view_proj: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6],
+            view_proj: [
+                0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6,
+            ],
         };
         let raw = [1u32, 2, 3, 4, 5, 6];
         let enemy = EnemyState {
@@ -761,7 +782,10 @@ mod tests {
         let content = std::fs::read_to_string(&csv_path).unwrap();
         let mut lines = content.lines();
         let header = lines.next().unwrap();
-        assert!(header.starts_with("replay_id,kind,mission_id,"), "header: {header}");
+        assert!(
+            header.starts_with("replay_id,kind,mission_id,"),
+            "header: {header}"
+        );
         let first: Vec<&str> = lines.next().unwrap().split(',').collect();
         assert_eq!(first.len(), SCHEMA.len());
         assert_eq!(first[col_idx("replay_id")], "1");
@@ -866,7 +890,14 @@ mod tests {
         let (input, state, camera, _, _) = sample_frame(0);
         conn.execute(
             sql,
-            params![rid, 0i64, 0i64, to_bytes(&input), to_bytes(&state), to_bytes(&camera)],
+            params![
+                rid,
+                0i64,
+                0i64,
+                to_bytes(&input),
+                to_bytes(&state),
+                to_bytes(&camera)
+            ],
         )
         .unwrap();
 

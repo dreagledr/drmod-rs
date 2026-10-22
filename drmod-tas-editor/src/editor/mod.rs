@@ -44,7 +44,7 @@ use crate::api::{GameStatus, ModApi, PlaybackRules};
 use crate::buffers::{self, Buffers};
 use crate::menu_settler;
 use crate::mod_install::{self, ModState, Payload};
-use crate::script::{dsl, json, ScriptDocument, ScriptTextStatus};
+use crate::script::{ScriptDocument, ScriptTextStatus, dsl, json};
 use crate::settings::Settings;
 use crate::steam;
 use crate::workspace::{self, Listing, ScriptEntry};
@@ -205,10 +205,7 @@ impl Editor {
     /// the game folder's state.
     pub fn new() -> Self {
         let settings = Settings::load();
-        let folder = settings
-            .folder
-            .clone()
-            .or_else(Settings::first_folder);
+        let folder = settings.folder.clone().or_else(Settings::first_folder);
 
         let payload = Payload::embedded();
         let game_folder = settings.game_folder.clone().or_else(steam::game_folder);
@@ -256,7 +253,11 @@ impl Editor {
         // A selection that the listing no longer holds — a deleted file, or a folder the user has
         // switched away from — is dropped rather than left pointing at nothing.
         if let Some(selected) = &self.selected
-            && self.listing.scripts.iter().all(|script| &script.path != selected)
+            && self
+                .listing
+                .scripts
+                .iter()
+                .all(|script| &script.path != selected)
         {
             self.selected = None;
         }
@@ -265,7 +266,10 @@ impl Editor {
     /// The selected script, if the listing still holds it.
     pub fn selected(&self) -> Option<&ScriptEntry> {
         let path = self.selected.as_ref()?;
-        self.listing.scripts.iter().find(|script| &script.path == path)
+        self.listing
+            .scripts
+            .iter()
+            .find(|script| &script.path == path)
     }
 
     /// The pane that installs the mod, as the workspace pane paints it. Built per frame from the
@@ -430,10 +434,7 @@ impl Editor {
 
         if !steam::is_game_folder(Some(folder.as_path())) {
             self.mod_state = ModState::NoGameFolder;
-            self.mod_message = Some(format!(
-                "That folder holds no {}.",
-                steam::GAME_EXE_NAME
-            ));
+            self.mod_message = Some(format!("That folder holds no {}.", steam::GAME_EXE_NAME));
             return;
         }
 
@@ -688,7 +689,9 @@ impl Editor {
         }
 
         self.headless_run = id;
-        let applied = self.api.post("/render", Some(&crate::api::ApiJson::headless(true)));
+        let applied = self
+            .api
+            .post("/render", Some(&crate::api::ApiJson::headless(true)));
         if !applied.ok() {
             self.run_error = Some(format!("headless: {}", applied.message()));
         }
@@ -708,8 +711,9 @@ impl Editor {
             return;
         }
 
-        let mut dialog = dear_file_browser::FileDialog::new(dear_file_browser::DialogMode::PickFolder)
-            .backend(dear_file_browser::Backend::Native);
+        let mut dialog =
+            dear_file_browser::FileDialog::new(dear_file_browser::DialogMode::PickFolder)
+                .backend(dear_file_browser::Backend::Native);
 
         let start = match pending {
             PendingFolder::Workspace => self.folder.clone(),
@@ -835,9 +839,8 @@ fn run_script(url: &str, rules: &PlaybackRules, document: &ScriptDocument) -> Ru
 
     // A warning, not a stop: the script runs either way, and what may be lost is the menu input
     // the script's own restart plays.
-    let mut warning = (!crate::game_window::focus_and_settle(350)).then(|| {
-        "The game window did not take the foreground — menu input may be lost".to_owned()
-    });
+    let mut warning = (!crate::game_window::focus_and_settle(350))
+        .then(|| "The game window did not take the foreground — menu input may be lost".to_owned());
 
     // Out of the pause menu, or out of a fail menu, before the script arms — otherwise the menu
     // swallows the keys the script's own restart plays.

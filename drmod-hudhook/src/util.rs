@@ -1,4 +1,4 @@
-﻿//! General-purpose utilities. These are used across the [`crate`] but have
+//! General-purpose utilities. These are used across the [`crate`] but have
 //! proven useful in client code as well.
 
 use std::ffi::{c_void, OsString};
@@ -174,7 +174,11 @@ pub unsafe fn readable_region<T>(ptr: *const T, limit: usize) -> &'static [T] {
         );
 
         (unsafe {
-            VirtualQuery(Some(ptr), memory_basic_info, size_of::<MEMORY_BASIC_INFORMATION>())
+            VirtualQuery(
+                Some(ptr),
+                memory_basic_info,
+                size_of::<MEMORY_BASIC_INFORMATION>(),
+            )
         } != 0)
             && (memory_basic_info.Protect & PAGE_READABLE).0 != 0
     }

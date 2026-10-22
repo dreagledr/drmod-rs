@@ -106,7 +106,14 @@ pub fn draw_skeleton_overlay(ui: &Ui, bones: &[BonePos], camera_ptr: *const u8, 
 
     let projections: Vec<Option<([f32; 2], f32)>> = bones
         .iter()
-        .map(|b| world_to_screen((b.x, b.y, b.z), &view_proj, [0.0, 0.0, sw, sh], (cam_x, cam_y, cam_z)))
+        .map(|b| {
+            world_to_screen(
+                (b.x, b.y, b.z),
+                &view_proj,
+                [0.0, 0.0, sw, sh],
+                (cam_x, cam_y, cam_z),
+            )
+        })
         .collect();
 
     let draw_list = ui.get_foreground_draw_list();
@@ -171,8 +178,7 @@ pub fn bones_to_wire(bones: &[BonePos]) -> Vec<SkeletonBone> {
     bones
         .iter()
         .map(|b| {
-            let parent_ptr =
-                unsafe { *((b.ptr as *const u8).add(BONE_PARENT) as *const usize) };
+            let parent_ptr = unsafe { *((b.ptr as *const u8).add(BONE_PARENT) as *const usize) };
             let parent_index = if parent_ptr == 0 {
                 -1i16
             } else {
@@ -207,12 +213,7 @@ pub fn build_edges_from_wire(bones: &[SkeletonBone]) -> Vec<(usize, usize)> {
 }
 
 /// Рисует скелет удалённого игрока как 2D-оверлей.
-pub fn draw_remote_skeleton(
-    ui: &Ui,
-    bones: &[SkeletonBone],
-    camera_ptr: *const u8,
-    color: u32,
-) {
+pub fn draw_remote_skeleton(ui: &Ui, bones: &[SkeletonBone], camera_ptr: *const u8, color: u32) {
     if bones.is_empty() || camera_ptr.is_null() {
         return;
     }

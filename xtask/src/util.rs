@@ -11,7 +11,9 @@ use crate::{Error, Result};
 /// holds the manifest that lists the members) — a moved crate should say so instead of writing
 /// artifacts into `<repo>/..`.
 pub fn workspace_root() -> Option<PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?.to_path_buf();
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()?
+        .to_path_buf();
 
     let manifest = root.join("Cargo.toml");
     let contents = std::fs::read_to_string(&manifest).ok()?;
@@ -70,7 +72,8 @@ impl<'a> Args<'a> {
 
 /// Reads a whole file, naming it in the error.
 pub fn read(path: &Path) -> Result<Vec<u8>> {
-    std::fs::read(path).map_err(|error| Error::new(format!("cannot read {}: {error}", path.display())))
+    std::fs::read(path)
+        .map_err(|error| Error::new(format!("cannot read {}: {error}", path.display())))
 }
 
 /// Checks that a file exists, or fails with the hint that says how to produce it.
@@ -171,8 +174,8 @@ fn collect(dir: &Path, into: &mut Vec<PathBuf>) -> Result<()> {
         .map_err(|error| Error::new(format!("cannot read {}: {error}", dir.display())))?;
 
     for entry in entries {
-        let entry = entry
-            .map_err(|error| Error::new(format!("cannot read {}: {error}", dir.display())))?;
+        let entry =
+            entry.map_err(|error| Error::new(format!("cannot read {}: {error}", dir.display())))?;
         let path = entry.path();
         let kind = entry
             .file_type()

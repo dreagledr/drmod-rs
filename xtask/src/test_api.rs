@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use drmod_replay_types::script::{ScriptCommand, ScriptInput, ScriptRequest, ScriptTrigger};
 
-use crate::{step, util, Error, Result};
+use crate::{Error, Result, step, util};
 
 const USAGE: &str = "\
 Usage: cargo xtask test-api [options]
@@ -50,7 +50,9 @@ struct Report {
 
 impl Report {
     fn new() -> Self {
-        Self { failures: Vec::new() }
+        Self {
+            failures: Vec::new(),
+        }
     }
 
     fn pass(&self, name: &str) {
@@ -280,7 +282,11 @@ fn state(api: &Api, report: &mut Report) {
         Err(error) => return report.error("/state unreachable", error),
     };
 
-    report.equal("player.found", &value["player"]["found"], &serde_json::json!(true));
+    report.equal(
+        "player.found",
+        &value["player"]["found"],
+        &serde_json::json!(true),
+    );
 
     let mission = value["mission_name"].as_str().unwrap_or_default();
     report.is_true("mission_name non-empty", !mission.is_empty());
@@ -337,7 +343,10 @@ fn logs(api: &Api, report: &mut Report, id: &str) {
 
     match api.get_json(&format!("/logs?script_id={id}&limit=5")) {
         Ok(value) => {
-            report.is_true("count >= 0", value["count"].as_i64().is_some_and(|n| n >= 0));
+            report.is_true(
+                "count >= 0",
+                value["count"].as_i64().is_some_and(|n| n >= 0),
+            );
             report.is_true("frames is array", value["frames"].is_array());
         }
         Err(error) => report.error("/logs", error),
@@ -460,7 +469,11 @@ fn headless(api: &Api, report: &mut Report) {
     };
 
     report.is_true("state.render present", !before["render"].is_null());
-    report.equal("render baseline off", &before["render"]["headless"], &serde_json::json!(false));
+    report.equal(
+        "render baseline off",
+        &before["render"]["headless"],
+        &serde_json::json!(false),
+    );
     let cap_before = before["fps_cap"]["cap"].clone();
 
     // A closure so the "whatever failed, leave rendering back on" tail is written once: a headless
@@ -468,9 +481,18 @@ fn headless(api: &Api, report: &mut Report) {
     let outcome = (|| -> std::result::Result<(), String> {
         let on = api.post_json("/render", r#"{"headless": true}"#)?;
         report.is_true("headless on", on["headless"] == serde_json::json!(true));
-        report.is_true("headless took the overlay", on["skip_overlay"] == serde_json::json!(true));
-        report.is_true("headless leaves present alone", on["skip_present"] == serde_json::json!(false));
-        report.is_true("headless took the geometry", on["skip_draw"] == serde_json::json!(true));
+        report.is_true(
+            "headless took the overlay",
+            on["skip_overlay"] == serde_json::json!(true),
+        );
+        report.is_true(
+            "headless leaves present alone",
+            on["skip_present"] == serde_json::json!(false),
+        );
+        report.is_true(
+            "headless took the geometry",
+            on["skip_draw"] == serde_json::json!(true),
+        );
 
         let during = api.get_json("/state")?;
         report.equal(
@@ -478,22 +500,41 @@ fn headless(api: &Api, report: &mut Report) {
             &during["render"]["headless"],
             &serde_json::json!(true),
         );
-        report.equal("cap lifted", &during["fps_cap"]["cap"], &serde_json::json!("off"));
+        report.equal(
+            "cap lifted",
+            &during["fps_cap"]["cap"],
+            &serde_json::json!("off"),
+        );
 
         // The picture freezes for half a second while headless is on — put it back.
         std::thread::sleep(Duration::from_millis(500));
 
         let reset = api.post_json("/render", r#"{"reset": true}"#)?;
-        report.is_true("reset: headless off", reset["headless"] == serde_json::json!(false));
-        report.is_true("reset: overlay", reset["skip_overlay"] == serde_json::json!(false));
-        report.is_true("reset: present", reset["skip_present"] == serde_json::json!(false));
-        report.is_true("reset: draw", reset["skip_draw"] == serde_json::json!(false));
+        report.is_true(
+            "reset: headless off",
+            reset["headless"] == serde_json::json!(false),
+        );
+        report.is_true(
+            "reset: overlay",
+            reset["skip_overlay"] == serde_json::json!(false),
+        );
+        report.is_true(
+            "reset: present",
+            reset["skip_present"] == serde_json::json!(false),
+        );
+        report.is_true(
+            "reset: draw",
+            reset["skip_draw"] == serde_json::json!(false),
+        );
 
         let after = api.get_json("/state")?;
         report.equal("cap came back", &after["fps_cap"]["cap"], &cap_before);
 
         let granular = api.post_json("/render", r#"{"skip_present": true}"#)?;
-        report.is_true("granular skip_present", granular["skip_present"] == serde_json::json!(true));
+        report.is_true(
+            "granular skip_present",
+            granular["skip_present"] == serde_json::json!(true),
+        );
         report.is_true(
             "granular did not enable headless",
             granular["headless"] == serde_json::json!(false),
@@ -524,13 +565,21 @@ fn headless(api: &Api, report: &mut Report) {
 /// blocking; the point is the server's behaviour, not the client's throughput.
 fn load_test(api: &Api, report: &mut Report) {
     println!();
-    step(&format!("Step 12: load test ({PARALLEL_REQUESTS} parallel /state)"));
+    step(&format!(
+        "Step 12: load test ({PARALLEL_REQUESTS} parallel /state)"
+    ));
 
     let workers = 4;
     let per_worker = PARALLEL_REQUESTS / workers;
     let oks: usize = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..workers)
-            .map(|_| scope.spawn(|| (0..per_worker).filter(|_| api.get("/state").is_ok()).count()))
+            .map(|_| {
+                scope.spawn(|| {
+                    (0..per_worker)
+                        .filter(|_| api.get("/state").is_ok())
+                        .count()
+                })
+            })
             .collect();
 
         handles
@@ -550,7 +599,11 @@ fn eject_check(api: &Api, report: &mut Report) {
     step("Step 13: POST /eject");
 
     match api.post_json("/eject", "") {
-        Ok(value) => report.equal("ejecting response", &value["ejecting"], &serde_json::json!(true)),
+        Ok(value) => report.equal(
+            "ejecting response",
+            &value["ejecting"],
+            &serde_json::json!(true),
+        ),
         Err(error) => return report.error("/eject", error),
     }
 

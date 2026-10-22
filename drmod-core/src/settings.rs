@@ -67,8 +67,9 @@ pub(crate) fn load_all(conn: &Connection) -> HashMap<String, String> {
     let Ok(mut stmt) = conn.prepare("SELECT key, value FROM settings") else {
         return map;
     };
-    let Ok(rows) = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
-    else {
+    let Ok(rows) = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    }) else {
         return map;
     };
     for (k, v) in rows.flatten() {

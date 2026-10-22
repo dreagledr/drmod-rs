@@ -106,7 +106,11 @@ fn a_frame_cap_is_remembered_by_the_panels_own_word() {
     let folder = TempFolder::new("caps");
     let file = folder.file();
 
-    for cap in [FpsCapMode::Default, FpsCapMode::Unlimited, FpsCapMode::Custom] {
+    for cap in [
+        FpsCapMode::Default,
+        FpsCapMode::Unlimited,
+        FpsCapMode::Custom,
+    ] {
         let settings = Settings {
             rules: PlaybackRules {
                 cap,
@@ -127,10 +131,16 @@ fn the_mods_own_cap_spellings_stay_readable() {
     let folder = TempFolder::new("legacy-caps");
 
     let file = folder.write("cap=off\n");
-    assert_eq!(Settings::load_from(Some(&file)).rules.cap, FpsCapMode::Unlimited);
+    assert_eq!(
+        Settings::load_from(Some(&file)).rules.cap,
+        FpsCapMode::Unlimited
+    );
 
     let file = folder.write("cap=game\n");
-    assert_eq!(Settings::load_from(Some(&file)).rules.cap, FpsCapMode::Default);
+    assert_eq!(
+        Settings::load_from(Some(&file)).rules.cap,
+        FpsCapMode::Default
+    );
 }
 
 #[test]

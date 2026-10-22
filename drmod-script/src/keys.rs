@@ -32,32 +32,195 @@ pub struct CommandKeys;
 
 impl CommandKeys {
     pub const ALL: [CommandKey; 26] = [
-        CommandKey { key: "forward", label: "fu", get: |i| i.forward, set: |i| ScriptInput { forward: true, ..i } },
-        CommandKey { key: "backward", label: "fd", get: |i| i.backward, set: |i| ScriptInput { backward: true, ..i } },
-        CommandKey { key: "left", label: "fl", get: |i| i.left, set: |i| ScriptInput { left: true, ..i } },
-        CommandKey { key: "right", label: "fr", get: |i| i.right, set: |i| ScriptInput { right: true, ..i } },
-        CommandKey { key: "jump", label: "a", get: |i| i.jump, set: |i| ScriptInput { jump: true, ..i } },
-        CommandKey { key: "light_attack", label: "x", get: |i| i.light_attack, set: |i| ScriptInput { light_attack: true, ..i } },
-        CommandKey { key: "heavy_attack", label: "y", get: |i| i.heavy_attack, set: |i| ScriptInput { heavy_attack: true, ..i } },
-        CommandKey { key: "ripper", label: "lr", get: |i| i.ripper, set: |i| ScriptInput { ripper: true, ..i } },
-        CommandKey { key: "blade", label: "lt", get: |i| i.blade, set: |i| ScriptInput { blade: true, ..i } },
-        CommandKey { key: "ninja_run", label: "rt", get: |i| i.ninja_run, set: |i| ScriptInput { ninja_run: true, ..i } },
-        CommandKey { key: "walk", label: "wk", get: |i| i.walk, set: |i| ScriptInput { walk: true, ..i } },
-        CommandKey { key: "dodge", label: "ax", get: |i| i.dodge, set: |i| ScriptInput { dodge: true, ..i } },
-        CommandKey { key: "lock_on", label: "rb", get: |i| i.lock_on, set: |i| ScriptInput { lock_on: true, ..i } },
-        CommandKey { key: "subweapon", label: "lb", get: |i| i.subweapon, set: |i| ScriptInput { subweapon: true, ..i } },
-        CommandKey { key: "item", label: "dd", get: |i| i.item, set: |i| ScriptInput { item: true, ..i } },
-        CommandKey { key: "ar_mode", label: "du", get: |i| i.ar_mode, set: |i| ScriptInput { ar_mode: true, ..i } },
-        CommandKey { key: "weapon_select", label: "dl", get: |i| i.weapon_select, set: |i| ScriptInput { weapon_select: true, ..i } },
-        CommandKey { key: "codec", label: "cd", get: |i| i.codec, set: |i| ScriptInput { codec: true, ..i } },
-        CommandKey { key: "zandatsu", label: "b", get: |i| i.zandatsu, set: |i| ScriptInput { zandatsu: true, ..i } },
-        CommandKey { key: "camera_reset", label: "r", get: |i| i.camera_reset, set: |i| ScriptInput { camera_reset: true, ..i } },
-        CommandKey { key: "pause", label: "esc", get: |i| i.pause, set: |i| ScriptInput { pause: true, ..i } },
-        CommandKey { key: "confirm", label: "ok", get: |i| i.confirm, set: |i| ScriptInput { confirm: true, ..i } },
-        CommandKey { key: "menu_up", label: "mu", get: |i| i.menu_up, set: |i| ScriptInput { menu_up: true, ..i } },
-        CommandKey { key: "menu_down", label: "md", get: |i| i.menu_down, set: |i| ScriptInput { menu_down: true, ..i } },
-        CommandKey { key: "menu_left", label: "ml", get: |i| i.menu_left, set: |i| ScriptInput { menu_left: true, ..i } },
-        CommandKey { key: "menu_right", label: "mr", get: |i| i.menu_right, set: |i| ScriptInput { menu_right: true, ..i } },
+        CommandKey {
+            key: "forward",
+            label: "fu",
+            get: |i| i.forward,
+            set: |i| ScriptInput { forward: true, ..i },
+        },
+        CommandKey {
+            key: "backward",
+            label: "fd",
+            get: |i| i.backward,
+            set: |i| ScriptInput {
+                backward: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "left",
+            label: "fl",
+            get: |i| i.left,
+            set: |i| ScriptInput { left: true, ..i },
+        },
+        CommandKey {
+            key: "right",
+            label: "fr",
+            get: |i| i.right,
+            set: |i| ScriptInput { right: true, ..i },
+        },
+        CommandKey {
+            key: "jump",
+            label: "a",
+            get: |i| i.jump,
+            set: |i| ScriptInput { jump: true, ..i },
+        },
+        CommandKey {
+            key: "light_attack",
+            label: "x",
+            get: |i| i.light_attack,
+            set: |i| ScriptInput {
+                light_attack: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "heavy_attack",
+            label: "y",
+            get: |i| i.heavy_attack,
+            set: |i| ScriptInput {
+                heavy_attack: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "ripper",
+            label: "lr",
+            get: |i| i.ripper,
+            set: |i| ScriptInput { ripper: true, ..i },
+        },
+        CommandKey {
+            key: "blade",
+            label: "lt",
+            get: |i| i.blade,
+            set: |i| ScriptInput { blade: true, ..i },
+        },
+        CommandKey {
+            key: "ninja_run",
+            label: "rt",
+            get: |i| i.ninja_run,
+            set: |i| ScriptInput {
+                ninja_run: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "walk",
+            label: "wk",
+            get: |i| i.walk,
+            set: |i| ScriptInput { walk: true, ..i },
+        },
+        CommandKey {
+            key: "dodge",
+            label: "ax",
+            get: |i| i.dodge,
+            set: |i| ScriptInput { dodge: true, ..i },
+        },
+        CommandKey {
+            key: "lock_on",
+            label: "rb",
+            get: |i| i.lock_on,
+            set: |i| ScriptInput { lock_on: true, ..i },
+        },
+        CommandKey {
+            key: "subweapon",
+            label: "lb",
+            get: |i| i.subweapon,
+            set: |i| ScriptInput {
+                subweapon: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "item",
+            label: "dd",
+            get: |i| i.item,
+            set: |i| ScriptInput { item: true, ..i },
+        },
+        CommandKey {
+            key: "ar_mode",
+            label: "du",
+            get: |i| i.ar_mode,
+            set: |i| ScriptInput { ar_mode: true, ..i },
+        },
+        CommandKey {
+            key: "weapon_select",
+            label: "dl",
+            get: |i| i.weapon_select,
+            set: |i| ScriptInput {
+                weapon_select: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "codec",
+            label: "cd",
+            get: |i| i.codec,
+            set: |i| ScriptInput { codec: true, ..i },
+        },
+        CommandKey {
+            key: "zandatsu",
+            label: "b",
+            get: |i| i.zandatsu,
+            set: |i| ScriptInput {
+                zandatsu: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "camera_reset",
+            label: "r",
+            get: |i| i.camera_reset,
+            set: |i| ScriptInput {
+                camera_reset: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "pause",
+            label: "esc",
+            get: |i| i.pause,
+            set: |i| ScriptInput { pause: true, ..i },
+        },
+        CommandKey {
+            key: "confirm",
+            label: "ok",
+            get: |i| i.confirm,
+            set: |i| ScriptInput { confirm: true, ..i },
+        },
+        CommandKey {
+            key: "menu_up",
+            label: "mu",
+            get: |i| i.menu_up,
+            set: |i| ScriptInput { menu_up: true, ..i },
+        },
+        CommandKey {
+            key: "menu_down",
+            label: "md",
+            get: |i| i.menu_down,
+            set: |i| ScriptInput {
+                menu_down: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "menu_left",
+            label: "ml",
+            get: |i| i.menu_left,
+            set: |i| ScriptInput {
+                menu_left: true,
+                ..i
+            },
+        },
+        CommandKey {
+            key: "menu_right",
+            label: "mr",
+            get: |i| i.menu_right,
+            set: |i| ScriptInput {
+                menu_right: true,
+                ..i
+            },
+        },
     ];
 
     /// The index of an `input` key, or `None` for one that is not a boolean.
@@ -75,8 +238,7 @@ impl CommandKeys {
 pub fn command_mask(keys: &[&str]) -> u32 {
     let mut mask = 0u32;
     for key in keys {
-        let bit = CommandKeys::index_of(key)
-            .unwrap_or_else(|| panic!("unknown input key '{key}'"));
+        let bit = CommandKeys::index_of(key).unwrap_or_else(|| panic!("unknown input key '{key}'"));
         mask |= 1u32 << bit;
     }
 
@@ -100,28 +262,94 @@ pub struct FlagKeys;
 impl FlagKeys {
     /// The token order of the DSL, which is also the order a frame line writes its tokens in.
     pub const ALL: [FlagKey; 22] = [
-        FlagKey { token: "a", key: "jump" },
-        FlagKey { token: "x", key: "light_attack" },
-        FlagKey { token: "y", key: "heavy_attack" },
-        FlagKey { token: "lr", key: "ripper" },
-        FlagKey { token: "lt", key: "blade" },
-        FlagKey { token: "rt", key: "ninja_run" },
-        FlagKey { token: "wk", key: "walk" },
-        FlagKey { token: "ax", key: "dodge" },
-        FlagKey { token: "rb", key: "lock_on" },
-        FlagKey { token: "lb", key: "subweapon" },
-        FlagKey { token: "dd", key: "item" },
-        FlagKey { token: "du", key: "ar_mode" },
-        FlagKey { token: "dl", key: "weapon_select" },
-        FlagKey { token: "cd", key: "codec" },
-        FlagKey { token: "b", key: "zandatsu" },
-        FlagKey { token: "r", key: "camera_reset" },
-        FlagKey { token: "esc", key: "pause" },
-        FlagKey { token: "ok", key: "confirm" },
-        FlagKey { token: "mu", key: "menu_up" },
-        FlagKey { token: "md", key: "menu_down" },
-        FlagKey { token: "ml", key: "menu_left" },
-        FlagKey { token: "mr", key: "menu_right" },
+        FlagKey {
+            token: "a",
+            key: "jump",
+        },
+        FlagKey {
+            token: "x",
+            key: "light_attack",
+        },
+        FlagKey {
+            token: "y",
+            key: "heavy_attack",
+        },
+        FlagKey {
+            token: "lr",
+            key: "ripper",
+        },
+        FlagKey {
+            token: "lt",
+            key: "blade",
+        },
+        FlagKey {
+            token: "rt",
+            key: "ninja_run",
+        },
+        FlagKey {
+            token: "wk",
+            key: "walk",
+        },
+        FlagKey {
+            token: "ax",
+            key: "dodge",
+        },
+        FlagKey {
+            token: "rb",
+            key: "lock_on",
+        },
+        FlagKey {
+            token: "lb",
+            key: "subweapon",
+        },
+        FlagKey {
+            token: "dd",
+            key: "item",
+        },
+        FlagKey {
+            token: "du",
+            key: "ar_mode",
+        },
+        FlagKey {
+            token: "dl",
+            key: "weapon_select",
+        },
+        FlagKey {
+            token: "cd",
+            key: "codec",
+        },
+        FlagKey {
+            token: "b",
+            key: "zandatsu",
+        },
+        FlagKey {
+            token: "r",
+            key: "camera_reset",
+        },
+        FlagKey {
+            token: "esc",
+            key: "pause",
+        },
+        FlagKey {
+            token: "ok",
+            key: "confirm",
+        },
+        FlagKey {
+            token: "mu",
+            key: "menu_up",
+        },
+        FlagKey {
+            token: "md",
+            key: "menu_down",
+        },
+        FlagKey {
+            token: "ml",
+            key: "menu_left",
+        },
+        FlagKey {
+            token: "mr",
+            key: "menu_right",
+        },
     ];
 
     /// The bit of a flag token, or `None`.

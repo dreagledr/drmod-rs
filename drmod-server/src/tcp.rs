@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::mock::{remove_mock, spawn_mock};
 use crate::system::{Client, System};
 use crate::{MOCK_ID, MOCK_NAME};
-use drmod_protocol::{make_msg, PositionPacket, TcpMessage};
+use drmod_protocol::{PositionPacket, TcpMessage, make_msg};
 
 pub(crate) async fn handle_tcp(stream: TcpStream, addr: SocketAddr, system: Arc<System>) {
     let id = Uuid::new_v4().as_fields().0; // u32

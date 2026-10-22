@@ -93,7 +93,11 @@ impl MhHook {
         let mut trampoline = null_mut();
         MH_CreateHook(addr, hook_impl, &mut trampoline).ok_context("MH_CreateHook")?;
 
-        Ok(Self { addr, hook_impl, trampoline })
+        Ok(Self {
+            addr,
+            hook_impl,
+            trampoline,
+        })
     }
 
     pub fn trampoline(&self) -> *mut c_void {

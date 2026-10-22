@@ -1,5 +1,7 @@
 use crate::segment::Vec3;
-use drmod_protocol::{make_msg, parse_udp, PositionPacket, SkeletonBone, SkeletonPacket, TcpMessage, UdpPacket};
+use drmod_protocol::{
+    PositionPacket, SkeletonBone, SkeletonPacket, TcpMessage, UdpPacket, make_msg, parse_udp,
+};
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs, UdpSocket};
 use std::sync::mpsc;
@@ -73,9 +75,7 @@ impl NetClient {
         let (tx, rx) = mpsc::channel();
 
         // Клонируем TCP для потока, оригинал оставляем в NetClient для shutdown в Drop
-        let mut tcp_clone = tcp
-            .try_clone()
-            .map_err(|e| format!("tcp clone: {}", e))?;
+        let mut tcp_clone = tcp.try_clone().map_err(|e| format!("tcp clone: {}", e))?;
 
         // Запускаем TCP-поток чтения
         let tcp_handle = {
@@ -88,9 +88,7 @@ impl NetClient {
                         if byte[0] == 0 {
                             if let Ok(msg) = serde_json::from_slice::<TcpMessage>(&buf) {
                                 let event = match msg {
-                                    TcpMessage::IdAssigned { id } => {
-                                        Some(TcpEvent::IdAssigned(id))
-                                    }
+                                    TcpMessage::IdAssigned { id } => Some(TcpEvent::IdAssigned(id)),
                                     TcpMessage::PlayerConnected {
                                         id,
                                         name,
@@ -107,9 +105,10 @@ impl NetClient {
                                     _ => None,
                                 };
                                 if let Some(event) = event
-                                    && tx.send(event).is_err() {
-                                        break;
-                                    }
+                                    && tx.send(event).is_err()
+                                {
+                                    break;
+                                }
                             }
                             buf.clear();
                         } else {
@@ -228,10 +227,8 @@ impl NetClient {
                             if packet.id == self.my_id {
                                 continue;
                             }
-                            if let Some(rp) = self
-                                .remote_players
-                                .iter_mut()
-                                .find(|p| p.id == packet.id)
+                            if let Some(rp) =
+                                self.remote_players.iter_mut().find(|p| p.id == packet.id)
                             {
                                 rp.pos = Vec3 {
                                     x: packet.pos_x,
@@ -263,10 +260,8 @@ impl NetClient {
                             if skel.id == self.my_id {
                                 continue;
                             }
-                            if let Some(rp) = self
-                                .remote_players
-                                .iter_mut()
-                                .find(|p| p.id == skel.id)
+                            if let Some(rp) =
+                                self.remote_players.iter_mut().find(|p| p.id == skel.id)
                             {
                                 rp.skeleton = skel.bones;
                                 rp.last_update = Instant::now();

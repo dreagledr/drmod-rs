@@ -13,9 +13,9 @@
 
 use dear_app::imgui::Ui;
 
-use crate::editor::workspace_panel::WorkspaceActions;
 use crate::editor::Editor;
-use crate::mod_install::{ModState, ASI_NAME, LOADER_PATH, LOADER_URL, PLUGIN_DIR};
+use crate::editor::workspace_panel::WorkspaceActions;
+use crate::mod_install::{ASI_NAME, LOADER_PATH, LOADER_URL, ModState, PLUGIN_DIR};
 
 /// The install panel: where the game is, what its folder holds, and the one button that changes it.
 pub fn draw(ui: &Ui, editor: &Editor, actions: &mut WorkspaceActions) {

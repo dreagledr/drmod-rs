@@ -3,7 +3,7 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::time::{Duration, interval};
 
 use crate::system::System;
-use drmod_protocol::{make_msg, TcpMessage};
+use drmod_protocol::{TcpMessage, make_msg};
 
 mod http;
 mod mock;
@@ -40,7 +40,8 @@ async fn main() {
     let enable_mock = args.iter().any(|a| a == "--mock");
 
     let public_addr = {
-        let mut addr = std::env::var("PUBLIC_ADDR").unwrap_or_else(|_| String::from("localhost:5222"));
+        let mut addr =
+            std::env::var("PUBLIC_ADDR").unwrap_or_else(|_| String::from("localhost:5222"));
         let mut i = 1;
         while i < args.len() {
             if args[i] == "--public-addr" && i + 1 < args.len() {

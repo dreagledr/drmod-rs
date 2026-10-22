@@ -96,8 +96,9 @@ unsafe extern "system" fn dx9_present_impl(
 ) -> HRESULT {
     let _hook_ejection_guard = HOOK_EJECTION_BARRIER.acquire_ejection_guard();
 
-    let Trampolines { dx9_present, .. } =
-        TRAMPOLINES.get().expect("DirectX 9 trampolines uninitialized");
+    let Trampolines { dx9_present, .. } = TRAMPOLINES
+        .get()
+        .expect("DirectX 9 trampolines uninitialized");
 
     if let Err(e) = render(&device) {
         error!("Render error: {e:?}");
@@ -110,7 +111,13 @@ unsafe extern "system" fn dx9_present_impl(
         HRESULT(0)
     } else {
         trace!("Call IDirect3DDevice9::Present trampoline");
-        dx9_present(device, psourcerect, pdestrect, hdestwindowoverride, pdirtyregion)
+        dx9_present(
+            device,
+            psourcerect,
+            pdestrect,
+            hdestwindowoverride,
+            pdirtyregion,
+        )
     };
     if EJECT_REQUESTED.load(Ordering::SeqCst) {
         perform_eject();
@@ -123,14 +130,18 @@ unsafe extern "system" fn dx9_reset_impl(
 ) -> HRESULT {
     let _hook_ejection_guard = HOOK_EJECTION_BARRIER.acquire_ejection_guard();
 
-    let Trampolines { dx9_reset, .. } =
-        TRAMPOLINES.get().expect("DirectX 9 trampolines uninitialized");
+    let Trampolines { dx9_reset, .. } = TRAMPOLINES
+        .get()
+        .expect("DirectX 9 trampolines uninitialized");
 
     trace!("Resetting pipeline");
     if let Some(pipeline) = PIPELINE.take() {
         let render_loop = pipeline.into_inner().take();
 
-        RENDER_LOOP.set(render_loop).map_err(|_| ()).expect("Render loop cell should be empty");
+        RENDER_LOOP
+            .set(render_loop)
+            .map_err(|_| ())
+            .expect("Render loop cell should be empty");
     }
 
     dx9_reset(this, present_params)
@@ -139,9 +150,16 @@ unsafe extern "system" fn dx9_reset_impl(
 fn get_target_addrs() -> (Dx9PresentType, Dx9ResetType) {
     let d9 = unsafe { Direct3DCreate9(D3D_SDK_VERSION).unwrap() };
 
-    let mut d3d_display_mode =
-        D3DDISPLAYMODE { Width: 0, Height: 0, RefreshRate: 0, Format: D3DFORMAT(0) };
-    unsafe { d9.GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &mut d3d_display_mode).unwrap() };
+    let mut d3d_display_mode = D3DDISPLAYMODE {
+        Width: 0,
+        Height: 0,
+        RefreshRate: 0,
+        Format: D3DFORMAT(0),
+    };
+    unsafe {
+        d9.GetAdapterDisplayMode(D3DADAPTER_DEFAULT, &mut d3d_display_mode)
+            .unwrap()
+    };
 
     let mut present_params = D3DPRESENT_PARAMETERS {
         Windowed: BOOL(1),
@@ -207,10 +225,15 @@ impl ImguiDx9Hooks {
     {
         let (dx9_present_addr, dx9_reset_addr) = get_target_addrs();
 
-        trace!("IDirect3DDevice9::Present = {:p}", dx9_present_addr as *const c_void);
-        let hook_present =
-            MhHook::new(dx9_present_addr as *mut c_void, dx9_present_impl as *mut c_void)
-                .expect("couldn't create IDirect3DDevice9::Present hook");
+        trace!(
+            "IDirect3DDevice9::Present = {:p}",
+            dx9_present_addr as *const c_void
+        );
+        let hook_present = MhHook::new(
+            dx9_present_addr as *mut c_void,
+            dx9_present_impl as *mut c_void,
+        )
+        .expect("couldn't create IDirect3DDevice9::Present hook");
         let hook_reset = MhHook::new(dx9_reset_addr as *mut c_void, dx9_reset_impl as *mut c_void)
             .expect("couldn't create IDirect3DDevice9::Reset hook");
 

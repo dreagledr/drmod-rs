@@ -25,7 +25,9 @@ use std::fmt::Write as _;
 use super::error::{ScriptFormatException, ScriptResult};
 use super::frames::commanded_stick;
 use super::json;
-use super::model::{DEFAULT_NAME, RestartSpec, ScriptCommand, ScriptDocument, ScriptInput, ScriptTrigger};
+use super::model::{
+    DEFAULT_NAME, RestartSpec, ScriptCommand, ScriptDocument, ScriptInput, ScriptTrigger,
+};
 
 /// The extension of a script text in the workspace.
 pub const EXTENSION: &str = ".tas";
@@ -73,32 +75,195 @@ struct Input {
 /// (`dr` is the inventory switch the column calls `dl`) and one token can stand for two columns
 /// (`by` is Y+B, the game's Execute prompt).
 const INPUTS: [Input; 26] = [
-    Input { key: "forward", get: |i| i.forward, set: |i| ScriptInput { forward: true, ..i }, token: None },
-    Input { key: "backward", get: |i| i.backward, set: |i| ScriptInput { backward: true, ..i }, token: None },
-    Input { key: "left", get: |i| i.left, set: |i| ScriptInput { left: true, ..i }, token: None },
-    Input { key: "right", get: |i| i.right, set: |i| ScriptInput { right: true, ..i }, token: None },
-    Input { key: "jump", get: |i| i.jump, set: |i| ScriptInput { jump: true, ..i }, token: Some("a") },
-    Input { key: "light_attack", get: |i| i.light_attack, set: |i| ScriptInput { light_attack: true, ..i }, token: Some("x") },
-    Input { key: "heavy_attack", get: |i| i.heavy_attack, set: |i| ScriptInput { heavy_attack: true, ..i }, token: Some("y") },
-    Input { key: "ripper", get: |i| i.ripper, set: |i| ScriptInput { ripper: true, ..i }, token: Some("lr") },
-    Input { key: "blade", get: |i| i.blade, set: |i| ScriptInput { blade: true, ..i }, token: Some("lt") },
-    Input { key: "ninja_run", get: |i| i.ninja_run, set: |i| ScriptInput { ninja_run: true, ..i }, token: Some("rt") },
-    Input { key: "walk", get: |i| i.walk, set: |i| ScriptInput { walk: true, ..i }, token: Some("wk") },
-    Input { key: "dodge", get: |i| i.dodge, set: |i| ScriptInput { dodge: true, ..i }, token: Some("ax") },
-    Input { key: "lock_on", get: |i| i.lock_on, set: |i| ScriptInput { lock_on: true, ..i }, token: Some("rb") },
-    Input { key: "subweapon", get: |i| i.subweapon, set: |i| ScriptInput { subweapon: true, ..i }, token: Some("lb") },
-    Input { key: "item", get: |i| i.item, set: |i| ScriptInput { item: true, ..i }, token: Some("dd") },
-    Input { key: "ar_mode", get: |i| i.ar_mode, set: |i| ScriptInput { ar_mode: true, ..i }, token: Some("du") },
-    Input { key: "weapon_select", get: |i| i.weapon_select, set: |i| ScriptInput { weapon_select: true, ..i }, token: Some("dl") },
-    Input { key: "codec", get: |i| i.codec, set: |i| ScriptInput { codec: true, ..i }, token: Some("cd") },
-    Input { key: "zandatsu", get: |i| i.zandatsu, set: |i| ScriptInput { zandatsu: true, ..i }, token: Some("b") },
-    Input { key: "camera_reset", get: |i| i.camera_reset, set: |i| ScriptInput { camera_reset: true, ..i }, token: Some("r") },
-    Input { key: "pause", get: |i| i.pause, set: |i| ScriptInput { pause: true, ..i }, token: Some("esc") },
-    Input { key: "confirm", get: |i| i.confirm, set: |i| ScriptInput { confirm: true, ..i }, token: Some("ok") },
-    Input { key: "menu_up", get: |i| i.menu_up, set: |i| ScriptInput { menu_up: true, ..i }, token: Some("mu") },
-    Input { key: "menu_down", get: |i| i.menu_down, set: |i| ScriptInput { menu_down: true, ..i }, token: Some("md") },
-    Input { key: "menu_left", get: |i| i.menu_left, set: |i| ScriptInput { menu_left: true, ..i }, token: Some("ml") },
-    Input { key: "menu_right", get: |i| i.menu_right, set: |i| ScriptInput { menu_right: true, ..i }, token: Some("mr") },
+    Input {
+        key: "forward",
+        get: |i| i.forward,
+        set: |i| ScriptInput { forward: true, ..i },
+        token: None,
+    },
+    Input {
+        key: "backward",
+        get: |i| i.backward,
+        set: |i| ScriptInput {
+            backward: true,
+            ..i
+        },
+        token: None,
+    },
+    Input {
+        key: "left",
+        get: |i| i.left,
+        set: |i| ScriptInput { left: true, ..i },
+        token: None,
+    },
+    Input {
+        key: "right",
+        get: |i| i.right,
+        set: |i| ScriptInput { right: true, ..i },
+        token: None,
+    },
+    Input {
+        key: "jump",
+        get: |i| i.jump,
+        set: |i| ScriptInput { jump: true, ..i },
+        token: Some("a"),
+    },
+    Input {
+        key: "light_attack",
+        get: |i| i.light_attack,
+        set: |i| ScriptInput {
+            light_attack: true,
+            ..i
+        },
+        token: Some("x"),
+    },
+    Input {
+        key: "heavy_attack",
+        get: |i| i.heavy_attack,
+        set: |i| ScriptInput {
+            heavy_attack: true,
+            ..i
+        },
+        token: Some("y"),
+    },
+    Input {
+        key: "ripper",
+        get: |i| i.ripper,
+        set: |i| ScriptInput { ripper: true, ..i },
+        token: Some("lr"),
+    },
+    Input {
+        key: "blade",
+        get: |i| i.blade,
+        set: |i| ScriptInput { blade: true, ..i },
+        token: Some("lt"),
+    },
+    Input {
+        key: "ninja_run",
+        get: |i| i.ninja_run,
+        set: |i| ScriptInput {
+            ninja_run: true,
+            ..i
+        },
+        token: Some("rt"),
+    },
+    Input {
+        key: "walk",
+        get: |i| i.walk,
+        set: |i| ScriptInput { walk: true, ..i },
+        token: Some("wk"),
+    },
+    Input {
+        key: "dodge",
+        get: |i| i.dodge,
+        set: |i| ScriptInput { dodge: true, ..i },
+        token: Some("ax"),
+    },
+    Input {
+        key: "lock_on",
+        get: |i| i.lock_on,
+        set: |i| ScriptInput { lock_on: true, ..i },
+        token: Some("rb"),
+    },
+    Input {
+        key: "subweapon",
+        get: |i| i.subweapon,
+        set: |i| ScriptInput {
+            subweapon: true,
+            ..i
+        },
+        token: Some("lb"),
+    },
+    Input {
+        key: "item",
+        get: |i| i.item,
+        set: |i| ScriptInput { item: true, ..i },
+        token: Some("dd"),
+    },
+    Input {
+        key: "ar_mode",
+        get: |i| i.ar_mode,
+        set: |i| ScriptInput { ar_mode: true, ..i },
+        token: Some("du"),
+    },
+    Input {
+        key: "weapon_select",
+        get: |i| i.weapon_select,
+        set: |i| ScriptInput {
+            weapon_select: true,
+            ..i
+        },
+        token: Some("dl"),
+    },
+    Input {
+        key: "codec",
+        get: |i| i.codec,
+        set: |i| ScriptInput { codec: true, ..i },
+        token: Some("cd"),
+    },
+    Input {
+        key: "zandatsu",
+        get: |i| i.zandatsu,
+        set: |i| ScriptInput {
+            zandatsu: true,
+            ..i
+        },
+        token: Some("b"),
+    },
+    Input {
+        key: "camera_reset",
+        get: |i| i.camera_reset,
+        set: |i| ScriptInput {
+            camera_reset: true,
+            ..i
+        },
+        token: Some("r"),
+    },
+    Input {
+        key: "pause",
+        get: |i| i.pause,
+        set: |i| ScriptInput { pause: true, ..i },
+        token: Some("esc"),
+    },
+    Input {
+        key: "confirm",
+        get: |i| i.confirm,
+        set: |i| ScriptInput { confirm: true, ..i },
+        token: Some("ok"),
+    },
+    Input {
+        key: "menu_up",
+        get: |i| i.menu_up,
+        set: |i| ScriptInput { menu_up: true, ..i },
+        token: Some("mu"),
+    },
+    Input {
+        key: "menu_down",
+        get: |i| i.menu_down,
+        set: |i| ScriptInput {
+            menu_down: true,
+            ..i
+        },
+        token: Some("md"),
+    },
+    Input {
+        key: "menu_left",
+        get: |i| i.menu_left,
+        set: |i| ScriptInput {
+            menu_left: true,
+            ..i
+        },
+        token: Some("ml"),
+    },
+    Input {
+        key: "menu_right",
+        get: |i| i.menu_right,
+        set: |i| ScriptInput {
+            menu_right: true,
+            ..i
+        },
+        token: Some("mr"),
+    },
 ];
 
 fn index_of(key: &str) -> Option<usize> {
@@ -124,7 +289,10 @@ pub fn vocabulary() -> Vec<(&'static str, String)> {
         }
     }
 
-    vocabulary.push(("by", format!("{} + {}", INPUTS[heavy()].key, INPUTS[zandatsu()].key)));
+    vocabulary.push((
+        "by",
+        format!("{} + {}", INPUTS[heavy()].key, INPUTS[zandatsu()].key),
+    ));
     vocabulary.push((
         "dr",
         INPUTS[index_of("weapon_select").expect("the inventory switch is an input")]
@@ -342,11 +510,23 @@ fn tokens(frame: u32, commands: &[&ScriptCommand]) -> ScriptResult<Vec<String>> 
     }
 
     if let Some(axes) = left {
-        tokens.extend(stick_tokens(LEFT_STICK, LEFT_STICK_X, LEFT_STICK_Y, axes, left_frames));
+        tokens.extend(stick_tokens(
+            LEFT_STICK,
+            LEFT_STICK_X,
+            LEFT_STICK_Y,
+            axes,
+            left_frames,
+        ));
     }
 
     if let Some(axes) = right {
-        tokens.extend(stick_tokens(RIGHT_STICK, RIGHT_STICK_X, RIGHT_STICK_Y, axes, right_frames));
+        tokens.extend(stick_tokens(
+            RIGHT_STICK,
+            RIGHT_STICK_X,
+            RIGHT_STICK_Y,
+            axes,
+            right_frames,
+        ));
     }
 
     // Y+B is one token when the two are held for the same stretch — the shape the game's Execute
@@ -388,7 +568,11 @@ fn tokens(frame: u32, commands: &[&ScriptCommand]) -> ScriptResult<Vec<String>> 
 fn stick_tokens(angle: &str, x: &str, y: &str, axes: [f64; 2], frames: u32) -> Vec<String> {
     let magnitude = (axes[0] * axes[0] + axes[1] * axes[1]).sqrt();
     if (magnitude - AXIS_UNIT).abs() < FULL_PRESS_TOLERANCE {
-        return vec![format!("{angle}:{}{}", number_f64(angle_of(axes)), duration(frames))];
+        return vec![format!(
+            "{angle}:{}{}",
+            number_f64(angle_of(axes)),
+            duration(frames)
+        )];
     }
 
     if axes[0] == 0.0 && axes[1] == 0.0 {
@@ -397,11 +581,19 @@ fn stick_tokens(angle: &str, x: &str, y: &str, axes: [f64; 2], frames: u32) -> V
 
     let mut tokens = Vec::new();
     if axes[0] != 0.0 {
-        tokens.push(format!("{x}:{}{}", number_f64(rounded(axes[0])), duration(frames)));
+        tokens.push(format!(
+            "{x}:{}{}",
+            number_f64(rounded(axes[0])),
+            duration(frames)
+        ));
     }
 
     if axes[1] != 0.0 {
-        tokens.push(format!("{y}:{}{}", number_f64(rounded(axes[1])), duration(frames)));
+        tokens.push(format!(
+            "{y}:{}{}",
+            number_f64(rounded(axes[1])),
+            duration(frames)
+        ));
     }
 
     tokens
@@ -515,7 +707,8 @@ pub fn parse(text: &str) -> ScriptResult<ScriptDocument> {
     let mut last_frame: Option<u32> = None;
 
     // The parse's own refusal: a message, and the frame the parse had reached.
-    let refuse = |message: String, frame: Option<u32>| ScriptFormatException::at_frame(message, frame);
+    let refuse =
+        |message: String, frame: Option<u32>| ScriptFormatException::at_frame(message, frame);
 
     for (index, raw) in lines(text).split('\n').enumerate() {
         let number = index + 1;
@@ -564,7 +757,8 @@ pub fn parse(text: &str) -> ScriptResult<ScriptDocument> {
 
     // The cross-field limits refuse a document rather than a line: there is no line to name, so
     // the frame the whole text had is what they are re-thrown with.
-    json::validate(&document).map_err(|refused| refuse(refused.message().to_owned(), last_frame))?;
+    json::validate(&document)
+        .map_err(|refused| refuse(refused.message().to_owned(), last_frame))?;
 
     Ok(document)
 }
@@ -579,8 +773,7 @@ fn parse_rules(
     trigger_ticks: &mut Option<u64>,
     restart: &mut Option<RestartSpec>,
 ) -> ScriptResult<()> {
-    let refuse =
-        |message: String| ScriptFormatException::at_frame(message, last_frame);
+    let refuse = |message: String| ScriptFormatException::at_frame(message, last_frame);
 
     for attribute in rest.split(' ').filter(|part| !part.is_empty()) {
         // An attribute is `key=value` or `key:value` — the colon is what `restart` carries its
@@ -652,7 +845,9 @@ fn parse_trigger(
 
             let parts: Vec<&str> = argument.split(',').collect();
             if parts.len() != 3 {
-                return Err(refuse(format!("line {number}: trig=pos needs three numbers")));
+                return Err(refuse(format!(
+                    "line {number}: trig=pos needs three numbers"
+                )));
             }
 
             *position = Some([
@@ -734,7 +929,8 @@ fn parse_frame(
     into: &mut Vec<ScriptCommand>,
     last_frame: &mut Option<u32>,
 ) -> ScriptResult<()> {
-    let refuse = |message: String, frame: Option<u32>| ScriptFormatException::at_frame(message, frame);
+    let refuse =
+        |message: String, frame: Option<u32>| ScriptFormatException::at_frame(message, frame);
 
     let parts: Vec<&str> = line.split(' ').filter(|part| !part.is_empty()).collect();
     // The frame of the line is read — and recorded — before its tokens are checked, so a bad
@@ -779,7 +975,9 @@ fn parse_frame(
 
         let Some((set, touched)) = flag(&lower) else {
             return Err(refuse(
-                format!("line {number}: unknown token '{key}' — a pad button, a stick token or `by`"),
+                format!(
+                    "line {number}: unknown token '{key}' — a pad button, a stick token or `by`"
+                ),
                 Some(frame),
             ));
         };
@@ -897,7 +1095,12 @@ fn parse_stick(
         }
 
         angle_seen[side] = true;
-        sticks[side] = Some(full_press(f64::from(float(number, lower, arguments[0], Some(frame))?)));
+        sticks[side] = Some(full_press(f64::from(float(
+            number,
+            lower,
+            arguments[0],
+            Some(frame),
+        )?)));
         return Ok(true);
     }
 
@@ -989,12 +1192,7 @@ fn frame_value(
     Ok(frame)
 }
 
-fn duration_of(
-    number: usize,
-    key: &str,
-    value: &str,
-    frame: u32,
-) -> ScriptResult<u32> {
+fn duration_of(number: usize, key: &str, value: &str, frame: u32) -> ScriptResult<u32> {
     let frames = unsigned32(number, key, value, Some(frame))?;
     if frames == 0 {
         return Err(ScriptFormatException::at_frame(
@@ -1006,12 +1204,7 @@ fn duration_of(
     Ok(frames)
 }
 
-fn unsigned32(
-    number: usize,
-    field: &str,
-    value: &str,
-    frame: Option<u32>,
-) -> ScriptResult<u32> {
+fn unsigned32(number: usize, field: &str, value: &str, frame: Option<u32>) -> ScriptResult<u32> {
     value.parse::<u32>().map_err(|_| {
         ScriptFormatException::at_frame(
             format!("line {number}: {field} '{value}' is not a number"),
@@ -1020,12 +1213,7 @@ fn unsigned32(
     })
 }
 
-fn unsigned64(
-    number: usize,
-    field: &str,
-    value: &str,
-    frame: Option<u32>,
-) -> ScriptResult<u64> {
+fn unsigned64(number: usize, field: &str, value: &str, frame: Option<u32>) -> ScriptResult<u64> {
     value.parse::<u64>().map_err(|_| {
         ScriptFormatException::at_frame(
             format!("line {number}: {field} '{value}' is not a number"),

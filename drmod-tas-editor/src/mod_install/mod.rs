@@ -22,5 +22,5 @@
 pub mod installer;
 pub mod payload;
 
-pub use installer::{ModState, LOADER_PATH, LOADER_URL, PLUGIN_DIR};
+pub use installer::{LOADER_PATH, LOADER_URL, ModState, PLUGIN_DIR};
 pub use payload::{ASI_NAME, LOADER_NAME, Payload};
