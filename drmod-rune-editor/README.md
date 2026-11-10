@@ -116,4 +116,6 @@ duplicated.
 - **Rune is pre-release.** A `dev` rev is pinned; updating it is a deliberate change with a
   headless snapshot diff.
 
-See [`SPIKE.md`](SPIKE.md) for the measurements and the go/no-go notes.
+See [`SPIKE.md`](SPIKE.md) for the measurements and the go/no-go notes. In short: a 19 900-row
+table holds a p50 of 2.3–2.7 ms of CPU per frame (Rune headless, 1×/2×), but the first display of a
+200-line script costs ~200 ms because `TextArea` shapes the whole text.

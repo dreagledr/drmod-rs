@@ -6,25 +6,40 @@ live theming and motion, but no dock space and a general text field instead of a
 spike measures the three hard things in that stack and records where it stops.
 
 Environment: Linux, `x86_64-unknown-linux-gnu`, headless Rune (`--snap` / `--tree`), window
-1440×900 at scale 1, Rune `dev` @ `0c8a62e7`. Numbers are Rune's own headless frame report.
+1440×900 points, Rune `dev` @ `0c8a62e7`. Rune's headless default is scale 2 (2880×1800 pixels),
+so the scale is named in each number; `--scale 1` is the 1440×900-pixel case. Numbers are Rune's
+own headless frame report (`frame cpu`, which is update + build + encode/submit, without a real
+present).
 
 ## The three hard things
 
 ### 1. A 20 000-frame table
 
 Fixtures: 200 frame lines at 100-frame spacing, projected by
-`drmod_script::projection::project` into 20 000 rows. The table is `rune_kit::Table`: only the
+`drmod_script::projection::project` into 19 901 rows. The table is `rune_kit::Table`: only the
 visible rows are built, sorting is off, columns resize, the header is sticky.
 
-| Build | Frame CPU p50 | p95 | Worst |
+| Build | Scale | Frame CPU p50 | p95 |
 |---|---|---|---|
-| release | **2.9 ms** | 6.4 ms | 166 ms (the frame that opened the script) |
-| debug | 8.2 ms | 13.7 ms | 200 ms |
+| release | 1× | **2.33–2.40 ms** | 4.9 ms |
+| release | 2× | **2.5–2.7 ms** | 7.7–8.0 ms |
+| debug | 2× | 8.2 ms | 13.7 ms |
 
-Scrolling the table in a scripted debug run stayed in the same range (9.6 ms p50). The worst frame is
-the first frame after a script is opened: the text is parsed, projected into 20 000 rows, and the spans are built for the
-first time. 166 ms is visible; a production editor should move the projection off the frame or
-debounce it while typing.
+The same release run on the 173-frame `alpha2` script (174 rows) had the same p50: the table's
+virtualisation does what it says. Scrolling the 20 000-row table in a scripted debug run stayed in the same range
+(9.6 ms p50). The idle (at-rest) figure is 1.7 ms at 1× and 2.3 ms at 2×.
+
+A 240-frame headless run of *either* script also contains a one-time ~100 ms frame at 1× and a
+~360 ms frame at 2×. It is not the table — the small script has it too — and it scales with pixels,
+so it reads as headless pipeline/atlas setup rather than the editor's steady state.
+
+The number that is *not* flat is the first display of the text. Opening a 201-line / 20 000-frame
+script in a 1.5 s scripted run at 1× produced a 200 ms frame; the 7-line script produced 35 ms.
+That cost is not the projection: measured on the same text in release, parsing is 0.07 ms,
+`projection::project` 0.45–1.5 ms for 19 901 rows, and writing the JSON 0.2 ms. It is Rune laying
+out and shaping the whole 201-line text in `TextArea`; `TextArea` has no virtual lines. A production
+editor would need to avoid that stall (split the text into virtual lines, or debounce the initial
+layout), and typing in a multi-thousand-line script is the next measurement to make.
 
 ### 2. The text editor
 
@@ -76,8 +91,9 @@ viewport after the table was given a bounded parent.
 ## What the spike says
 
 **Rune is viable for a lean TAS editor.** The table, the colouring, the split layout and the API
-work; a release build keeps a 20 000-frame script at ~3 ms of CPU per frame, which is a third of a
-60 Hz budget. The result looks like a desktop app rather than a demo.
+work; a release build keeps a 19 900-row table at a p50 of 2.3–2.7 ms of CPU per frame, which is
+well inside a 60 Hz budget. The first display of a 200-line script is the outlier (~200 ms at 1×,
+before the text is virtualised). The result looks like a desktop app rather than a demo.
 
 **It is not yet a drop-in replacement for the ImGui editor.** The missing code editor (wrapping,
 gutter, code keys), the missing dock space, and the synchronous parse/projection on the first
