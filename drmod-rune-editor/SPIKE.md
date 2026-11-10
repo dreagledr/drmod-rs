@@ -23,7 +23,7 @@ visible rows are built, sorting is off, columns resize, the header is sticky.
 |---|---|---|---|
 | release | 1× | **2.33–2.40 ms** | 4.9 ms |
 | release | 2× | **2.5–2.7 ms** | 7.7–8.0 ms |
-| debug | 2× | 8.2 ms | 13.7 ms |
+| debug | 2× | 8.2 ms | 15.4 ms |
 
 The same release run on the 173-frame `alpha2` script (174 rows) had the same p50: the table's
 virtualisation does what it says. Scrolling the 20 000-row table in a scripted debug run stayed in the same range
