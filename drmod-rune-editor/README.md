@@ -90,6 +90,7 @@ src/
 │   ├── run.rs           # run controls, rules, game status
 │   └── dialogs.rs       # rename, delete, commands, mod
 ├── highlight.rs         # the DSL lexer → Rune spans
+├── tools/make-stress.py # regenerates examples/stress-long.tas (4 018 lines / 399 901 frames)
 ├── poller.rs            # GET /state on a worker thread
 ├── work.rs              # Run / Apply / Stop on a worker thread
 ├── api/                 # the mod's HTTP client (copied from the ImGui editor)
@@ -110,6 +111,9 @@ duplicated.
   the frames table. Panels cannot be dragged out or re-docked the way ImGui's can.
 - **`TextArea` wraps.** There is no horizontal scroll, no gutter, no line numbers and no
   language-aware editing keys. Colouring is `Span`s rebuilt when the text changes.
+- **`TextArea` lays out the whole text.** A 4 018-line stress script (`examples/stress-long.tas`)
+  opens in ~320 ms and each edit costs ~180–250 ms; realistic scripts (tens of lines) are fine.
+  Virtual lines would be the fix, and that is a feature of its own.
 - **The table is vertical-only.** The frame table uses four readable columns (frame, both sticks,
   held buttons) instead of one lit column per DSL token; a 29-column matrix would need horizontal
   scrolling the kit's table does not provide.
