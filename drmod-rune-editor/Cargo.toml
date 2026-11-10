@@ -1,0 +1,44 @@
+[package]
+name = "drmod-rune-editor"
+version = "0.1.0"
+edition = "2024"
+description = "Experimental TAS editor for Metal Gear Rising on the Rune GPU UI framework"
+
+# An experiment beside the shipping `drmod-tas-editor`: that one is the tool, this one asks
+# whether Rune can carry the same editor. It is its own workspace for the same reason the ImGui
+# editor is: the repository root forces the 32-bit Windows target the game's mod needs, and the
+# UI stack does not build for it.
+[[bin]]
+name = "drmod-rune-editor"
+path = "src/main.rs"
+
+[dependencies]
+# Rune is pre-release and apps pin a `dev` rev (see its README). `dev` is never rewritten, so
+# the pin is reproducible; it is not on crates.io.
+rune = { git = "https://github.com/anomalyco/rune", rev = "0c8a62e777b171f41cd0c99fb66c63d1b386e899", default-features = false, features = [
+    "dbus",
+    "embedded-fonts",
+    "native-file-dialog",
+] }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "0c8a62e777b171f41cd0c99fb66c63d1b386e899" }
+# The script formats — DSL text, API JSON, frame projections — are shared with the mod, the CLI
+# and the ImGui editor. This crate reads them; it does not own a second copy.
+drmod-script = { path = "../drmod-script" }
+
+# The mod's HTTP API client. Requests are blocking, on a worker thread; bodies are gzipped
+# because the mod's 64 KiB limit is measured on compressed bytes.
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "3"
+
+# The game's window is a Windows window; the editor edits and polls fine without it.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[workspace]
+resolver = "3"

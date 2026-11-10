@@ -1,0 +1,7 @@
+! name=PAJ1-h4.917 trig=ticks:0 restart
+50 a:12
+75 y:10
+107 lr
+108 y:12
+150 x
+166 lt:7

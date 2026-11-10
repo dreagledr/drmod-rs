@@ -1,0 +1,10 @@
+! name=PAJ4-h5.329 trig=ticks:0 restart
+50 a:12
+75 y:10
+107 lr
+108 y:12
+150 x
+167 x
+184 x
+201 x
+217 lt:7

@@ -1,0 +1,6 @@
+# This crate is its own workspace, but cargo reads `.cargo/config.toml` by the current
+# directory, not by the manifest — so the repository root's `i686-pc-windows-msvc` target would
+# otherwise apply here too. Rune's window stack needs a 64-bit target. Change this line on a
+# Windows checkout (`x86_64-pc-windows-msvc`) or pass `--target`.
+[build]
+target = "x86_64-unknown-linux-gnu"

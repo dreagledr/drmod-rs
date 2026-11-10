@@ -47,6 +47,8 @@ segment autosplitter, TAS record/replay, an HTTP automation API, a multiplayer s
   deploys the server on pushes to `main`. Run verification yourself.
 - Editor (largest suite, headless): `cd drmod-tas-editor && cargo test`. Golden fixtures live in
   `drmod-tas-editor/tests/fixtures/golden/` and are shared with `drmod-script-gen`.
+- Rune experiment: `cd drmod-rune-editor && cargo test` (its own workspace; the local
+  `.cargo/config.toml` picks the host target). Headless UI checks: `--snap` / `--tree`.
 - Mod core unit tests: `cargo test -p drmod-core` (i686).
 - `drmod-hudhook` tests `dx9`/`hook` open a real DX9 device for ~7 s and `inject` tests are
   `#[ignore]`d, so a bare `cargo test` at the root triggers them. Test only the crate you changed.
@@ -92,8 +94,9 @@ x64 `.cargo/config.toml` applies only if you build from inside `xtask/`). Output
   accept `.tas` (`POST /script/run.tas`, `GET /script/{id}.tas`, `GET /logs.tas`).
 - `drmod-cli` = `drmod-tas` CLI (`run`/`get`/`state`/`export`): own HTTP client, depends on
   `drmod-script`; no GUI. `drmod-dbdump` = `runs.db` → CSV/Parquet + `--script` (via `record`).
-  `drmod-script-gen` = editor golden fixtures. `drmod-tas-editor` = the only TAS editor
-  (standalone x64 workspace).
+  `drmod-script-gen` = editor golden fixtures. `drmod-tas-editor` = the shipping TAS editor
+  (standalone x64 workspace). `drmod-rune-editor` = an experimental second shell on Rune, not
+  packaged by `xtask` and not a replacement — `README.md` / `SPIKE.md` there.
 - `drmod-hudhook/` = vendored DX9-only hudhook fork; its `build.rs` compiles vendored MinHook from
   `vendor/minhook/`. `vendor/` = checked-in binaries; `ref/` = read-only git submodules (clone with
   `--recurse-submodules`).
