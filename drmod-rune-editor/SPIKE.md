@@ -72,6 +72,22 @@ of CPU over a 360-frame run (the mean delta against the same run without the edi
 therefore not interactive; a code area with virtual lines is the fix, and it is a feature in its
 own right rather than a tweak.
 
+### Compared with the shipping editor
+
+The same 4 018-line file in a one-off C++ harness around the vendored `dear-imgui-cte` 0.18 (the
+version the shipping editor links, Python language, 880×520, release) gave:
+
+- `SetText` + first frame: **6.4 ms**;
+- steady: **0.05 ms per frame** for the text control;
+- insert + one frame: **1.14 ms**.
+
+The shipping editor still pays its own script pass on every edit: `ScriptTextStatus::of` (2.4 ms)
+and `projection::project` (18–29 ms for 399 901 rows), plus the table, which uses ImGui's
+`ListClipper` and only submits visible rows. So a keystroke in the ImGui editor is roughly
+**20–30 ms of CPU**, and opening the file roughly **30–40 ms**, against ~200 ms/edit and ~320 ms/open
+in Rune. That is a harness rather than the full Windows app, but it isolates the text control — and
+that is where the difference is: `TextEditor` renders visible rows, `TextArea` lays out the document.
+
 ### 3. The layout
 
 `rune_kit::shell::SplitView` gives a resizable sidebar, a main pane and an inspector, with a
