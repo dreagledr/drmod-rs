@@ -70,3 +70,13 @@ pub fn focus_and_settle(settle_ms: u64) -> bool {
     std::thread::sleep(std::time::Duration::from_millis(settle_ms));
     focused
 }
+
+fn find() -> windows::core::Result<HWND> {
+    // SAFETY: FindWindowW only queries the desktop; the title literal is NUL-terminated.
+    unsafe { FindWindowW(None, w!("METAL GEAR RISING: REVENGEANCE")) }
+}
+
+fn foreground() -> HWND {
+    // SAFETY: GetForegroundWindow has no preconditions and cannot fail.
+    unsafe { GetForegroundWindow() }
+}
