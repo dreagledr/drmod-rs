@@ -13,15 +13,11 @@
 //! process the activation before it starts reading keys.
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Input::KeyboardAndMouse::{GetActiveWindow, SetActiveWindow};
+use windows::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, FindWindowW, GetForegroundWindow, GetWindowThreadProcessId, IsIconic,
-    SW_RESTORE, SetForegroundWindow, ShowWindow,
+    BringWindowToTop, FindWindowW, GetForegroundWindow, SW_RESTORE, SetForegroundWindow, ShowWindow,
 };
 use windows::core::w;
-
-/// The window title the game runs under.
-pub const TITLE: &str = "METAL GEAR RISING: REVENGEANCE";
 
 /// Brings the game's window to the foreground, through as many attempts as it takes.
 ///
@@ -73,45 +69,4 @@ pub fn focus_and_settle(settle_ms: u64) -> bool {
     let focused = activate(3);
     std::thread::sleep(std::time::Duration::from_millis(settle_ms));
     focused
-}
-
-/// Whether the game's window exists at all — the cheap check a pane can make without touching
-/// focus.
-pub fn running() -> bool {
-    find().is_ok()
-}
-
-fn find() -> windows::core::Result<HWND> {
-    // SAFETY: FindWindowW only queries the desktop; the title literal is NUL-terminated.
-    unsafe { FindWindowW(None, w!("METAL GEAR RISING: REVENGEANCE")) }
-}
-
-fn foreground() -> HWND {
-    // SAFETY: GetForegroundWindow has no preconditions and cannot fail.
-    unsafe { GetForegroundWindow() }
-}
-
-/// Whether a window is minimised — a game that is cannot take focus until it is restored, which
-/// [`activate`] does.
-pub fn minimised(window: HWND) -> bool {
-    // SAFETY: IsIconic only reads window state; an invalid handle returns false.
-    unsafe { IsIconic(window).as_bool() }
-}
-
-/// The window handle as a number, for callers that only need to compare two of them.
-pub fn handle_value() -> Option<isize> {
-    find().ok().map(|window| window.0 as isize)
-}
-
-/// The thread that owns a window — the pair `AttachThreadInput` needs, and the value that says
-/// whether the game's input queue and this process's are already joined.
-pub fn owning_thread(window: HWND) -> u32 {
-    // SAFETY: GetWindowThreadProcessId reads the owner of `window`; we pass no out-pointer.
-    unsafe { GetWindowThreadProcessId(window, None) }
-}
-
-/// Whatever window currently owns the keyboard focus.
-pub fn active_window() -> HWND {
-    // SAFETY: GetActiveWindow has no preconditions and cannot fail.
-    unsafe { GetActiveWindow() }
 }

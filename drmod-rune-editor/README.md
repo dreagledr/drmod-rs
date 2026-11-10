@@ -43,6 +43,17 @@ cargo build --release
 Rune is pre-release, not on crates.io: `Cargo.toml` pins a `dev` rev
 (`0c8a62e777b171f41cd0c99fb66c63d1b386e899`). `dev` is never rewritten, so the pin is reproducible.
 
+### Windows build from GitHub
+
+`.github/workflows/rune-editor.yml` builds the editor on a real `windows-latest` runner, runs its
+tests, and uploads a runnable zip. Trigger it from **Actions → Rune editor (Windows) → Run
+workflow** (or by pushing to `experiment/rune-editor`); download the
+`drmod-rune-editor-windows` artifact. It is not part of the release-tag workflow: this crate is an
+experiment, not a packaged tool.
+
+The workflow passes `--target x86_64-pc-windows-msvc`, which overrides this checkout's Linux
+target in `.cargo/config.toml`.
+
 ### Headless
 
 Rune's agent tooling renders the same tree without a window, on a fixed virtual clock:

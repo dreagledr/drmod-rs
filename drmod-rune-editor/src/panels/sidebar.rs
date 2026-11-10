@@ -207,9 +207,3 @@ pub fn panel(app: &App) -> El {
             ),
     )
 }
-
-/// A short folder name for a heading, or the whole path when there is no last component.
-#[allow(unused)]
-fn folder_label(folder: &std::path::Path) -> String {
-    folder.display().to_string()
-}

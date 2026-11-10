@@ -1,0 +1,85 @@
+name: Rune editor (Windows)
+
+# The experimental editor is its own workspace and is not part of `build.yml`'s release tags.
+# This workflow builds it on a real Windows runner and uploads a runnable zip. Trigger it from the
+# Actions tab ("Run workflow") or by pushing to the experiment branch.
+on:
+  workflow_dispatch:
+  push:
+    branches: [experiment/rune-editor]
+    paths:
+      - 'drmod-rune-editor/**'
+      - '.github/workflows/rune-editor.yml'
+  pull_request:
+    paths:
+      - 'drmod-rune-editor/**'
+      - '.github/workflows/rune-editor.yml'
+
+concurrency:
+  group: rune-editor-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  windows:
+    name: Build (Windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: drmod-rune-editor
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: drmod-rune-editor
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        # Warnings are reported, not fatal: the Windows-only window code has no counterpart on the
+        # Linux checkout the crate is developed on.
+        run: cargo clippy --all-targets --locked --target $env:TARGET
+
+      - name: Test
+        run: cargo test --locked --target $env:TARGET
+
+      - name: Build release
+        run: cargo build --release --locked --target $env:TARGET
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $dist = "dist/drmod-rune-editor"
+          New-Item -ItemType Directory -Force -Path $dist | Out-Null
+          Copy-Item "target/$env:TARGET/release/drmod-rune-editor.exe" $dist
+          Copy-Item -Recurse "examples" "$dist/examples"
+          Copy-Item "README.md", "SPIKE.md" $dist
+          Get-ChildItem -Recurse $dist | Select-Object FullName, Length
+          Compress-Archive -Path "$dist/*" -DestinationPath "drmod-rune-editor-windows.zip" -Force
+
+      - name: Upload zip
+        uses: actions/upload-artifact@v5
+        with:
+          name: drmod-rune-editor-windows
+          path: |
+            drmod-rune-editor/drmod-rune-editor-windows.zip
+            drmod-rune-editor/dist/drmod-rune-editor/
+          if-no-files-found: error

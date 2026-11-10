@@ -9,7 +9,7 @@ use rune_kit::{
     Button, ButtonVariant, Checkbox, ControlSize, Kit, SegmentedControl, Switch, TextInput,
 };
 
-use crate::api::{FpsCapMode, GameStatus};
+use crate::api::FpsCapMode;
 use crate::app::App;
 use crate::settings::{cap_from_index, cap_index};
 
@@ -299,7 +299,3 @@ fn field(k: &Kit, label: &str, value: &str) -> El {
                 .truncate(),
         )
 }
-
-/// Keeps [`GameStatus`] in the import list: the inspector's model is the API's own status type.
-#[allow(unused)]
-fn _status(_: &GameStatus) {}
